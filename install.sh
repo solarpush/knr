@@ -58,6 +58,9 @@ detect_target() {
 
     case "$arch_name" in
         x86_64 | amd64)
+            if [ "$os_name" = "Darwin" ]; then
+                error "Intel macOS (x86_64) is no longer supported; only Apple Silicon (arm64) is supported on macOS."
+            fi
             arch_triple="x86_64"
             ;;
         aarch64 | arm64)

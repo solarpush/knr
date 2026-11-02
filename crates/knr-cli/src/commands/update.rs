@@ -30,7 +30,6 @@ pub fn current_target_triple() -> Result<&'static str, CliError> {
     match (env::consts::ARCH, env::consts::OS) {
         ("x86_64", "linux") => Ok("x86_64-unknown-linux-gnu"),
         ("aarch64", "linux") => Ok("aarch64-unknown-linux-gnu"),
-        ("x86_64", "macos") => Ok("x86_64-apple-darwin"),
         ("aarch64", "macos") => Ok("aarch64-apple-darwin"),
         (arch, os) => Err(CliError::Other(format!(
             "Unsupported platform for binary self-update: {arch}-{os}"
