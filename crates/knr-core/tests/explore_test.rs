@@ -40,8 +40,8 @@ fn test_explore_directory_site() {
     let site = site_dir();
     let graph = explore_path(&site).expect("explore_path on site/ should succeed");
 
-    // 12 files discovered
-    assert_eq!(graph.files.len(), 12, "Expected 12 files in site/");
+    // 13 files discovered
+    assert_eq!(graph.files.len(), 13, "Expected 13 files in site/");
 
     // Check schemas discovered
     let schema_names: Vec<&str> = graph.schemas.iter().map(|s| s.name.as_str()).collect();

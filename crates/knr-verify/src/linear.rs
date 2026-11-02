@@ -19,6 +19,44 @@ pub fn verify_linear(func: &Function) -> Result<(), Diagnostic> {
     let block_map: HashMap<BlockId, &BasicBlock> =
         func.blocks.iter().map(|b| (b.id, b)).collect();
 
+    // Identify block-local registers: registers defined in block B at instruction index `i_def`
+    // that are never params and whose uses across the entire function all occur in block B after `i_def`.
+    // Once such a register is in `Moved` state at the end of block B, it can never be read before
+    // being redefined on loop re-entry and cannot leak, avoiding 2^N state explosion on server loops.
+    let param_regs: HashSet<RegId> = func.params.iter().map(|(r, _)| *r).collect();
+    let mut def_loc: HashMap<RegId, (BlockId, usize)> = HashMap::new();
+    let mut multi_defs: HashSet<RegId> = HashSet::new();
+    for b in &func.blocks {
+        for (idx, inst) in b.instructions.iter().enumerate() {
+            if let Some(dst) = inst.dst {
+                if def_loc.insert(dst, (b.id, idx)).is_some() || param_regs.contains(&dst) {
+                    multi_defs.insert(dst);
+                }
+            }
+        }
+    }
+    let mut non_local_regs: HashSet<RegId> = multi_defs;
+    for b in &func.blocks {
+        for (idx, inst) in b.instructions.iter().enumerate() {
+            for u in get_used_registers(&inst.op) {
+                match def_loc.get(&u) {
+                    Some(&(def_blk, def_idx)) if def_blk == b.id && idx > def_idx => {}
+                    _ => {
+                        non_local_regs.insert(u);
+                    }
+                }
+            }
+        }
+        if let Terminator::Ret(Some(r)) | Terminator::BrIf { cond: r, .. } = &b.terminator {
+            match def_loc.get(r) {
+                Some(&(def_blk, _)) if def_blk == b.id => {}
+                _ => {
+                    non_local_regs.insert(*r);
+                }
+            }
+        }
+    }
+
     // Initial state for entry block (bb0)
     let mut initial_state: BTreeMap<RegId, RegState> = BTreeMap::new();
     for (reg, ty) in &func.params {
@@ -56,6 +94,13 @@ pub fn verify_linear(func: &Function) -> Result<(), Diagnostic> {
         // Process instructions in this block
         for inst in &block.instructions {
             check_and_update_instruction(func, inst, &mut state)?;
+        }
+
+        // Prune block-local registers that are already Moved at block exit
+        if !matches!(block.terminator, Terminator::Ret(_)) {
+            state.retain(|reg, reg_state| {
+                !matches!(reg_state, RegState::Moved { .. }) || non_local_regs.contains(reg)
+            });
         }
 
         // Process terminator

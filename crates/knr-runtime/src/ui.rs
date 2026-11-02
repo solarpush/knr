@@ -84,9 +84,9 @@ try{\
 const r=await fetch(act,{method:'POST'});\
 if(r.ok){\
 const t=(await r.text()).trim();\
-if(act.startsWith('/nav/')||/^-?\\d+$/.test(t)){\
+if(act.startsWith('/nav/')||act.startsWith('/trace/')||/^-?\\d+$/.test(t)){\
 if(el)el.textContent=t;\
-if(st)st.textContent=act.startsWith('/nav/')?('Routeur Multi-Pages SSR (site/server.ssa) -> route '+act):('Syscall Net + Ui SSR (site/server.ssa) -> reg muté en VM (val = '+t+')');\
+if(st)st.textContent=act.startsWith('/nav/')?('Routeur Multi-Pages SSR (site/server.ssa) -> route '+act):(act.startsWith('/trace/')?('Trace CFG SSR (site/server.ssa) -> chemin '+act):('Syscall Net + Ui SSR (site/server.ssa) -> reg muté en VM (val = '+t+')'));\
 return;\
 }\
 }\
@@ -94,11 +94,23 @@ return;\
 }\
 if(act.startsWith('/nav/')){\
 const p=act.slice(5);\
-const all=['home','pillars','learn','isa','examples'];\
+const all=['home','graph','pillars','learn','isa','examples'];\
 const hide=p==='all'?[]:all.filter(x=>x!==p).map(x=>'.page-'+x);\
 const css=(hide.length?hide.join(',')+'{display:none!important}':'')+'.tab-'+p+'{background:#38bdf8!important;color:#050811!important;border-color:#38bdf8!important}';\
 if(el)el.textContent=css;\
 if(st)st.textContent='Routeur VDOM Client -> vue active : '+p;\
+return;\
+}\
+if(act.startsWith('/trace/')){\
+const k=act.slice(7);\
+const m={\
+inc:'.node-ast,.node-verify,.node-bb0,.node-bb2,.node-call{border-color:#38bdf8!important;box-shadow:0 0 28px rgba(56,189,248,0.35)!important;transform:translateY(-3px)}.node-bb1,.node-ssr{opacity:0.35}',\
+dec:'.node-ast,.node-verify,.node-bb0,.node-bb2,.node-call{border-color:#a855f7!important;box-shadow:0 0 28px rgba(168,85,247,0.35)!important;transform:translateY(-3px)}.node-bb1,.node-ssr{opacity:0.35}',\
+reset:'.node-ast,.node-verify,.node-bb0,.node-bb1{border-color:#f59e0b!important;box-shadow:0 0 28px rgba(245,158,11,0.35)!important;transform:translateY(-3px)}.node-bb2,.node-call,.node-ssr{opacity:0.35}',\
+ssr:'.node-ast,.node-verify,.node-ssr{border-color:#10b981!important;box-shadow:0 0 28px rgba(16,185,129,0.38)!important;transform:translateY(-3px)}.node-bb0,.node-bb1,.node-bb2,.node-call{opacity:0.35}'\
+};\
+if(el&&m[k])el.textContent=m[k];\
+if(st)st.textContent='Simulation CFG Active -> chemin '+act+' illuminé dans le graphe';\
 return;\
 }\
 const op=act.endsWith('inc')?1n:(act.endsWith('dec')?2n:0n);\

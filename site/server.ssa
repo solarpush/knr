@@ -119,7 +119,7 @@ bb13:
     br_if %72 bb14 bb15
 
 bb14:
-    %73 = const_str ".page-pillars, .page-learn, .page-isa, .page-examples { display: none !important; } .tab-home { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %73 = const_str ".page-graph, .page-pillars, .page-learn, .page-isa, .page-examples { display: none !important; } .tab-home { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
     %74 = struct_new HttpResponse
     %75 = struct_set %74 0 %14
     %76 = struct_set %75 1 %9
@@ -128,12 +128,12 @@ bb14:
     br bb1
 
 bb15:
-    %79 = const_str "/nav/pillars"
+    %79 = const_str "/nav/graph"
     %80 = cmp_eq %15 %79
     br_if %80 bb16 bb17
 
 bb16:
-    %81 = const_str ".page-home, .page-learn, .page-isa, .page-examples { display: none !important; } .tab-pillars { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %81 = const_str ".page-home, .page-pillars, .page-learn, .page-isa, .page-examples { display: none !important; } .tab-graph { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
     %82 = struct_new HttpResponse
     %83 = struct_set %82 0 %14
     %84 = struct_set %83 1 %9
@@ -142,12 +142,12 @@ bb16:
     br bb1
 
 bb17:
-    %87 = const_str "/nav/learn"
+    %87 = const_str "/nav/pillars"
     %88 = cmp_eq %15 %87
     br_if %88 bb18 bb19
 
 bb18:
-    %89 = const_str ".page-home, .page-pillars, .page-isa, .page-examples { display: none !important; } .tab-learn { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %89 = const_str ".page-home, .page-graph, .page-learn, .page-isa, .page-examples { display: none !important; } .tab-pillars { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
     %90 = struct_new HttpResponse
     %91 = struct_set %90 0 %14
     %92 = struct_set %91 1 %9
@@ -156,12 +156,12 @@ bb18:
     br bb1
 
 bb19:
-    %95 = const_str "/nav/isa"
+    %95 = const_str "/nav/learn"
     %96 = cmp_eq %15 %95
     br_if %96 bb20 bb21
 
 bb20:
-    %97 = const_str ".page-home, .page-pillars, .page-learn, .page-examples { display: none !important; } .tab-isa { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %97 = const_str ".page-home, .page-graph, .page-pillars, .page-isa, .page-examples { display: none !important; } .tab-learn { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
     %98 = struct_new HttpResponse
     %99 = struct_set %98 0 %14
     %100 = struct_set %99 1 %9
@@ -170,12 +170,12 @@ bb20:
     br bb1
 
 bb21:
-    %103 = const_str "/nav/examples"
+    %103 = const_str "/nav/isa"
     %104 = cmp_eq %15 %103
     br_if %104 bb22 bb23
 
 bb22:
-    %105 = const_str ".page-home, .page-pillars, .page-learn, .page-isa { display: none !important; } .tab-examples { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %105 = const_str ".page-home, .page-graph, .page-pillars, .page-learn, .page-examples { display: none !important; } .tab-isa { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
     %106 = struct_new HttpResponse
     %107 = struct_set %106 0 %14
     %108 = struct_set %107 1 %9
@@ -184,12 +184,12 @@ bb22:
     br bb1
 
 bb23:
-    %111 = const_str "/nav/all"
+    %111 = const_str "/nav/examples"
     %112 = cmp_eq %15 %111
     br_if %112 bb24 bb25
 
 bb24:
-    %113 = const_str ".tab-all { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %113 = const_str ".page-home, .page-graph, .page-pillars, .page-learn, .page-isa { display: none !important; } .tab-examples { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
     %114 = struct_new HttpResponse
     %115 = struct_set %114 0 %14
     %116 = struct_set %115 1 %9
@@ -198,16 +198,86 @@ bb24:
     br bb1
 
 bb25:
-    %119 = chan_recv %3
-    %120 = chan_send %3 %119
-    %121 = syscall Ui "ui.render" %119
-    %122 = const_str "LIVE SSR • 100% Pure knr (.ssa)"
-    %123 = const_str "Servi en direct en SSR par knr (site/server.ssa) via UiPlatform + NetPlatform (Tokio)."
-    %124 = call render_page %122 %121 %123
-    %125 = struct_new HttpResponse
-    %126 = struct_set %125 0 %14
-    %127 = struct_set %126 1 %9
-    %128 = struct_set %127 2 %124
-    %129 = syscall Net "net.respond" %128
+    %119 = const_str "/nav/all"
+    %120 = cmp_eq %15 %119
+    br_if %120 bb26 bb27
+
+bb26:
+    %121 = const_str ".tab-all { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %122 = struct_new HttpResponse
+    %123 = struct_set %122 0 %14
+    %124 = struct_set %123 1 %9
+    %125 = struct_set %124 2 %121
+    %126 = syscall Net "net.respond" %125
+    br bb1
+
+bb27:
+    %127 = const_str "/trace/inc"
+    %128 = cmp_eq %15 %127
+    br_if %128 bb28 bb29
+
+bb28:
+    %129 = const_str ".node-ast, .node-verify, .node-bb0, .node-bb2, .node-call { border-color: #38bdf8 !important; box-shadow: 0 0 28px rgba(56, 189, 248, 0.35) !important; transform: translateY(-3px); } .node-bb1, .node-ssr { opacity: 0.35; } .trace-inc { box-shadow: 0 0 18px rgba(56, 189, 248, 0.65) !important; }"
+    %130 = struct_new HttpResponse
+    %131 = struct_set %130 0 %14
+    %132 = struct_set %131 1 %9
+    %133 = struct_set %132 2 %129
+    %134 = syscall Net "net.respond" %133
+    br bb1
+
+bb29:
+    %135 = const_str "/trace/dec"
+    %136 = cmp_eq %15 %135
+    br_if %136 bb30 bb31
+
+bb30:
+    %137 = const_str ".node-ast, .node-verify, .node-bb0, .node-bb2, .node-call { border-color: #a855f7 !important; box-shadow: 0 0 28px rgba(168, 85, 247, 0.35) !important; transform: translateY(-3px); } .node-bb1, .node-ssr { opacity: 0.35; } .trace-dec { border-color: #a855f7 !important; color: #e9d5ff !important; box-shadow: 0 0 18px rgba(168, 85, 247, 0.55) !important; }"
+    %138 = struct_new HttpResponse
+    %139 = struct_set %138 0 %14
+    %140 = struct_set %139 1 %9
+    %141 = struct_set %140 2 %137
+    %142 = syscall Net "net.respond" %141
+    br bb1
+
+bb31:
+    %143 = const_str "/trace/reset"
+    %144 = cmp_eq %15 %143
+    br_if %144 bb32 bb33
+
+bb32:
+    %145 = const_str ".node-ast, .node-verify, .node-bb0, .node-bb1 { border-color: #f59e0b !important; box-shadow: 0 0 28px rgba(245, 158, 11, 0.35) !important; transform: translateY(-3px); } .node-bb2, .node-call, .node-ssr { opacity: 0.35; } .trace-reset { border-color: #f59e0b !important; color: #fde68a !important; box-shadow: 0 0 18px rgba(245, 158, 11, 0.55) !important; }"
+    %146 = struct_new HttpResponse
+    %147 = struct_set %146 0 %14
+    %148 = struct_set %147 1 %9
+    %149 = struct_set %148 2 %145
+    %150 = syscall Net "net.respond" %149
+    br bb1
+
+bb33:
+    %151 = const_str "/trace/ssr"
+    %152 = cmp_eq %15 %151
+    br_if %152 bb34 bb35
+
+bb34:
+    %153 = const_str ".node-ast, .node-verify, .node-ssr { border-color: #10b981 !important; box-shadow: 0 0 28px rgba(16, 185, 129, 0.38) !important; transform: translateY(-3px); } .node-bb0, .node-bb1, .node-bb2, .node-call { opacity: 0.35; } .trace-ssr { box-shadow: 0 0 18px rgba(16, 185, 129, 0.65) !important; }"
+    %154 = struct_new HttpResponse
+    %155 = struct_set %154 0 %14
+    %156 = struct_set %155 1 %9
+    %157 = struct_set %156 2 %153
+    %158 = syscall Net "net.respond" %157
+    br bb1
+
+bb35:
+    %159 = chan_recv %3
+    %160 = chan_send %3 %159
+    %161 = syscall Ui "ui.render" %159
+    %162 = const_str "LIVE SSR • 100% Pure knr (.ssa)"
+    %163 = const_str "Servi en direct en SSR par knr (site/server.ssa) via UiPlatform + NetPlatform (Tokio)."
+    %164 = call render_page %162 %161 %163
+    %165 = struct_new HttpResponse
+    %166 = struct_set %165 0 %14
+    %167 = struct_set %166 1 %9
+    %168 = struct_set %167 2 %164
+    %169 = syscall Net "net.respond" %168
     br bb1
 }
