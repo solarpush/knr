@@ -8,14 +8,37 @@ pub enum BuildTarget {
     Wasm,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExploreFormat {
+    #[default]
+    Ai,
+    Json,
+    Mermaid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckArgs {
+    pub file: PathBuf,
+    pub json: bool,
+    pub graph: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExploreArgs {
+    pub path: PathBuf,
+    pub format: ExploreFormat,
+    pub symbol: Option<String>,
+    pub callers: Option<String>,
+    pub callees: Option<String>,
+    pub effects: Option<String>,
+    pub orphans: bool,
+}
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
-    Check {
-        file: PathBuf,
-        json: bool,
-    },
+    Check(CheckArgs),
     Run {
         file: PathBuf,
         gas: u64,
@@ -39,9 +62,12 @@ pub enum CliCommand {
         force: bool,
         version: Option<String>,
     },
+    Explore(ExploreArgs),
     Help,
     Version,
 }
+
+pub type Command = CliCommand;
 
 pub fn print_main_help() {
     println!(
@@ -57,6 +83,7 @@ SUBCOMMANDS:
     asm       Assemble textual SSA (.ssa) to compact binary bytecode (.knrbin)
     disasm    Disassemble binary bytecode (.knrbin) to canonical textual SSA (.ssa)
     update    Check for updates and self-update from GitHub Releases
+    explore   Explore project structure, call graphs, schemas, and dependencies
 
 FLAGS:
     -h, --help       Print help information
@@ -72,7 +99,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliCommand,
     let args: Vec<String> = args.into_iter().collect();
     if args.len() <= 1 {
         return Err(CliError::Args(
-            "Usage: knr <check|run|build|asm|disasm|update> [options]\nUse 'knr --help' for usage."
+            "Usage: knr <check|run|build|asm|disasm|update|explore> [options]\nUse 'knr --help' for usage."
                 .to_string(),
         ));
     }
@@ -92,6 +119,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliCommand,
         "asm" => parse_asm(&args[2..]),
         "disasm" => parse_disasm(&args[2..]),
         "update" => parse_update(&args[2..]),
+        "explore" => parse_explore(&args[2..]),
         cmd => Err(CliError::Args(format!(
             "Unknown subcommand: '{cmd}'. Use 'knr --help' for usage."
         ))),
@@ -101,6 +129,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliCommand,
 fn parse_check(args: &[String]) -> Result<CliCommand, CliError> {
     let mut file: Option<PathBuf> = None;
     let mut json = false;
+    let mut graph = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -116,12 +145,15 @@ ARGS:
     <FILE>    Path to .ssa source file
 
 OPTIONS:
+    --graph       Print ProjectGraph after static verification succeeds
     --json        Output diagnostics as structured JSON array
     -h, --help    Print help information"
             );
             return Ok(CliCommand::Help);
         } else if arg == "--json" {
             json = true;
+        } else if arg == "--graph" {
+            graph = true;
         } else if arg.starts_with('-') {
             return Err(CliError::Args(format!("Unknown option for 'check': {arg}")));
         } else if file.is_none() {
@@ -135,10 +167,157 @@ OPTIONS:
     }
 
     let file = file.ok_or_else(|| {
-        CliError::Args("Missing input file for 'knr check'. Usage: knr check <file.ssa> [--json]".to_string())
+        CliError::Args(
+            "Missing input file for 'knr check'. Usage: knr check <file.ssa> [--json] [--graph]"
+                .to_string(),
+        )
     })?;
 
-    Ok(CliCommand::Check { file, json })
+    Ok(CliCommand::Check(CheckArgs { file, json, graph }))
+}
+
+fn parse_explore(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut path: Option<PathBuf> = None;
+    let mut format: Option<ExploreFormat> = None;
+    let mut json = false;
+    let mut symbol: Option<String> = None;
+    let mut callers: Option<String> = None;
+    let mut callees: Option<String> = None;
+    let mut effects: Option<String> = None;
+    let mut orphans = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--help" || arg == "-h" {
+            println!(
+                "knr explore - Structural exploration and semantic query engine
+
+USAGE:
+    knr explore <PATH> [OPTIONS]
+
+ARGS:
+    <PATH>    Path to .ssa file, .ssa.schema file, or project directory
+
+OPTIONS:
+    --format <ai|json|mermaid>  Output format (default: ai)
+    --json                      Output as JSON (shorthand for --format json)
+    -s, --symbol <NAME>         Show definition and cross-references for schema or function
+    --callers <FN>              Show direct and transitive callers of function
+    --callees <FN>              Show direct and transitive callees and syscalls of function
+    --effects <EFF>             Filter functions declaring or invoking effect (ui, net, hw, async)
+    --orphans                   Show only orphan schemas and uncalled functions
+    -h, --help                  Print help information"
+            );
+            return Ok(CliCommand::Help);
+        } else if arg == "--json" {
+            json = true;
+        } else if arg == "--orphans" {
+            orphans = true;
+        } else if arg == "--format" {
+            i += 1;
+            if i >= args.len() {
+                return Err(CliError::Args("Missing value for '--format'".to_string()));
+            }
+            format = Some(parse_explore_format(&args[i])?);
+        } else if let Some(val) = arg.strip_prefix("--format=") {
+            format = Some(parse_explore_format(val)?);
+        } else if arg == "-s" || arg == "--symbol" {
+            i += 1;
+            if i >= args.len() {
+                return Err(CliError::Args("Missing value for '--symbol'".to_string()));
+            }
+            symbol = Some(args[i].clone());
+        } else if let Some(val) = arg.strip_prefix("-s=") {
+            symbol = Some(val.to_string());
+        } else if let Some(val) = arg.strip_prefix("--symbol=") {
+            symbol = Some(val.to_string());
+        } else if arg == "--callers" {
+            i += 1;
+            if i >= args.len() {
+                return Err(CliError::Args("Missing value for '--callers'".to_string()));
+            }
+            callers = Some(args[i].clone());
+        } else if let Some(val) = arg.strip_prefix("--callers=") {
+            callers = Some(val.to_string());
+        } else if arg == "--callees" {
+            i += 1;
+            if i >= args.len() {
+                return Err(CliError::Args("Missing value for '--callees'".to_string()));
+            }
+            callees = Some(args[i].clone());
+        } else if let Some(val) = arg.strip_prefix("--callees=") {
+            callees = Some(val.to_string());
+        } else if arg == "--effects" {
+            i += 1;
+            if i >= args.len() {
+                return Err(CliError::Args("Missing value for '--effects'".to_string()));
+            }
+            effects = Some(args[i].clone());
+        } else if let Some(val) = arg.strip_prefix("--effects=") {
+            effects = Some(val.to_string());
+        } else if arg.starts_with('-') {
+            return Err(CliError::Args(format!("Unknown option for 'explore': {arg}")));
+        } else if path.is_none() {
+            path = Some(PathBuf::from(arg));
+        } else {
+            return Err(CliError::Args(format!(
+                "Unexpected argument for 'explore': {arg}"
+            )));
+        }
+        i += 1;
+    }
+
+    let path = path.ok_or_else(|| {
+        CliError::Args(
+            "Missing input path for 'knr explore'. Usage: knr explore <path> [options]".to_string(),
+        )
+    })?;
+
+    let final_format = match (format, json) {
+        (Some(ExploreFormat::Json), _) => ExploreFormat::Json,
+        (Some(f), false) => f,
+        (Some(f), true) => {
+            if f != ExploreFormat::Json {
+                return Err(CliError::Args(
+                    "Cannot specify conflicting options '--json' and '--format'".to_string(),
+                ));
+            }
+            ExploreFormat::Json
+        }
+        (None, true) => ExploreFormat::Json,
+        (None, false) => ExploreFormat::Ai,
+    };
+
+    Ok(CliCommand::Explore(ExploreArgs {
+        path,
+        format: final_format,
+        symbol,
+        callers,
+        callees,
+        effects,
+        orphans,
+    }))
+}
+
+fn parse_explore_format(val: &str) -> Result<ExploreFormat, CliError> {
+    match val.to_ascii_lowercase().as_str() {
+        "ai" => Ok(ExploreFormat::Ai),
+        "json" => Ok(ExploreFormat::Json),
+        "mermaid" => Ok(ExploreFormat::Mermaid),
+        other => Err(CliError::Args(format!(
+            "Invalid format '{other}' for 'knr explore'. Expected 'ai', 'json', or 'mermaid'."
+        ))),
+    }
+}
+
+fn parse_gas_value(val: &str) -> Result<u64, CliError> {
+    if val.eq_ignore_ascii_case("unlimited") || val.eq_ignore_ascii_case("max") {
+        Ok(u64::MAX)
+    } else {
+        val.parse::<u64>()
+            .map_err(|e| CliError::Args(format!("Invalid integer value for '--gas': {e}")))
+    }
 }
 
 fn parse_run(args: &[String]) -> Result<CliCommand, CliError> {
@@ -160,25 +339,24 @@ ARGS:
     <FILE>    Path to .ssa source file
 
 OPTIONS:
-    --gas <N>     Maximum execution steps limit (default: 1000000)
-    --trace       Output execution trace as structured JSON array
-    -h, --help    Print help information"
+    --gas <N|unlimited>  Maximum execution steps limit (default: 1000000)
+    --unlimited-gas      Disable execution step limits (alias for --gas unlimited)
+    --trace              Output execution trace as structured JSON array
+    -h, --help           Print help information"
             );
             return Ok(CliCommand::Help);
         } else if arg == "--trace" {
             trace = true;
+        } else if arg == "--unlimited-gas" {
+            gas = u64::MAX;
         } else if arg == "--gas" {
             i += 1;
             if i >= args.len() {
                 return Err(CliError::Args("Missing value for '--gas'".to_string()));
             }
-            gas = args[i].parse::<u64>().map_err(|e| {
-                CliError::Args(format!("Invalid integer value for '--gas': {e}"))
-            })?;
+            gas = parse_gas_value(&args[i])?;
         } else if let Some(val) = arg.strip_prefix("--gas=") {
-            gas = val
-                .parse::<u64>()
-                .map_err(|e| CliError::Args(format!("Invalid integer value for '--gas': {e}")))?;
+            gas = parse_gas_value(val)?;
         } else if arg.starts_with('-') {
             return Err(CliError::Args(format!("Unknown option for 'run': {arg}")));
         } else if file.is_none() {
@@ -192,7 +370,7 @@ OPTIONS:
     }
 
     let file = file.ok_or_else(|| {
-        CliError::Args("Missing input file for 'knr run'. Usage: knr run <file.ssa> [--gas <N>] [--trace]".to_string())
+        CliError::Args("Missing input file for 'knr run'. Usage: knr run <file.ssa> [--gas <N|unlimited>] [--trace]".to_string())
     })?;
 
     Ok(CliCommand::Run { file, gas, trace })

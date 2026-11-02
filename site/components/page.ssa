@@ -1,0 +1,37 @@
+import "../schemas/vdom.ssa.schema"
+import "./nav.ssa"
+import "./hero.ssa"
+import "./pillars.ssa"
+import "./examples.ssa"
+
+fn render_page(%0: str, %1: str, %2: str) -> str effects(Ui) {
+bb0:
+    %3 = call build_nav %0
+    %4 = vec_new struct[Card]
+    %5 = vec_push %4 %3
+    %6 = struct_new Section
+    %7 = const_str "section"
+    %8 = struct_set %6 0 %7
+    %9 = struct_set %8 3 %5
+
+    %10 = const_str "État réactif linear SSA"
+    %11 = call build_hero %1 %10
+    %12 = call build_pillars
+    %13 = call build_examples %2
+
+    %14 = vec_new struct[Section]
+    %15 = vec_push %14 %9
+    %16 = vec_push %15 %11
+    %17 = vec_push %16 %12
+    %18 = vec_push %17 %13
+
+    %19 = struct_new Page
+    %20 = const_str "main"
+    %21 = struct_set %19 0 %20
+    %22 = const_str "page"
+    %23 = struct_set %21 1 %22
+    %24 = struct_set %23 3 %18
+
+    %25 = syscall Ui "ui.render" %24
+    ret %25
+}

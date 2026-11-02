@@ -1,7 +1,7 @@
 use crate::error::VmError;
 use crate::trace::TraceRecord;
 use crate::value::{Value, ValueExt};
-use knr_core::{BasicBlock, BlockId, Function, Module, Op, RegId, Schema, Terminator};
+use knr_core::{BasicBlock, BlockId, Effect, Function, Module, Op, RegId, Schema, Terminator};
 use knr_runtime::HostPlatform;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -12,12 +12,14 @@ pub struct Vm<'a> {
     next_chan_id: usize,
     platform: &'a mut dyn HostPlatform,
     module: Option<&'a Module>,
+    fallback_func: Option<Function>,
     schemas: &'a [Schema],
     max_steps: u64,
     remaining_steps: u64,
     step_count: u64,
     trace_enabled: bool,
     trace_records: Vec<TraceRecord>,
+    call_depth: usize,
 }
 
 impl<'a> Vm<'a> {
@@ -46,12 +48,14 @@ impl<'a> Vm<'a> {
             next_chan_id: 1,
             platform,
             module,
+            fallback_func: None,
             schemas,
             max_steps,
             remaining_steps: max_steps,
             step_count: 0,
             trace_enabled,
             trace_records: Vec::new(),
+            call_depth: 0,
         }
     }
 
@@ -74,16 +78,38 @@ impl<'a> Vm<'a> {
         }
     }
 
+    /// Returns the per-request / per-tick gas limit.
+    #[inline]
+    pub fn max_steps(&self) -> u64 {
+        self.max_steps
+    }
+
+    /// Returns the remaining steps in the current request budget.
+    #[inline]
+    pub fn remaining_steps(&self) -> u64 {
+        self.remaining_steps
+    }
+
+    /// Returns the total lifetime steps executed.
+    #[inline]
+    pub fn step_count(&self) -> u64 {
+        self.step_count
+    }
+
     /// Decrements gas and increments step counter before an instruction or terminator.
     #[inline]
     fn consume_gas(&mut self) -> Result<(), VmError> {
+        if self.max_steps == u64::MAX {
+            self.step_count = self.step_count.wrapping_add(1);
+            return Ok(());
+        }
         if self.remaining_steps == 0 {
             return Err(VmError::GasExhausted {
                 max_steps: self.max_steps,
             });
         }
         self.remaining_steps -= 1;
-        self.step_count += 1;
+        self.step_count = self.step_count.wrapping_add(1);
         Ok(())
     }
 
@@ -121,10 +147,12 @@ impl<'a> Vm<'a> {
             Op::StructNew(_) => "struct_new",
             Op::StructGet(_, _) => "struct_get",
             Op::StructSet(_, _, _) => "struct_set",
+            Op::Call(..) => "call",
         }
     }
 
     /// Executes a single opcode, returning the produced value.
+    #[inline(never)]
     fn exec_op(&mut self, op: &Op, line: usize) -> Result<Value, VmError> {
         match op {
             Op::ConstI64(v) => Ok(Value::I64(*v)),
@@ -424,6 +452,11 @@ impl<'a> Vm<'a> {
             Op::Syscall(effect, op_name, payload_reg) => {
                 let payload = self.get_reg(*payload_reg, line)?;
                 let result = self.platform.host_call(*effect, op_name, payload)?;
+                if (*effect == Effect::Net && op_name == "net.wait_req")
+                    || (*effect == Effect::Ui && op_name == "ui.poll_event")
+                {
+                    self.remaining_steps = self.max_steps;
+                }
                 Ok(result)
             }
 
@@ -497,7 +530,63 @@ impl<'a> Vm<'a> {
                 fields[idx] = val;
                 Ok(Value::Struct { schema, fields })
             }
+
+            Op::Call(fn_name, args) => self.exec_call(fn_name, args, line),
         }
+    }
+
+    fn exec_call(&mut self, fn_name: &str, args: &[RegId], line: usize) -> Result<Value, VmError> {
+        let arg_vals = args
+            .iter()
+            .map(|r| self.get_reg(*r, line))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let target_fn = self
+            .module
+            .and_then(|m| m.functions.iter().find(|f| f.name == fn_name))
+            .cloned()
+            .or_else(|| {
+                self.fallback_func
+                    .as_ref()
+                    .filter(|f| f.name == fn_name)
+                    .cloned()
+            })
+            .ok_or_else(|| VmError::InvalidInstruction {
+                message: format!("Function '{}' not found in module", fn_name),
+                line,
+            })?;
+
+        if target_fn.params.len() != arg_vals.len() {
+            return Err(VmError::InvalidInstruction {
+                message: format!(
+                    "Argument count mismatch calling '{}': expected {}, got {}",
+                    fn_name,
+                    target_fn.params.len(),
+                    arg_vals.len()
+                ),
+                line,
+            });
+        }
+
+        const MAX_CALL_DEPTH: usize = 64;
+        if self.call_depth >= MAX_CALL_DEPTH {
+            return Err(VmError::InvalidInstruction {
+                message: format!("Maximum call depth exceeded ({MAX_CALL_DEPTH}) calling '{}'", fn_name),
+                line,
+            });
+        }
+
+        let saved_registers = std::mem::take(&mut self.registers);
+        for ((reg, _ty), arg) in target_fn.params.iter().zip(arg_vals) {
+            self.registers.insert(*reg, arg);
+        }
+
+        self.call_depth += 1;
+        let result = self.execute_function_body(&target_fn);
+        self.call_depth -= 1;
+
+        self.registers = saved_registers;
+        result
     }
 
     /// Runs the function to completion or until gas exhaustion / error.
@@ -506,6 +595,10 @@ impl<'a> Vm<'a> {
         func: &Function,
         args: Vec<Value>,
     ) -> Result<(Value, Vec<TraceRecord>), VmError> {
+        if self.fallback_func.is_none() {
+            self.fallback_func = Some(func.clone());
+        }
+
         if func.params.len() != args.len() {
             return Err(VmError::InvalidInstruction {
                 message: format!(
@@ -521,8 +614,13 @@ impl<'a> Vm<'a> {
             self.registers.insert(*reg, arg);
         }
 
+        let ret_val = self.execute_function_body(func)?;
+        Ok((ret_val, std::mem::take(&mut self.trace_records)))
+    }
+
+    fn execute_function_body(&mut self, func: &Function) -> Result<Value, VmError> {
         if func.blocks.is_empty() {
-            return Ok((Value::Void, std::mem::take(&mut self.trace_records)));
+            return Ok(Value::Void);
         }
 
         let block_map: HashMap<BlockId, &BasicBlock> =
@@ -540,7 +638,11 @@ impl<'a> Vm<'a> {
             for inst in &block.instructions {
                 self.consume_gas()?;
 
-                let result = self.exec_op(&inst.op, inst.line)?;
+                let result = if let Op::Call(fn_name, args) = &inst.op {
+                    self.exec_call(fn_name, args, inst.line)?
+                } else {
+                    self.exec_op(&inst.op, inst.line)?
+                };
                 if let Some(dst) = inst.dst {
                     self.registers.insert(dst, result.clone());
                 }
@@ -580,7 +682,7 @@ impl<'a> Vm<'a> {
                             Some(ret_val.to_json()),
                         ));
                     }
-                    return Ok((ret_val, std::mem::take(&mut self.trace_records)));
+                    return Ok(ret_val);
                 }
 
                 Terminator::Ret(None) => {
@@ -594,7 +696,7 @@ impl<'a> Vm<'a> {
                             None,
                         ));
                     }
-                    return Ok((Value::Void, std::mem::take(&mut self.trace_records)));
+                    return Ok(Value::Void);
                 }
 
                 Terminator::Br(target) => {

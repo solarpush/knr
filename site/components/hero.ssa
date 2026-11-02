@@ -1,0 +1,124 @@
+import "../schemas/vdom.ssa.schema"
+
+fn build_hero(%0: str, %1: str) -> struct[Section] {
+bb0:
+    %2 = struct_new Leaf
+    %3 = const_str "h1"
+    %4 = struct_set %2 0 %3
+    %5 = const_str "hero-title"
+    %6 = struct_set %4 1 %5
+    %7 = const_str "Le langage SSA à mémoire linéaire pensé pour les Agents IA et le bas niveau."
+    %8 = struct_set %6 2 %7
+
+    %9 = struct_new Leaf
+    %10 = const_str "p"
+    %11 = struct_set %9 0 %10
+    %12 = const_str "hero-sub"
+    %13 = struct_set %11 1 %12
+    %14 = const_str "Zéro Garbage Collector. Zéro emprunt complexe. Mutation sur place garantie par machine à états linéaire en moins de 100 µs, compilé vers Cranelift (Natif ELF) et WebAssembly."
+    %15 = struct_set %13 2 %14
+
+    %16 = struct_new Leaf
+    %17 = const_str "div"
+    %18 = struct_set %16 0 %17
+    %19 = const_str "pill"
+    %20 = struct_set %18 1 %19
+    %21 = const_str "$ knr run site/server.ssa   |   $ knr check site/site.ssa --json   |   $ knr asm site/site.ssa -o site/site.knrbin"
+    %22 = struct_set %20 2 %21
+
+    %23 = vec_new struct[Leaf]
+    %24 = vec_push %23 %8
+    %25 = vec_push %24 %15
+    %26 = vec_push %25 %22
+
+    %27 = struct_new Card
+    %28 = const_str "div"
+    %29 = struct_set %27 0 %28
+    %30 = const_str "hero"
+    %31 = struct_set %29 1 %30
+    %32 = struct_set %31 3 %26
+
+    // Counter Box Card
+    %33 = struct_new Leaf
+    %34 = const_str "div"
+    %35 = struct_set %33 0 %34
+    %36 = const_str "card-tag"
+    %37 = struct_set %35 1 %36
+    %38 = const_str "DÉMO INTERACTIVE — COMPTEUR LINÉAIRE (SITE/SERVER.SSA)"
+    %39 = struct_set %37 2 %38
+
+    %40 = struct_new Leaf
+    %41 = const_str "span"
+    %42 = struct_set %40 0 %41
+    %43 = const_str "counter-val"
+    %44 = struct_set %42 1 %43
+    %45 = struct_set %44 2 %0
+
+    %46 = struct_new Leaf
+    %47 = const_str "button"
+    %48 = struct_set %46 0 %47
+    %49 = const_str "btn btn-sec act-dec"
+    %50 = struct_set %48 1 %49
+    %51 = const_str "-1"
+    %52 = struct_set %50 2 %51
+    %53 = const_str "/api/dec"
+    %54 = struct_set %52 3 %53
+    %55 = const_str ".counter-val"
+    %56 = struct_set %54 4 %55
+
+    %57 = struct_new Leaf
+    %58 = const_str "button"
+    %59 = struct_set %57 0 %58
+    %60 = const_str "btn act-inc"
+    %61 = struct_set %59 1 %60
+    %62 = const_str "+1 (add %cur 1)"
+    %63 = struct_set %61 2 %62
+    %64 = const_str "/api/inc"
+    %65 = struct_set %63 3 %64
+    %66 = const_str ".counter-val"
+    %67 = struct_set %65 4 %66
+
+    %68 = struct_new Leaf
+    %69 = const_str "button"
+    %70 = struct_set %68 0 %69
+    %71 = const_str "btn btn-sec act-reset"
+    %72 = struct_set %70 1 %71
+    %73 = const_str "Reset"
+    %74 = struct_set %72 2 %73
+    %75 = const_str "/api/reset"
+    %76 = struct_set %74 3 %75
+    %77 = const_str ".counter-val"
+    %78 = struct_set %76 4 %77
+
+    %79 = struct_new Leaf
+    %80 = const_str "div"
+    %81 = struct_set %79 0 %80
+    %82 = const_str "counter-status"
+    %83 = struct_set %81 1 %82
+    %84 = struct_set %83 2 %1
+
+    %85 = vec_new struct[Leaf]
+    %86 = vec_push %85 %39
+    %87 = vec_push %86 %45
+    %88 = vec_push %87 %56
+    %89 = vec_push %88 %67
+    %90 = vec_push %89 %78
+    %91 = vec_push %90 %84
+
+    %92 = struct_new Card
+    %93 = const_str "div"
+    %94 = struct_set %92 0 %93
+    %95 = const_str "counter-box"
+    %96 = struct_set %94 1 %95
+    %97 = struct_set %96 3 %91
+
+    %98 = vec_new struct[Card]
+    %99 = vec_push %98 %32
+    %100 = vec_push %99 %97
+
+    %101 = struct_new Section
+    %102 = const_str "section"
+    %103 = struct_set %101 0 %102
+    %104 = struct_set %103 3 %100
+    ret %104
+}

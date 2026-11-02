@@ -155,7 +155,22 @@ fn check_and_update_instruction(
 
     // 2. Mark consumed registers as Moved
     let consumed_regs = get_consumed_registers(&inst.op, state);
+    let mut moved_in_this_op = std::collections::HashSet::new();
     for reg in consumed_regs {
+        if !moved_in_this_op.insert(reg) {
+            return Err(Diagnostic::new(
+                "UseAfterMove",
+                &func.name,
+                inst.line,
+                format_instruction(inst),
+            )
+            .with_violated_register(format!("%{reg}"))
+            .with_consumed_at(inst.line)
+            .with_alive_registers(collect_alive_regs(state))
+            .with_fix_hint(format!(
+                "Register %{reg} is consumed multiple times in the same instruction"
+            )));
+        }
         let ty = match state.get(&reg) {
             Some(RegState::Alive { ty, .. }) => ty.clone(),
             _ => Type::Void,
@@ -232,6 +247,7 @@ fn get_used_registers(op: &Op) -> Vec<RegId> {
         Op::StructNew(_) => Vec::new(),
         Op::StructGet(s, _) => vec![*s],
         Op::StructSet(s, _, val) => vec![*s, *val],
+        Op::Call(_, args) => args.clone(),
     }
 }
 
@@ -279,6 +295,11 @@ fn get_consumed_registers(op: &Op, state: &BTreeMap<RegId, RegState>) -> Vec<Reg
             }
             res
         }
+        Op::Call(_, args) => args
+            .iter()
+            .filter(|r| is_reg_linear(r, state))
+            .copied()
+            .collect(),
         _ => Vec::new(),
     }
 }

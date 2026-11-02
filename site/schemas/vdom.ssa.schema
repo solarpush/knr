@@ -1,0 +1,28 @@
+schema Leaf {
+    0: tag str,
+    1: class str,
+    2: text str,
+    3: action str,
+    4: target str,
+}
+
+schema Card {
+    0: tag str,
+    1: class str,
+    2: text str,
+    3: children vec[struct[Leaf]],
+}
+
+schema Section {
+    0: tag str,
+    1: class str,
+    2: text str,
+    3: children vec[struct[Card]],
+}
+
+schema Page {
+    0: tag str,
+    1: class str,
+    2: text str,
+    3: children vec[struct[Section]],
+}

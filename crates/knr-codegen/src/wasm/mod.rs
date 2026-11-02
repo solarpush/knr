@@ -65,6 +65,12 @@ impl WasmBackend {
         };
         let mut func_type_indices = Vec::with_capacity(module.functions.len());
 
+        // Lookup map: function name -> WebAssembly function index
+        let mut func_indices: HashMap<String, u32> = HashMap::with_capacity(module.functions.len());
+        for (i, func) in module.functions.iter().enumerate() {
+            func_indices.insert(func.name.clone(), num_imports + i as u32);
+        }
+
         for func in &module.functions {
             let params: Vec<ValType> = func
                 .params
@@ -130,7 +136,8 @@ impl WasmBackend {
         // 10. Code Section: function bodies
         let mut code = CodeSection::new();
         for func in &module.functions {
-            let wasm_fn = Self::compile_func_body(func, &import_indices, &string_pool)?;
+            let wasm_fn =
+                Self::compile_func_body(func, &import_indices, &func_indices, &string_pool)?;
             code.function(&wasm_fn);
         }
         wasm.section(&code);
@@ -248,6 +255,7 @@ impl WasmBackend {
     fn compile_func_body(
         func: &Function,
         import_indices: &HashMap<&'static str, u32>,
+        func_indices: &HashMap<String, u32>,
         string_pool: &StringPool,
     ) -> Result<WasmFunction, CodegenError> {
         let mut reg_types: HashMap<RegId, Type> = HashMap::new();
@@ -339,6 +347,7 @@ impl WasmBackend {
                     &reg_to_local,
                     &reg_types,
                     import_indices,
+                    func_indices,
                     string_pool,
                 )?;
                 Self::emit_single_block_terminator(&block.terminator, &mut wasm_fn, &reg_to_local);
@@ -370,6 +379,7 @@ impl WasmBackend {
                     &reg_to_local,
                     &reg_types,
                     import_indices,
+                    func_indices,
                     string_pool,
                 )?;
 
@@ -430,6 +440,7 @@ impl WasmBackend {
         reg_to_local: &HashMap<RegId, u32>,
         reg_types: &HashMap<RegId, Type>,
         import_indices: &HashMap<&'static str, u32>,
+        func_indices: &HashMap<String, u32>,
         string_pool: &StringPool,
     ) -> Result<(), CodegenError> {
         for inst in &block.instructions {
@@ -439,6 +450,7 @@ impl WasmBackend {
                 reg_to_local,
                 reg_types,
                 import_indices,
+                func_indices,
                 string_pool,
             )?;
         }
@@ -451,9 +463,10 @@ impl WasmBackend {
         reg_to_local: &HashMap<RegId, u32>,
         reg_types: &HashMap<RegId, Type>,
         import_indices: &HashMap<&'static str, u32>,
+        func_indices: &HashMap<String, u32>,
         string_pool: &StringPool,
     ) -> Result<(), CodegenError> {
-        let dst_loc = inst.dst.map(|d| reg_to_local[&d]);
+        let dst_loc = inst.dst.and_then(|d| reg_to_local.get(&d).copied());
 
         match &inst.op {
             Op::ConstI64(val) => {
@@ -736,6 +749,28 @@ impl WasmBackend {
             }
             Op::StructNew(_) | Op::StructGet(_, _) | Op::StructSet(_, _, _) => {
                 return Err(CodegenError::Wasm(format!("Unsupported struct opcode: {:?}", inst.op)));
+            }
+            Op::Call(fn_name, args) => {
+                let target_idx = func_indices
+                    .get(fn_name)
+                    .ok_or_else(|| CodegenError::Wasm(format!("Unknown function in call: {fn_name}")))?;
+
+                for arg in args {
+                    let loc = reg_to_local.get(arg).ok_or_else(|| {
+                        CodegenError::Wasm(format!(
+                            "Unknown argument register %{arg} in call to {fn_name}"
+                        ))
+                    })?;
+                    wasm_fn.instruction(&Instruction::LocalGet(*loc));
+                }
+
+                wasm_fn.instruction(&Instruction::Call(*target_idx));
+
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                } else if inst.ty != Type::Void {
+                    wasm_fn.instruction(&Instruction::Drop);
+                }
             }
         }
 

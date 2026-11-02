@@ -428,5 +428,9 @@ pub fn decode_knrbin(bytes: &[u8]) -> Result<Module, BinaryError> {
         });
     }
 
-    Ok(Module { schemas, functions })
+    Ok(Module {
+        imports: Vec::new(),
+        schemas,
+        functions,
+    })
 }

@@ -1,12 +1,129 @@
 use crate::ast::*;
 use crate::error::ParseError;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Parses complete textual SSA into a Module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FileRole {
+    Schema,
+    Code,
+    Unspecified,
+}
+
+pub(crate) fn parse_import_directive(line: &str, line_num: usize) -> Result<String, ParseError> {
+    let rest = line.strip_prefix("import").unwrap_or(line).trim();
+    if rest.is_empty() {
+        return Err(ParseError::InvalidSyntax {
+            line: line_num,
+            msg: "Expected import path in quotes, found nothing".to_string(),
+        });
+    }
+    let mut rest_str = rest;
+    let path = parse_quoted_string(&mut rest_str, line_num)?;
+    if !rest_str.trim().is_empty() {
+        return Err(ParseError::InvalidSyntax {
+            line: line_num,
+            msg: format!("Unexpected tokens after import statement: '{}'", rest_str.trim()),
+        });
+    }
+    if !(path.ends_with(".ssa.schema") || path.ends_with(".ssa")) {
+        return Err(ParseError::InvalidSyntax {
+            line: line_num,
+            msg: format!(
+                "Imported file '{}' must have extension '.ssa' or '.ssa.schema'",
+                path
+            ),
+        });
+    }
+    Ok(path)
+}
+
+pub(crate) fn parse_schema_name_peek(header: &str) -> Option<String> {
+    let without = header.strip_prefix("schema ")?.trim();
+    let name_part = if let Some(brace) = without.find('{') {
+        without[..brace].trim()
+    } else {
+        without.split_whitespace().next()?
+    };
+    if name_part.is_empty() {
+        None
+    } else {
+        Some(name_part.to_string())
+    }
+}
+
+pub(crate) fn prescan_fn_header(header: &str, line_num: usize) -> Option<(String, Type)> {
+    let without_fn = header.strip_prefix("fn ")?.trim();
+    let paren_open = without_fn.find('(')?;
+    let name = without_fn[..paren_open].trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let arrow_pos = without_fn.find("->")?;
+    let mut after_arrow = without_fn[arrow_pos + 2..].trim();
+    if after_arrow.ends_with('{') {
+        after_arrow = after_arrow[..after_arrow.len() - 1].trim();
+    }
+    if let Some(eff_pos) = after_arrow.find("effects") {
+        after_arrow = after_arrow[..eff_pos].trim();
+    }
+    let ret_ty = parse_full_type(after_arrow, line_num).ok()?;
+    Some((name, ret_ty))
+}
+
+fn prescan_fn_signatures(lines: &[&str], existing_funcs: &[Function]) -> HashMap<String, Type> {
+    let mut sigs = HashMap::new();
+    for f in existing_funcs {
+        sigs.insert(f.name.clone(), f.ret_ty.clone());
+    }
+    for (idx, line) in lines.iter().enumerate() {
+        let stripped = strip_comment(line).trim();
+        if stripped.starts_with("fn ") {
+            if let Some((name, ret_ty)) = prescan_fn_header(stripped, idx + 1) {
+                sigs.insert(name, ret_ty);
+            }
+        }
+    }
+    sigs
+}
+
+/// Parses complete textual SSA into a Module using Unspecified role.
 pub fn parse_ssa(input: &str) -> Result<Module, ParseError> {
+    parse_ssa_with_role_and_schemas(input, FileRole::Unspecified, &[])
+}
+
+/// Alias for `parse_ssa`.
+pub fn parse_module(input: &str) -> Result<Module, ParseError> {
+    parse_ssa(input)
+}
+
+/// Parses complete textual SSA into a Module enforcing the given FileRole.
+pub fn parse_ssa_with_role(input: &str, role: FileRole) -> Result<Module, ParseError> {
+    parse_ssa_with_role_and_schemas(input, role, &[])
+}
+
+/// Parses complete textual SSA into a Module with the given FileRole and pre-existing schemas.
+pub fn parse_ssa_with_role_and_schemas(
+    input: &str,
+    role: FileRole,
+    existing_schemas: &[Schema],
+) -> Result<Module, ParseError> {
+    parse_ssa_with_role_and_env(input, role, existing_schemas, &[])
+}
+
+/// Parses complete textual SSA into a Module with the given FileRole, pre-existing schemas, and functions.
+pub fn parse_ssa_with_role_and_env(
+    input: &str,
+    role: FileRole,
+    existing_schemas: &[Schema],
+    existing_functions: &[Function],
+) -> Result<Module, ParseError> {
     let mut module = Module::new();
     let lines: Vec<&str> = input.lines().collect();
     let mut idx = 0;
+    let mut seen_declaration = false;
+    let mut all_schemas = existing_schemas.to_vec();
+    let fn_signatures = prescan_fn_signatures(&lines, existing_functions);
 
     while idx < lines.len() {
         let line_num = idx + 1;
@@ -18,32 +135,68 @@ pub fn parse_ssa(input: &str) -> Result<Module, ParseError> {
             continue;
         }
 
-        if trimmed.starts_with("schema ") {
+        if trimmed.starts_with("import ") || trimmed == "import" {
+            if seen_declaration {
+                return Err(ParseError::ImportAfterDeclaration { line: line_num });
+            }
+            let imp_path = parse_import_directive(trimmed, line_num)?;
+            if role == FileRole::Schema && !imp_path.ends_with(".ssa.schema") {
+                return Err(ParseError::InvalidConstructInSchemaFile {
+                    line: line_num,
+                    msg: format!(
+                        "Schema files may only import other '.ssa.schema' files, but found '{imp_path}'"
+                    ),
+                });
+            }
+            module.add_import(imp_path);
+            idx += 1;
+        } else if trimmed.starts_with("schema ") {
+            seen_declaration = true;
+            if role == FileRole::Code || (role != FileRole::Schema && !module.imports.is_empty()) {
+                let name = parse_schema_name_peek(trimmed).unwrap_or_else(|| "Unknown".to_string());
+                return Err(ParseError::InlineSchemaInCodeFile {
+                    line: line_num,
+                    name: name.clone(),
+                    fix_hint: format!(
+                        "Move schema '{name}' into a '.ssa.schema' file and import it with 'import \"...\"'"
+                    ),
+                });
+            }
             let (schema, next_idx) = parse_schema_from_lines(&lines, idx)?;
+            all_schemas.push(schema.clone());
             module.add_schema(schema);
             idx = next_idx;
         } else if trimmed.starts_with("fn ") {
+            seen_declaration = true;
+            if role == FileRole::Schema {
+                return Err(ParseError::InvalidConstructInSchemaFile {
+                    line: line_num,
+                    msg: "Functions cannot be declared in a .ssa.schema file".to_string(),
+                });
+            }
             let (func, next_idx) =
-                parse_function_from_lines_with_schemas(&lines, idx, &module.schemas)?;
+                parse_function_from_lines_with_env(&lines, idx, &all_schemas, &fn_signatures)?;
             module.add_function(func);
             idx = next_idx;
         } else {
             return Err(ParseError::InvalidSyntax {
                 line: line_num,
                 msg: format!(
-                    "Expected schema or function definition, found '{}'",
+                    "Expected import, schema or function definition, found '{}'",
                     trimmed
                 ),
             });
         }
     }
 
+    module.resolve_call_types();
     Ok(module)
 }
 
 /// Parses a single function from a textual SSA string.
 pub fn parse_function(input: &str) -> Result<Function, ParseError> {
     let lines: Vec<&str> = input.lines().collect();
+    let fn_signatures = prescan_fn_signatures(&lines, &[]);
     let mut idx = 0;
     let mut schemas = Vec::new();
     while idx < lines.len() {
@@ -56,7 +209,8 @@ pub fn parse_function(input: &str) -> Result<Function, ParseError> {
                 idx = next_idx;
                 continue;
             } else if trimmed.starts_with("fn ") {
-                let (func, _) = parse_function_from_lines_with_schemas(&lines, idx, &schemas)?;
+                let (func, _) =
+                    parse_function_from_lines_with_env(&lines, idx, &schemas, &fn_signatures)?;
                 return Ok(func);
             } else {
                 return Err(ParseError::InvalidSyntax {
@@ -70,7 +224,7 @@ pub fn parse_function(input: &str) -> Result<Function, ParseError> {
     Err(ParseError::UnexpectedEof { line: lines.len() })
 }
 
-fn strip_comment(line: &str) -> &str {
+pub(crate) fn strip_comment(line: &str) -> &str {
     let mut in_quote = false;
     let mut escape = false;
     let bytes = line.as_bytes();
@@ -248,8 +402,18 @@ fn parse_function_from_lines(
 
 fn parse_function_from_lines_with_schemas(
     lines: &[&str],
+    idx: usize,
+    schemas: &[Schema],
+) -> Result<(Function, usize), ParseError> {
+    let fn_signatures = prescan_fn_signatures(lines, &[]);
+    parse_function_from_lines_with_env(lines, idx, schemas, &fn_signatures)
+}
+
+fn parse_function_from_lines_with_env(
+    lines: &[&str],
     mut idx: usize,
     schemas: &[Schema],
+    fn_signatures: &HashMap<String, Type>,
 ) -> Result<(Function, usize), ParseError> {
     let header_line_num = idx + 1;
     let header_line = strip_comment(lines[idx]).trim();
@@ -458,8 +622,12 @@ fn parse_function_from_lines_with_schemas(
             (None, trimmed)
         };
 
-        let (op, inferred_ty) = parse_op(op_str, line_num, &reg_types, schemas)?;
-        let ty = inferred_ty;
+        let (op, inferred_ty) = parse_op(op_str, line_num, &reg_types, schemas, fn_signatures)?;
+        let ty = if dst.is_some() && inferred_ty == Type::Void && matches!(op, Op::Call(..)) {
+            Type::I64
+        } else {
+            inferred_ty
+        };
         if let Some(d) = dst {
             reg_types.insert(d, ty.clone());
         }
@@ -540,6 +708,7 @@ fn parse_op(
     line: usize,
     reg_types: &HashMap<RegId, Type>,
     schemas: &[Schema],
+    fn_signatures: &HashMap<String, Type>,
 ) -> Result<(Op, Type), ParseError> {
     let mut rest = s.trim();
     let opcode = extract_ident(&mut rest);
@@ -884,6 +1053,16 @@ fn parse_op(
                 .cloned()
                 .unwrap_or_else(|| Type::Struct("Unknown".to_string()));
             Ok((Op::StructSet(s, field_idx, v), ret_ty))
+        }
+        "call" => {
+            let fn_name = parse_quoted_string_or_ident(&mut rest, line)?;
+            let tokens = tokenize_whitespace(rest);
+            let mut args = Vec::with_capacity(tokens.len());
+            for tok in tokens {
+                args.push(parse_reg(tok, line)?);
+            }
+            let ret_ty = fn_signatures.get(&fn_name).cloned().unwrap_or(Type::Void);
+            Ok((Op::Call(fn_name, args), ret_ty))
         }
         other => Err(ParseError::UnknownOpcode {
             line,

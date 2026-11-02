@@ -3,6 +3,12 @@ use crate::ast::*;
 /// Formats a Module into canonical .ssa text.
 pub fn format_ssa(module: &Module) -> String {
     let mut out = String::new();
+    for import_path in &module.imports {
+        out.push_str(&format!("import \"{}\"\n", escape_string(import_path)));
+    }
+    if !module.imports.is_empty() && (!module.schemas.is_empty() || !module.functions.is_empty()) {
+        out.push('\n');
+    }
     for (i, schema) in module.schemas.iter().enumerate() {
         if i > 0 {
             out.push('\n');
@@ -144,6 +150,18 @@ fn format_op(op: &Op) -> String {
         Op::StructNew(name) => format!("struct_new {name}"),
         Op::StructGet(s, idx) => format!("struct_get %{s} {idx}"),
         Op::StructSet(s, idx, v) => format!("struct_set %{s} {idx} %{v}"),
+        Op::Call(fn_name, args) => {
+            if args.is_empty() {
+                format!("call {fn_name}")
+            } else {
+                let args_str = args
+                    .iter()
+                    .map(|r| format!("%{r}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("call {fn_name} {args_str}")
+            }
+        }
     }
 }
 

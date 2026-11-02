@@ -4,12 +4,7 @@ use std::path::Path;
 use crate::error::CliError;
 
 pub fn execute(file: &Path, output: &Path) -> Result<(), CliError> {
-    let content = fs::read_to_string(file).map_err(|e| {
-        eprintln!("Error reading file '{}': {e}", file.display());
-        CliError::Io(e)
-    })?;
-
-    let module = knr_core::parse_ssa(&content).map_err(|err| {
+    let module = knr_core::load_module_from_path(file).map_err(|err| {
         eprintln!("{err}");
         CliError::Parse(err)
     })?;

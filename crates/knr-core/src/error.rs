@@ -34,6 +34,35 @@ pub enum ParseError {
 
     #[error("Parse error at line {line}: missing closing brace '}}'")]
     MissingClosingBrace { line: usize },
+
+    #[error("Parse error at line {line}: inline schema '{name}' is forbidden in code file: {fix_hint}")]
+    InlineSchemaInCodeFile {
+        line: usize,
+        name: String,
+        fix_hint: String,
+    },
+
+    #[error("Parse error at line {line}: invalid construct in schema file: {msg}")]
+    InvalidConstructInSchemaFile { line: usize, msg: String },
+
+    #[error("Parse error at line {line}: import directive must appear at the top of the file before declarations")]
+    ImportAfterDeclaration { line: usize },
+
+    #[error("Circular import detected: {}", .cycle.join(" -> "))]
+    CircularImport { cycle: Vec<String> },
+
+    #[error("Duplicate symbol '{symbol}' defined in '{first_file}' and '{second_file}'")]
+    DuplicateSymbol {
+        symbol: String,
+        first_file: String,
+        second_file: String,
+    },
+
+    #[error("File not found at line {line}: '{path}'")]
+    FileNotFound { line: usize, path: String },
+
+    #[error("I/O error for '{path}': {msg}")]
+    IoError { path: String, msg: String },
 }
 
 #[derive(Error, Debug, Clone, PartialEq)]

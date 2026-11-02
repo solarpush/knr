@@ -1,0 +1,166 @@
+import "../schemas/vdom.ssa.schema"
+
+fn build_pillars() -> struct[Section] {
+bb0:
+    // Pillar 1: Propriété Linéaire
+    %0 = struct_new Leaf
+    %1 = const_str "div"
+    %2 = struct_set %0 0 %1
+    %3 = const_str "card-tag"
+    %4 = struct_set %2 1 %3
+    %5 = const_str "01 / PROPRIÉTÉ LINÉAIRE"
+    %6 = struct_set %4 2 %5
+
+    %7 = struct_new Leaf
+    %8 = const_str "h3"
+    %9 = struct_set %7 0 %8
+    %10 = const_str "card-title"
+    %11 = struct_set %9 1 %10
+    %12 = const_str "Mutation In-Place sans GC"
+    %13 = struct_set %11 2 %12
+
+    %14 = struct_new Leaf
+    %15 = const_str "p"
+    %16 = struct_set %14 0 %15
+    %17 = const_str "card-desc"
+    %18 = struct_set %16 1 %17
+    %19 = const_str "Les types linéaires (buf, vec, map, chan, struct) ont un propriétaire unique. struct_set et map_set mutent la mémoire sur place sans jamais cloner."
+    %20 = struct_set %18 2 %19
+
+    %21 = vec_new struct[Leaf]
+    %22 = vec_push %21 %6
+    %23 = vec_push %22 %13
+    %24 = vec_push %23 %20
+
+    %25 = struct_new Card
+    %26 = const_str "article"
+    %27 = struct_set %25 0 %26
+    %28 = const_str "card"
+    %29 = struct_set %27 1 %28
+    %30 = struct_set %29 3 %24
+
+    // Pillar 2: Juge Statique
+    %31 = struct_new Leaf
+    %32 = const_str "div"
+    %33 = struct_set %31 0 %32
+    %34 = const_str "card-tag"
+    %35 = struct_set %33 1 %34
+    %36 = const_str "02 / JUGE STATIQUE (< 100 µs)"
+    %37 = struct_set %35 2 %36
+
+    %38 = struct_new Leaf
+    %39 = const_str "h3"
+    %40 = struct_set %38 0 %39
+    %41 = const_str "card-title"
+    %42 = struct_set %40 1 %41
+    %43 = const_str "Diagnostics JSON & fix_hint"
+    %44 = struct_set %42 2 %43
+
+    %45 = struct_new Leaf
+    %46 = const_str "p"
+    %47 = struct_set %45 0 %46
+    %48 = const_str "card-desc"
+    %49 = struct_set %47 1 %48
+    %50 = const_str "4 passes (SSA, Alive/Moved, Types, Effets). En cas de UseAfterMove ou LinearLeak, knr-verify renvoie l'état des registres vivants et le correctif exact."
+    %51 = struct_set %49 2 %50
+
+    %52 = vec_new struct[Leaf]
+    %53 = vec_push %52 %37
+    %54 = vec_push %53 %44
+    %55 = vec_push %54 %51
+
+    %56 = struct_new Card
+    %57 = const_str "article"
+    %58 = struct_set %56 0 %57
+    %59 = const_str "card"
+    %60 = struct_set %58 1 %59
+    %61 = struct_set %60 3 %55
+
+    // Pillar 3: Système d'Effets
+    %62 = struct_new Leaf
+    %63 = const_str "div"
+    %64 = struct_set %62 0 %63
+    %65 = const_str "card-tag"
+    %66 = struct_set %64 1 %65
+    %67 = const_str "03 / SYSTÈME D'EFFETS"
+    %68 = struct_set %66 2 %67
+
+    %69 = struct_new Leaf
+    %70 = const_str "h3"
+    %71 = struct_set %69 0 %70
+    %72 = const_str "card-title"
+    %73 = struct_set %71 1 %72
+    %74 = const_str "Net, Ui, Hw & Async isolés"
+    %75 = struct_set %73 2 %74
+
+    %76 = struct_new Leaf
+    %77 = const_str "p"
+    %78 = struct_set %76 0 %77
+    %79 = const_str "card-desc"
+    %80 = struct_set %78 1 %79
+    %81 = const_str "Serveur HTTP Tokio, moteur VDOM HTML (qui génère cette page !) et buffers matériels alignés sur 64 octets pour SIMD XOR et DMA."
+    %82 = struct_set %80 2 %81
+
+    %83 = vec_new struct[Leaf]
+    %84 = vec_push %83 %68
+    %85 = vec_push %84 %75
+    %86 = vec_push %85 %82
+
+    %87 = struct_new Card
+    %88 = const_str "article"
+    %89 = struct_set %87 0 %88
+    %90 = const_str "card"
+    %91 = struct_set %89 1 %90
+    %92 = struct_set %91 3 %86
+
+    // Pillar 4: Multi-Cibles & KNIR
+    %93 = struct_new Leaf
+    %94 = const_str "div"
+    %95 = struct_set %93 0 %94
+    %96 = const_str "card-tag"
+    %97 = struct_set %95 1 %96
+    %98 = const_str "04 / MULTI-CIBLES & KNIR"
+    %99 = struct_set %97 2 %98
+
+    %100 = struct_new Leaf
+    %101 = const_str "h3"
+    %102 = struct_set %100 0 %101
+    %103 = const_str "card-title"
+    %104 = struct_set %102 1 %103
+    %105 = const_str "VM Gas, Cranelift & WASM"
+    %106 = struct_set %104 2 %105
+
+    %107 = struct_new Leaf
+    %108 = const_str "p"
+    %109 = struct_set %107 0 %108
+    %110 = const_str "card-desc"
+    %111 = struct_set %109 1 %110
+    %112 = const_str "Bijection 1:1 entre texte .ssa et bytecode 64-bit .knrbin. Oracle VM avec compteur de cycles anti-boucle infinie et compilation native ELF / WebAssembly."
+    %113 = struct_set %111 2 %112
+
+    %114 = vec_new struct[Leaf]
+    %115 = vec_push %114 %99
+    %116 = vec_push %115 %106
+    %117 = vec_push %116 %113
+
+    %118 = struct_new Card
+    %119 = const_str "article"
+    %120 = struct_set %118 0 %119
+    %121 = const_str "card"
+    %122 = struct_set %120 1 %121
+    %123 = struct_set %122 3 %117
+
+    %124 = vec_new struct[Card]
+    %125 = vec_push %124 %30
+    %126 = vec_push %125 %61
+    %127 = vec_push %126 %92
+    %128 = vec_push %127 %123
+
+    %129 = struct_new Section
+    %130 = const_str "section"
+    %131 = struct_set %129 0 %130
+    %132 = const_str "grid"
+    %133 = struct_set %131 1 %132
+    %134 = struct_set %133 3 %128
+    ret %134
+}

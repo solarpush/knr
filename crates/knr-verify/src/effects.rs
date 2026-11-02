@@ -61,10 +61,15 @@ pub fn verify_module_effects(module: &Module) -> Result<(), Diagnostic> {
     for func in &module.functions {
         for block in &func.blocks {
             for inst in &block.instructions {
-                if let Op::Spawn(target_fn, _) = &inst.op {
+                if let Op::Spawn(target_fn, _) | Op::Call(target_fn, _) = &inst.op {
                     if let Some(target) = module.get_function(target_fn) {
                         for eff in &target.effects {
                             if !func.effects.contains(eff) {
+                                let action = if matches!(inst.op, Op::Spawn(..)) {
+                                    "spawns"
+                                } else {
+                                    "calls"
+                                };
                                 return Err(Diagnostic::new(
                                     "UndeclaredEffect",
                                     &func.name,
@@ -72,7 +77,7 @@ pub fn verify_module_effects(module: &Module) -> Result<(), Diagnostic> {
                                     format_instruction(inst),
                                 )
                                 .with_fix_hint(format!(
-                                    "Function '{}' spawns effectful function '{}' requiring effect {eff}",
+                                    "Function '{}' {action} effectful function '{}' requiring effect {eff}",
                                     func.name, target_fn
                                 )));
                             }

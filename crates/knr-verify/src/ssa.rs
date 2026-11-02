@@ -355,6 +355,7 @@ fn get_used_registers(op: &Op) -> Vec<RegId> {
         Op::StructNew(_) => Vec::new(),
         Op::StructGet(s, _) => vec![*s],
         Op::StructSet(s, _, val) => vec![*s, *val],
+        Op::Call(_, args) => args.clone(),
     }
 }
 

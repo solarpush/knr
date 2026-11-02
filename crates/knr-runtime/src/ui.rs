@@ -38,6 +38,72 @@ pub fn escape_html_attr(input: &str) -> String {
     escape_html_text(input)
 }
 
+/// Standard knr runtime bridge script with dual SSR (fetch POST) and WASM Client Reducer support.
+pub const KNR_RUNTIME_BRIDGE_SCRIPT: &str = "<script data-knr-runtime=\"v1\">\
+(function(){\
+let w=window.__knr_wasm;\
+async function getWasm(){\
+if(w)return w;\
+if(typeof location!=='undefined'&&location.protocol&&location.protocol.startsWith('http')){\
+try{\
+const r=await fetch('site.wasm');\
+if(r.ok){\
+const b=await r.arrayBuffer();\
+const m=await WebAssembly.instantiate(b,{});\
+w=window.__knr_wasm=m.instance.exports;\
+return w;\
+}\
+}catch(_){}\
+}\
+if(window.__knr_wasm_bytes){\
+try{\
+const bin=atob(window.__knr_wasm_bytes);\
+const u=new Uint8Array(bin.length);\
+for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);\
+const m=await WebAssembly.instantiate(u.buffer,{});\
+w=window.__knr_wasm=m.instance.exports;\
+return w;\
+}catch(_){}\
+}\
+return null;\
+}\
+document.addEventListener('click',async function(e){\
+const b=e.target.closest('[data-knr-action]');\
+if(!b)return;\
+const act=b.getAttribute('data-knr-action');\
+if(!act)return;\
+const tgt=b.getAttribute('data-knr-target')||'.counter-val';\
+const el=document.querySelector(tgt);\
+const st=document.querySelector('.counter-status');\
+const cur=BigInt(parseInt((el?el.textContent:'0')||'0',10)||0);\
+if(typeof location!=='undefined'&&location.protocol&&location.protocol.startsWith('http')){\
+try{\
+const r=await fetch(act,{method:'POST'});\
+if(r.ok){\
+const t=(await r.text()).trim();\
+if(el)el.textContent=t;\
+if(st)st.textContent='Syscall Net + Ui SSR (site/server.ssa) -> reg %count muté en VM (count = '+t+')';\
+return;\
+}\
+}catch(_){}\
+}\
+const op=act.endsWith('inc')?1n:(act.endsWith('dec')?2n:0n);\
+try{\
+const wasm=await getWasm();\
+if(wasm&&typeof wasm.knr_dispatch==='function'){\
+const next=wasm.knr_dispatch(cur,op);\
+if(el)el.textContent=next.toString();\
+if(st)st.textContent='WASM Client Reducer (site.wasm -> knr_dispatch('+cur+'n, '+op+'n)) = '+next;\
+return;\
+}\
+}catch(_){}\
+const next=op===1n?cur+1n:(op===2n?cur-1n:0n);\
+if(el)el.textContent=next.toString();\
+if(st)st.textContent='Bridge VDOM local -> struct_set %state 0 '+next+' (0 allocation GC)';\
+});\
+})();\
+</script>";
+
 /// In-memory Virtual DOM node representation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VNode {
@@ -108,7 +174,25 @@ impl VNode {
                     }
                 }
 
-                let text = m.get("text").and_then(Value::as_str).map(|s| s.to_string());
+                // Handle declarative action and target in Map
+                if let Some(Value::Str(action)) = m.get("action") {
+                    if !action.is_empty() {
+                        props.insert("data-knr-action".to_string(), action.clone());
+                    }
+                }
+                if let Some(Value::Str(target)) = m.get("target") {
+                    if !target.is_empty() {
+                        props.insert("data-knr-target".to_string(), target.clone());
+                    }
+                }
+
+                let text = match m.get("text") {
+                    Some(Value::Str(s)) if !s.is_empty() => Some(s.clone()),
+                    Some(Value::I64(n)) => Some(n.to_string()),
+                    Some(Value::F64(n)) => Some(n.to_string()),
+                    Some(Value::Bool(b)) => Some(b.to_string()),
+                    _ => None,
+                };
 
                 let mut children = Vec::new();
                 if let Some(c) = m.get("children") {
@@ -179,9 +263,34 @@ impl VNode {
                 };
 
                 let mut children = Vec::new();
-                if let Some(Value::Vec(cv)) = fields.get(3) {
-                    for child in cv {
-                        children.push(VNode::from_value(child)?);
+
+                // Field 3: Vec -> children, Str -> data-knr-action
+                if let Some(f3) = fields.get(3) {
+                    match f3 {
+                        Value::Vec(cv) => {
+                            for child in cv {
+                                children.push(VNode::from_value(child)?);
+                            }
+                        }
+                        Value::Str(action) if !action.is_empty() => {
+                            props.insert("data-knr-action".to_string(), action.clone());
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Field 4: Str -> data-knr-target, Vec -> children
+                if let Some(f4) = fields.get(4) {
+                    match f4 {
+                        Value::Str(target) if !target.is_empty() => {
+                            props.insert("data-knr-target".to_string(), target.clone());
+                        }
+                        Value::Vec(cv) => {
+                            for child in cv {
+                                children.push(VNode::from_value(child)?);
+                            }
+                        }
+                        _ => {}
                     }
                 }
 
@@ -217,6 +326,13 @@ impl VNode {
                 }
                 map.insert("props".to_string(), Value::Map(pmap));
 
+                if let Some(act) = props.get("data-knr-action") {
+                    map.insert("action".to_string(), Value::Str(act.clone()));
+                }
+                if let Some(tgt) = props.get("data-knr-target") {
+                    map.insert("target".to_string(), Value::Str(tgt.clone()));
+                }
+
                 if let Some(t) = text {
                     map.insert("text".to_string(), Value::Str(t.clone()));
                 }
@@ -229,14 +345,50 @@ impl VNode {
         }
     }
 
+    /// Recursively checks if any element in the VDOM subtree contains an explicit `<script>` tag.
+    pub fn has_explicit_script(&self) -> bool {
+        match self {
+            VNode::Text(_) => false,
+            VNode::Element { tag, children, .. } => {
+                if tag.eq_ignore_ascii_case("script") {
+                    return true;
+                }
+                children.iter().any(|c| c.has_explicit_script())
+            }
+        }
+    }
+
+    /// Recursively checks if any element in the VDOM subtree has a non-empty `data-knr-action` prop.
+    pub fn has_action_attrs(&self) -> bool {
+        match self {
+            VNode::Text(_) => false,
+            VNode::Element { props, children, .. } => {
+                if props.get("data-knr-action").is_some_and(|a| !a.is_empty()) {
+                    return true;
+                }
+                children.iter().any(|c| c.has_action_attrs())
+            }
+        }
+    }
+
+    /// Checks if this VDOM tree requires automatic runtime bridge injection:
+    /// returns `true` if any element defines declarative actions (`data-knr-action`)
+    /// and NO explicit `<script>` element is present in the tree.
+    pub fn has_declarative_actions(&self) -> bool {
+        self.has_action_attrs() && !self.has_explicit_script()
+    }
+
     /// Renders this VNode and its subtree to an HTML string.
+    /// If declarative actions are present (`data-knr-action`) and no explicit `<script>` tag exists,
+    /// automatically injects `<script data-knr-runtime="v1">...</script>` before the root closing tag.
     pub fn render_html(&self) -> String {
         let mut buf = String::new();
-        self.render_into(&mut buf);
+        let inject_bridge = self.has_declarative_actions();
+        self.render_into(&mut buf, inject_bridge);
         buf
     }
 
-    fn render_into(&self, buf: &mut String) {
+    fn render_into(&self, buf: &mut String, inject_at_root: bool) {
         match self {
             VNode::Text(s) => {
                 buf.push_str(&escape_html_text(s));
@@ -258,7 +410,7 @@ impl VNode {
                     buf.push('"');
                 }
 
-                if is_void_element(tag) && children.is_empty() && text.is_none() {
+                if is_void_element(tag) && children.is_empty() && text.is_none() && !inject_at_root {
                     buf.push_str(" />");
                 } else {
                     buf.push('>');
@@ -274,7 +426,10 @@ impl VNode {
                         }
                     }
                     for child in children {
-                        child.render_into(buf);
+                        child.render_into(buf, false);
+                    }
+                    if inject_at_root {
+                        buf.push_str(KNR_RUNTIME_BRIDGE_SCRIPT);
                     }
                     buf.push_str("</");
                     buf.push_str(tag);

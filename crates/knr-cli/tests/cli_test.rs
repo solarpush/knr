@@ -438,10 +438,26 @@ fn test_build_native_target_arithmetic() {
 
 #[test]
 fn test_cli_struct_asm_disasm_and_run() {
-    let ssa_content = r#"schema Point {
+    let test_dir = std::env::temp_dir().join(format!(
+        "knr_test_struct_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&test_dir).expect("create test dir");
+
+    let schema_path = test_dir.join("point.ssa.schema");
+    let schema_content = r#"schema Point {
     0: x i64,
     1: y i64,
 }
+"#;
+    fs::write(&schema_path, schema_content).expect("write schema");
+
+    let ssa_path = test_dir.join("main.ssa");
+    let ssa_content = r#"import "point.ssa.schema"
 
 fn main() -> i64 {
 bb0:
@@ -457,48 +473,275 @@ bb0:
     ret %7
 }
 "#;
-    let ssa_temp = TempFile::new("struct_cli_test.ssa");
-    std::fs::write(ssa_temp.path(), ssa_content).expect("write ssa");
+    fs::write(&ssa_path, ssa_content).expect("write ssa");
 
     // 1. knr check
     let check_out = knr_cmd()
-        .args(["check", ssa_temp.path().to_str().unwrap()])
+        .args(["check", ssa_path.to_str().unwrap()])
         .output()
         .expect("knr check failed");
-    assert!(check_out.status.success(), "knr check on struct ssa must succeed");
+    assert!(
+        check_out.status.success(),
+        "knr check on struct ssa must succeed: {}",
+        String::from_utf8_lossy(&check_out.stderr)
+    );
 
     // 2. knr run
     let run_out = knr_cmd()
-        .args(["run", ssa_temp.path().to_str().unwrap()])
+        .args(["run", ssa_path.to_str().unwrap()])
         .output()
         .expect("knr run failed");
-    assert!(run_out.status.success(), "knr run on struct ssa must succeed");
+    assert!(
+        run_out.status.success(),
+        "knr run on struct ssa must succeed: {}",
+        String::from_utf8_lossy(&run_out.stderr)
+    );
     let run_val = String::from_utf8_lossy(&run_out.stdout).trim().to_string();
     assert_eq!(run_val, "42", "knr run should compute 35 + 7 = 42");
 
     // 3. knr asm
-    let bin_temp = TempFile::new("struct_cli_test.knrbin");
+    let bin_path = test_dir.join("struct_cli_test.knrbin");
     let asm_out = knr_cmd()
         .args([
             "asm",
-            ssa_temp.path().to_str().unwrap(),
+            ssa_path.to_str().unwrap(),
             "-o",
-            bin_temp.path().to_str().unwrap(),
+            bin_path.to_str().unwrap(),
         ])
         .output()
         .expect("knr asm failed");
-    assert!(asm_out.status.success(), "knr asm on struct ssa must succeed");
+    assert!(
+        asm_out.status.success(),
+        "knr asm on struct ssa must succeed: {}",
+        String::from_utf8_lossy(&asm_out.stderr)
+    );
 
     // 4. knr disasm
     let disasm_out = knr_cmd()
-        .args(["disasm", bin_temp.path().to_str().unwrap()])
+        .args(["disasm", bin_path.to_str().unwrap()])
         .output()
         .expect("knr disasm failed");
-    assert!(disasm_out.status.success(), "knr disasm on struct knrbin must succeed");
+    assert!(
+        disasm_out.status.success(),
+        "knr disasm on struct knrbin must succeed: {}",
+        String::from_utf8_lossy(&disasm_out.stderr)
+    );
     let disasm_text = String::from_utf8_lossy(&disasm_out.stdout);
-    assert!(disasm_text.contains("schema Point"), "Disassembly must contain schema Point: {disasm_text}");
-    assert!(disasm_text.contains("struct_new Point"), "Disassembly must contain struct_new Point: {disasm_text}");
+    assert!(
+        disasm_text.contains("schema Point"),
+        "Disassembly must contain schema Point: {disasm_text}"
+    );
+    assert!(
+        disasm_text.contains("struct_new Point"),
+        "Disassembly must contain struct_new Point: {disasm_text}"
+    );
+
+    let _ = fs::remove_dir_all(&test_dir);
 }
+
+#[test]
+fn test_cli_check_rejects_inline_schema_in_code_file() {
+    let ssa_temp = TempFile::new("inline_schema.ssa");
+    let ssa_content = r#"schema Foo {
+    0: x i64,
+}
+
+fn main() -> i64 {
+bb0:
+    %0 = const_i64 0
+    ret %0
+}
+"#;
+    fs::write(ssa_temp.path(), ssa_content).expect("write ssa");
+
+    // Human-readable
+    let output = knr_cmd()
+        .args(["check", ssa_temp.path().to_str().unwrap()])
+        .output()
+        .expect("execute knr check");
+    assert!(!output.status.success(), "knr check must fail on inline schema in .ssa");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("InlineSchemaInCodeFile"),
+        "stderr must contain error_kind InlineSchemaInCodeFile: {stderr}"
+    );
+    assert!(
+        stderr.contains("Move schema 'Foo' into a '.ssa.schema' file"),
+        "stderr must contain fix_hint: {stderr}"
+    );
+
+    // JSON format
+    let json_output = knr_cmd()
+        .args(["check", ssa_temp.path().to_str().unwrap(), "--json"])
+        .output()
+        .expect("execute knr check --json");
+    assert!(!json_output.status.success(), "knr check --json must fail on inline schema");
+    let stdout = String::from_utf8_lossy(&json_output.stdout);
+    let json_val: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON '{stdout}': {e}"));
+    let arr = json_val.as_array().expect("must be array");
+    assert!(!arr.is_empty(), "array must not be empty");
+    assert_eq!(arr[0]["error_kind"], "InlineSchemaInCodeFile");
+    assert_eq!(arr[0]["line"], 1);
+    assert!(arr[0]["instruction"].as_str().unwrap().contains("Foo"));
+    assert!(arr[0]["fix_hint"].as_str().unwrap().contains("Move schema 'Foo' into a '.ssa.schema' file"));
+}
+
+#[test]
+fn test_cli_check_rejects_fn_in_schema_file() {
+    let schema_temp = TempFile::new("invalid_fn.ssa.schema");
+    let schema_content = r#"schema Bar {
+    0: val i64,
+}
+
+fn forbidden() -> void {
+bb0:
+    ret
+}
+"#;
+    fs::write(schema_temp.path(), schema_content).expect("write schema");
+
+    // Human-readable
+    let output = knr_cmd()
+        .args(["check", schema_temp.path().to_str().unwrap()])
+        .output()
+        .expect("execute knr check");
+    assert!(!output.status.success(), "knr check must fail on fn in .ssa.schema");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("InvalidConstructInSchemaFile"),
+        "stderr must contain error_kind InvalidConstructInSchemaFile: {stderr}"
+    );
+
+    // JSON format
+    let json_output = knr_cmd()
+        .args(["check", schema_temp.path().to_str().unwrap(), "--json"])
+        .output()
+        .expect("execute knr check --json");
+    assert!(!json_output.status.success(), "knr check --json must fail on fn in schema");
+    let stdout = String::from_utf8_lossy(&json_output.stdout);
+    let json_val: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON '{stdout}': {e}"));
+    let arr = json_val.as_array().expect("must be array");
+    assert!(!arr.is_empty(), "array must not be empty");
+    assert_eq!(arr[0]["error_kind"], "InvalidConstructInSchemaFile");
+    assert_eq!(arr[0]["line"], 5);
+    assert!(arr[0]["fix_hint"].is_string());
+}
+
+#[test]
+fn test_cli_check_rejects_circular_imports() {
+    let test_dir = std::env::temp_dir().join(format!(
+        "knr_test_cycle_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&test_dir).expect("create test dir");
+
+    let file_a = test_dir.join("cycle_a.ssa");
+    let file_b = test_dir.join("cycle_b.ssa");
+
+    let a_content = r#"import "cycle_b.ssa"
+
+fn fn_a() -> void {
+bb0:
+    ret
+}
+"#;
+    let b_content = r#"import "cycle_a.ssa"
+
+fn fn_b() -> void {
+bb0:
+    ret
+}
+"#;
+    fs::write(&file_a, a_content).expect("write a");
+    fs::write(&file_b, b_content).expect("write b");
+
+    // Human-readable
+    let output = knr_cmd()
+        .args(["check", file_a.to_str().unwrap()])
+        .output()
+        .expect("execute knr check");
+    assert!(!output.status.success(), "knr check must fail on circular import");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("CircularImport"),
+        "stderr must contain CircularImport: {stderr}"
+    );
+
+    // JSON format
+    let json_output = knr_cmd()
+        .args(["check", file_a.to_str().unwrap(), "--json"])
+        .output()
+        .expect("execute knr check --json");
+    assert!(!json_output.status.success(), "knr check --json must fail on circular import");
+    let stdout = String::from_utf8_lossy(&json_output.stdout);
+    let json_val: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON '{stdout}': {e}"));
+    let arr = json_val.as_array().expect("must be array");
+    assert!(!arr.is_empty(), "array must not be empty");
+    assert_eq!(arr[0]["error_kind"], "CircularImport");
+    assert_eq!(arr[0]["line"], 1);
+    assert!(arr[0]["fix_hint"].as_str().unwrap().contains("Break circular dependency cycle"));
+
+    let _ = fs::remove_dir_all(&test_dir);
+}
+
+#[test]
+fn test_cli_run_multifile_execution() {
+    let test_dir = std::env::temp_dir().join(format!(
+        "knr_test_multifile_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&test_dir).expect("create test dir");
+
+    let helper_file = test_dir.join("helper.ssa");
+    let helper_content = r#"fn compute_val(%0: i64, %1: i64) -> i64 {
+bb0:
+    %2 = add %0 %1
+    %3 = const_i64 2
+    %4 = mul %2 %3
+    ret %4
+}
+"#;
+    fs::write(&helper_file, helper_content).expect("write helper");
+
+    let main_file = test_dir.join("main.ssa");
+    let main_content = r#"import "helper.ssa"
+
+fn main() -> i64 {
+bb0:
+    %0 = const_i64 15
+    %1 = const_i64 6
+    %2 = call compute_val %0 %1
+    ret %2
+}
+"#;
+    fs::write(&main_file, main_content).expect("write main");
+
+    let run_out = knr_cmd()
+        .args(["run", main_file.to_str().unwrap()])
+        .output()
+        .expect("execute knr run");
+    assert!(
+        run_out.status.success(),
+        "knr run multifile must succeed: {}",
+        String::from_utf8_lossy(&run_out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run_out.stdout);
+    assert_eq!(stdout.trim(), "42", "Expected (15 + 6) * 2 = 42");
+
+    let _ = fs::remove_dir_all(&test_dir);
+}
+
 
 // ============================================================================
 // 6. Subcommand: knr update & install.sh
@@ -644,4 +887,85 @@ fn test_update_check_and_self_replacement_with_install_sh() {
 
     let _ = fs::remove_dir_all(&work_dir);
 }
+
+#[test]
+fn test_run_unlimited_gas_cli_flag() {
+    let file = fixture_path("valid/01_minimal.ssa");
+
+    // Test --gas unlimited
+    let output = knr_cmd()
+        .args(["run", file.to_str().unwrap(), "--gas", "unlimited"])
+        .output()
+        .expect("failed to execute knr run --gas unlimited");
+    assert!(
+        output.status.success(),
+        "knr run --gas unlimited must succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("42"));
+
+    // Test --gas=unlimited syntax
+    let output_eq = knr_cmd()
+        .args(["run", file.to_str().unwrap(), "--gas=unlimited"])
+        .output()
+        .expect("failed to execute knr run --gas=unlimited");
+    assert!(output_eq.status.success());
+    let stdout_eq = String::from_utf8_lossy(&output_eq.stdout);
+    assert!(stdout_eq.contains("42"));
+
+    // Test --unlimited-gas flag
+    let output_flag = knr_cmd()
+        .args(["run", file.to_str().unwrap(), "--unlimited-gas"])
+        .output()
+        .expect("failed to execute knr run --unlimited-gas");
+    assert!(output_flag.status.success());
+}
+
+#[test]
+fn test_run_multi_request_server_gas_refill_cli() {
+    let ssa_content = r#"
+fn main() -> i64 effects(Ui, Async) {
+bb0:
+    %0 = const_i64 1
+    %1 = chan_new i64 %0
+    %2 = const_i64 0
+    %3 = chan_send %1 %2
+    %4 = const_i64 50
+    br bb1
+
+bb1:
+    %5 = chan_recv %1
+    %6 = cmp_lt %5 %4
+    br_if %6 bb2 bb3
+
+bb2:
+    %7 = syscall Ui "ui.poll_event" %5
+    %8 = add %5 %0
+    %9 = chan_send %1 %8
+    br bb1
+
+bb3:
+    free %1
+    ret %5
+}
+"#;
+    let ssa_temp = TempFile::new("multi_req_refill.ssa");
+    fs::write(ssa_temp.path(), ssa_content).expect("write ssa");
+
+    // Total steps = ~350. With --gas 20, cumulative gas would exhaust at step 20 (iteration 3).
+    // With auto-refill on ui.poll_event, it succeeds and prints 50!
+    let output = knr_cmd()
+        .args(["run", ssa_temp.path().to_str().unwrap(), "--gas", "20"])
+        .output()
+        .expect("knr run --gas 20 with refill");
+    assert!(
+        output.status.success(),
+        "knr run with gas refill must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "50");
+}
+
 

@@ -152,6 +152,7 @@ pub enum Op {
     StructNew(String),
     StructGet(RegId, u32),
     StructSet(RegId, u32, RegId),
+    Call(String, Vec<RegId>),
 }
 
 /// A single instruction within a basic block.
@@ -242,6 +243,7 @@ impl Function {
 /// A collection of schemas and functions representing an SSA compilation unit.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Module {
+    pub imports: Vec<String>,
     pub schemas: Vec<Schema>,
     pub functions: Vec<Function>,
 }
@@ -249,8 +251,16 @@ pub struct Module {
 impl Module {
     pub fn new() -> Self {
         Self {
+            imports: Vec::new(),
             schemas: Vec::new(),
             functions: Vec::new(),
+        }
+    }
+
+    pub fn add_import(&mut self, import: impl Into<String>) {
+        let imp = import.into();
+        if !self.imports.contains(&imp) {
+            self.imports.push(imp);
         }
     }
 
@@ -268,5 +278,26 @@ impl Module {
 
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.iter().find(|f| f.name == name)
+    }
+
+    /// Aligns any `Op::Call` instruction's return type `inst.ty` with the declared `ret_ty`
+    /// of the target function found within the module.
+    pub fn resolve_call_types(&mut self) {
+        let fn_map: std::collections::HashMap<String, Type> = self
+            .functions
+            .iter()
+            .map(|f| (f.name.clone(), f.ret_ty.clone()))
+            .collect();
+        for func in &mut self.functions {
+            for block in &mut func.blocks {
+                for inst in &mut block.instructions {
+                    if let Op::Call(ref name, _) = inst.op {
+                        if let Some(target_ret) = fn_map.get(name) {
+                            inst.ty = target_ret.clone();
+                        }
+                    }
+                }
+            }
+        }
     }
 }

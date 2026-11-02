@@ -4,14 +4,16 @@ pub mod commands;
 pub mod error;
 pub mod platform;
 
-pub use args::{parse_args, BuildTarget, CliCommand};
+pub use args::{
+    parse_args, BuildTarget, CheckArgs, CliCommand, Command, ExploreArgs, ExploreFormat,
+};
 pub use error::CliError;
 
 pub fn run<I: IntoIterator<Item = String>>(args: I) -> Result<(), CliError> {
     let command = parse_args(args)?;
     match command {
         CliCommand::Help | CliCommand::Version => Ok(()),
-        CliCommand::Check { file, json } => commands::check::execute(&file, json),
+        CliCommand::Check(args) => commands::check::execute(&args.file, args.json, args.graph),
         CliCommand::Run { file, gas, trace } => commands::run::execute(&file, gas, trace),
         CliCommand::Build {
             file,
@@ -27,5 +29,6 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> Result<(), CliError> {
             force,
             version,
         } => commands::update::execute(check, force, version.as_deref()),
+        CliCommand::Explore(args) => commands::explore::execute(&args),
     }
 }

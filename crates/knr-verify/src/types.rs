@@ -11,6 +11,14 @@ pub fn verify_types(func: &Function) -> Result<(), Diagnostic> {
 }
 
 pub fn verify_types_with_schemas(func: &Function, schemas: &[Schema]) -> Result<(), Diagnostic> {
+    verify_types_with_env(func, schemas, &[])
+}
+
+pub fn verify_types_with_env(
+    func: &Function,
+    schemas: &[Schema],
+    functions: &[Function],
+) -> Result<(), Diagnostic> {
     let mut reg_types: HashMap<RegId, Type> = HashMap::new();
 
     // Register function parameter types
@@ -28,7 +36,7 @@ pub fn verify_types_with_schemas(func: &Function, schemas: &[Schema]) -> Result<
             let inst_str = format_instruction(inst);
 
             // Check opcode typing
-            check_op_types(func, inst, &inst_str, &reg_types, schemas)?;
+            check_op_types(func, inst, &inst_str, &reg_types, schemas, functions)?;
 
             // Verify that instruction type references only declared schemas
             if let Err(mut diag) = check_type_schemas(&inst.ty, func, inst.line, &inst_str, schemas) {
@@ -123,6 +131,7 @@ fn check_op_types(
     inst_str: &str,
     reg_types: &HashMap<RegId, Type>,
     schemas: &[Schema],
+    functions: &[Function],
 ) -> Result<(), Diagnostic> {
     let line = inst.line;
 
@@ -772,6 +781,73 @@ fn check_op_types(
                         Some(*s),
                     ));
                 }
+            }
+        }
+        Op::Call(fn_name, args) => {
+            let target_fn = functions
+                .iter()
+                .find(|f| &f.name == fn_name)
+                .or_else(|| if &func.name == fn_name { Some(func) } else { None })
+                .ok_or_else(|| {
+                    Diagnostic::new("UndefinedFunction", &func.name, line, inst_str)
+                        .with_fix_hint(format!("Function '{fn_name}' is not defined in module"))
+                })?;
+
+            if args.len() != target_fn.params.len() {
+                let mut diag = Diagnostic::new("TypeMismatch", &func.name, line, inst_str)
+                    .with_fix_hint(format!(
+                        "Function '{}' expects {} arguments, got {}",
+                        fn_name,
+                        target_fn.params.len(),
+                        args.len()
+                    ));
+                if let Some(d) = inst.dst {
+                    diag = diag.with_violated_register(format!("%{d}"));
+                }
+                return Err(diag);
+            }
+
+            for (i, (&arg, (_, expected_ty))) in args.iter().zip(&target_fn.params).enumerate() {
+                let actual_ty = get_reg_ty(func, arg, line, inst_str, reg_types)?;
+                if actual_ty != expected_ty {
+                    return Err(Diagnostic::new("TypeMismatch", &func.name, line, inst_str)
+                        .with_violated_register(format!("%{arg}"))
+                        .with_fix_hint(format!(
+                            "Argument {i} (%{arg}) of function '{fn_name}' expected type {expected_ty}, got {actual_ty}"
+                        )));
+                }
+            }
+
+            if inst.ty != target_fn.ret_ty {
+                let mut diag = Diagnostic::new("TypeMismatch", &func.name, line, inst_str)
+                    .with_fix_hint(format!(
+                        "Function '{}' return type {} does not match instruction type {}",
+                        fn_name, target_fn.ret_ty, inst.ty
+                    ));
+                if let Some(d) = inst.dst {
+                    diag = diag.with_violated_register(format!("%{d}"));
+                }
+                return Err(diag);
+            }
+
+            if target_fn.ret_ty != Type::Void && inst.dst.is_none() {
+                return Err(Diagnostic::new("TypeMismatch", &func.name, line, inst_str)
+                    .with_fix_hint(format!(
+                        "Function '{}' returns {} and requires a destination register '%dst = call ...'",
+                        fn_name, target_fn.ret_ty
+                    )));
+            }
+
+            if target_fn.ret_ty == Type::Void && inst.dst.is_some() {
+                let mut diag = Diagnostic::new("TypeMismatch", &func.name, line, inst_str)
+                    .with_fix_hint(format!(
+                        "Function '{}' returns void and cannot have destination register",
+                        fn_name
+                    ));
+                if let Some(d) = inst.dst {
+                    diag = diag.with_violated_register(format!("%{d}"));
+                }
+                return Err(diag);
             }
         }
     }

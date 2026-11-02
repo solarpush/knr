@@ -156,6 +156,137 @@ fn test_adv_cli_gas_parameter_boundaries() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("Gas exhausted"));
+
+    // 5. Empty string for --gas
+    let out = knr_cmd()
+        .args(["run", file_str, "--gas", ""])
+        .output()
+        .expect("knr run empty gas");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("Invalid integer value for '--gas'"));
+
+    // 6. Empty string for --gas=
+    let out = knr_cmd()
+        .args(["run", file_str, "--gas="])
+        .output()
+        .expect("knr run empty gas eq");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("Invalid integer value for '--gas'"));
+}
+
+#[test]
+fn test_adv_cli_unlimited_gas_case_insensitivity_and_aliases() {
+    let valid_file = fixture_path("valid/01_minimal.ssa");
+    let file_str = valid_file.to_str().unwrap();
+
+    let aliases = ["unlimited", "UNLIMITED", "Unlimited", "max", "MAX"];
+    for alias in aliases {
+        let out = knr_cmd()
+            .args(["run", file_str, "--gas", alias])
+            .output()
+            .unwrap_or_else(|e| panic!("failed knr run --gas {alias}: {e}"));
+        assert!(
+            out.status.success(),
+            "knr run --gas {alias} must exit 0, got status {:?}",
+            out.status
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("42"), "Expected return value 42, got: {stdout}");
+
+        // Also test --gas=<alias> syntax
+        let out_eq = knr_cmd()
+            .args(["run", file_str, &format!("--gas={alias}")])
+            .output()
+            .unwrap_or_else(|e| panic!("failed knr run --gas={alias}: {e}"));
+        assert!(
+            out_eq.status.success(),
+            "knr run --gas={alias} must exit 0, got status {:?}",
+            out_eq.status
+        );
+    }
+
+    // Also test --unlimited-gas flag
+    let out_flag = knr_cmd()
+        .args(["run", file_str, "--unlimited-gas"])
+        .output()
+        .expect("failed knr run --unlimited-gas");
+    assert!(out_flag.status.success());
+    let stdout_flag = String::from_utf8_lossy(&out_flag.stdout);
+    assert!(stdout_flag.contains("42"));
+}
+
+#[test]
+fn test_adv_cli_site_server_ssa_verification_and_event_loop() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
+    let server_path = repo_root.join("site").join("server.ssa");
+    let server_str = server_path.to_str().unwrap();
+
+    // 1. Verify site/server.ssa parses and verifies cleanly via knr check CLI
+    let out = knr_cmd()
+        .args(["check", server_str])
+        .output()
+        .expect("knr check site/server.ssa");
+    assert!(
+        out.status.success(),
+        "knr check site/server.ssa must succeed: stderr: {}, stdout: {}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    // 2. Multi-request server loop with --gas 20 executing beyond 20 instructions and completing cleanly
+    // Loop of 50 requests (~350 steps). Under cumulative gas without auto-refill, it would die at step 20.
+    let ssa_content = r#"
+fn main() -> i64 effects(Ui, Async) {
+bb0:
+    %0 = const_i64 1
+    %1 = chan_new i64 %0
+    %2 = const_i64 0
+    %3 = chan_send %1 %2
+    %4 = const_i64 50
+    br bb1
+
+bb1:
+    %5 = chan_recv %1
+    %6 = cmp_lt %5 %4
+    br_if %6 bb2 bb3
+
+bb2:
+    %7 = syscall Ui "ui.poll_event" %5
+    %8 = add %5 %0
+    %9 = chan_send %1 %8
+    br bb1
+
+bb3:
+    free %1
+    ret %5
+}
+"#;
+    let ssa_temp = TempFile::new("multi_req_refill_adv.ssa");
+    fs::write(ssa_temp.path(), ssa_content).expect("write ssa");
+
+    let out_loop = knr_cmd()
+        .args(["run", ssa_temp.path().to_str().unwrap(), "--gas", "20"])
+        .output()
+        .expect("knr run --gas 20 with refill");
+    assert!(
+        out_loop.status.success(),
+        "knr run with gas refill must succeed: {}",
+        String::from_utf8_lossy(&out_loop.stderr)
+    );
+    let stdout_loop = String::from_utf8_lossy(&out_loop.stdout);
+    assert_eq!(stdout_loop.trim(), "50");
+
+    // 3. Multi-request loop with --gas unlimited completes cleanly
+    let out_unlim = knr_cmd()
+        .args(["run", ssa_temp.path().to_str().unwrap(), "--gas", "unlimited"])
+        .output()
+        .expect("knr run --gas unlimited");
+    assert!(out_unlim.status.success());
+    let stdout_unlim = String::from_utf8_lossy(&out_unlim.stdout);
+    assert_eq!(stdout_unlim.trim(), "50");
 }
 
 // ============================================================================

@@ -1,0 +1,17 @@
+schema HttpRequest {
+    0: req_id i64,
+    1: method str,
+    2: path str,
+}
+
+schema HttpResponse {
+    0: req_id i64,
+    1: status i64,
+    2: body str,
+}
+
+schema HttpResponseInt {
+    0: req_id i64,
+    1: status i64,
+    2: body i64,
+}

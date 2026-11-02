@@ -613,6 +613,9 @@ fn emit_instruction<M: cranelift_module::Module>(
         Op::StructNew(_) | Op::StructGet(_, _) | Op::StructSet(_, _, _) => {
             return Err(CodegenError::Cranelift(format!("Unsupported struct opcode: {:?}", inst.op)));
         }
+        Op::Call(fn_name, _) => {
+            return Err(CodegenError::Cranelift(format!("Unsupported opcode: call {fn_name}")));
+        }
     }
 
     Ok(())

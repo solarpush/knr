@@ -40,6 +40,7 @@ pub const OP_BR_IF: u8 = 0x1F;
 pub const OP_STRUCT_NEW: u8 = 0x21;
 pub const OP_STRUCT_GET: u8 = 0x22;
 pub const OP_STRUCT_SET: u8 = 0x23;
+pub const OP_CALL: u8 = 0x1E;
 
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -57,6 +58,49 @@ impl ExtraArgsPool {
             .map_err(|_| BinaryError::RegisterOverflow(self.entries.len() as u32))?;
         self.entries.push([arg1, arg2]);
         Ok(idx)
+    }
+
+    pub fn insert_call_args(&mut self, args: &[RegId]) -> Result<u16, BinaryError> {
+        let argc = u16::try_from(args.len())
+            .map_err(|_| BinaryError::RegisterOverflow(args.len() as u32))?;
+        let head_idx = self.insert(argc, 0)?;
+        for chunk in args.chunks(2) {
+            let a1 = reg_to_u16(chunk[0])?;
+            let a2 = if chunk.len() > 1 {
+                reg_to_u16(chunk[1])?
+            } else {
+                NO_REG
+            };
+            self.insert(a1, a2)?;
+        }
+        Ok(head_idx)
+    }
+
+    pub fn get_call_args(&self, idx: u16) -> Result<Vec<RegId>, BinaryError> {
+        if idx == NO_REG {
+            return Ok(Vec::new());
+        }
+        let header = self.get(idx)?;
+        let argc = header[0] as usize;
+        let num_pairs = argc.div_ceil(2);
+        let mut args = Vec::with_capacity(argc);
+        for p in 0..num_pairs {
+            let pair_idx = (idx as usize) + 1 + p;
+            let pair = self
+                .entries
+                .get(pair_idx)
+                .copied()
+                .ok_or(BinaryError::PoolIndexOutOfBounds {
+                    pool: "ExtraArgsPool",
+                    index: pair_idx,
+                    size: self.entries.len(),
+                })?;
+            args.push(pair[0] as RegId);
+            if args.len() < argc {
+                args.push(pair[1] as RegId);
+            }
+        }
+        Ok(args)
     }
 
     pub fn get(&self, idx: u16) -> Result<[u16; 2], BinaryError> {
@@ -201,6 +245,15 @@ pub fn pack_instruction(
             let extra = extra_pool.insert(idx_u16, reg_to_u16(*v)?)?;
             (OP_STRUCT_SET, reg_to_u16(*s)?, extra)
         }
+        Op::Call(fn_name, args) => {
+            let fn_idx = const_pool.insert_str(fn_name)?;
+            let extra_idx = if args.is_empty() {
+                NO_REG
+            } else {
+                extra_pool.insert_call_args(args)?
+            };
+            (OP_CALL, fn_idx, extra_idx)
+        }
     };
 
     let mut word = [0u8; 8];
@@ -343,6 +396,18 @@ pub fn unpack_instruction(
         OP_STRUCT_SET => {
             let extra = extra_pool.get(src2)?;
             Op::StructSet(src1 as RegId, extra[0] as u32, extra[1] as RegId)
+        }
+        OP_CALL => {
+            let fn_name = const_pool
+                .strings
+                .get(src1 as usize)
+                .ok_or(BinaryError::PoolIndexOutOfBounds {
+                    pool: "str_pool",
+                    index: src1 as usize,
+                    size: const_pool.strings.len(),
+                })?;
+            let args = extra_pool.get_call_args(src2)?;
+            Op::Call(fn_name.clone(), args)
         }
         other => return Err(BinaryError::InvalidOpcode(other)),
     };

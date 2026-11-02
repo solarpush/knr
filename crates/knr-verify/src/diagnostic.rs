@@ -150,6 +150,18 @@ fn format_op(op: &Op) -> String {
         Op::StructNew(name) => format!("struct_new {name}"),
         Op::StructGet(s, idx) => format!("struct_get %{s} {idx}"),
         Op::StructSet(s, idx, val) => format!("struct_set %{s} {idx} %{val}"),
+        Op::Call(fn_name, args) => {
+            if args.is_empty() {
+                format!("call {fn_name}")
+            } else {
+                let args_str = args
+                    .iter()
+                    .map(|r| format!("%{r}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("call {fn_name} {args_str}")
+            }
+        }
     }
 }
 

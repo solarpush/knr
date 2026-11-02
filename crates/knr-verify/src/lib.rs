@@ -10,9 +10,26 @@ pub use diagnostic::Diagnostic;
 pub use effects::{verify_effects, verify_module_effects};
 pub use linear::verify_linear;
 pub use ssa::verify_ssa;
-pub use types::{verify_types, verify_types_with_schemas};
+pub use types::{verify_types, verify_types_with_env, verify_types_with_schemas};
 
 use knr_core::{Function, Module, Schema};
+
+/// Verifies a single function against all static analysis passes with module schemas and known functions:
+/// 1. Linear ownership state machine (`linear.rs`)
+/// 2. SSA structural validation and dominance (`ssa.rs`)
+/// 3. Static type checker for all opcodes (`types.rs`)
+/// 4. Effect capability isolation (`effects.rs`)
+pub fn verify_function_with_env(
+    func: &Function,
+    schemas: &[Schema],
+    functions: &[Function],
+) -> Result<(), Diagnostic> {
+    effects::verify_effects(func)?;
+    linear::verify_linear(func)?;
+    ssa::verify_ssa(func)?;
+    types::verify_types_with_env(func, schemas, functions)?;
+    Ok(())
+}
 
 /// Verifies a single function against all static analysis passes with module schemas:
 /// 1. Linear ownership state machine (`linear.rs`)
@@ -20,11 +37,7 @@ use knr_core::{Function, Module, Schema};
 /// 3. Static type checker for all opcodes (`types.rs`)
 /// 4. Effect capability isolation (`effects.rs`)
 pub fn verify_function_with_schemas(func: &Function, schemas: &[Schema]) -> Result<(), Diagnostic> {
-    effects::verify_effects(func)?;
-    linear::verify_linear(func)?;
-    ssa::verify_ssa(func)?;
-    types::verify_types_with_schemas(func, schemas)?;
-    Ok(())
+    verify_function_with_env(func, schemas, &[])
 }
 
 /// Verifies a single function against all static analysis passes:
@@ -43,7 +56,7 @@ pub fn verify_module(module: &Module) -> Result<(), Vec<Diagnostic>> {
         diagnostics.extend(schema_diags);
     }
     for func in &module.functions {
-        if let Err(diag) = verify_function_with_schemas(func, &module.schemas) {
+        if let Err(diag) = verify_function_with_env(func, &module.schemas, &module.functions) {
             diagnostics.push(diag);
         }
     }
