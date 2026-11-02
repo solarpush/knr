@@ -1,0 +1,9 @@
+// Error: %0 is freed twice (DoubleFree / UseAfterMove)
+fn bad_double_free() -> void {
+bb0:
+    %0 = buf_alloc %1
+    %1 = const_i64 32
+    free %0
+    free %0
+    ret
+}

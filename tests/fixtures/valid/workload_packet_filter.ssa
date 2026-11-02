@@ -1,0 +1,7 @@
+fn filter_packet(%0: i64, %1: i64) -> buf effects(Hw) {
+bb0:
+    %2 = buf_alloc %1
+    %3 = const_str "simd_xor"
+    %4 = syscall Hw %3 %2
+    ret %4
+}

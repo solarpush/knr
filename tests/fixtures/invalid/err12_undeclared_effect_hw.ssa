@@ -1,0 +1,7 @@
+// Error: Function calls Hw syscall without declaring effects(Hw)
+fn bad_effect_hw(%0: i64) -> buf {
+bb0:
+    %1 = const_str "mmio_map"
+    %2 = syscall Hw %1 %0
+    ret %2
+}

@@ -1,0 +1,6 @@
+// Error: %99 is not defined in scope (DominanceViolation)
+fn bad_free_undefined() -> void {
+bb0:
+    free %99
+    ret
+}

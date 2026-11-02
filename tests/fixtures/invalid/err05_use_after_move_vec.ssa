@@ -1,0 +1,11 @@
+// Error: %0 is moved by vec_push and then used in vec_get (UseAfterMove)
+fn bad_vec_move() -> i64 {
+bb0:
+    %0 = vec_new i64
+    %1 = const_i64 10
+    %2 = vec_push %0 %1
+    %3 = const_i64 0
+    %4 = vec_get %0 %3
+    free %2
+    ret %4
+}

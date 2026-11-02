@@ -1,0 +1,9 @@
+fn main() -> i64 {
+bb0:
+    %0 = const_i64 0
+    br bb1
+bb1:
+    %1 = const_i64 1
+    %2 = add %0 %1
+    br bb1
+}

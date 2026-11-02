@@ -1,0 +1,6 @@
+// Error: Function declared -> i64 but returns bool register %0 (TypeMismatch)
+fn bad_ret_type() -> i64 {
+bb0:
+    %0 = const_bool true
+    ret %0
+}

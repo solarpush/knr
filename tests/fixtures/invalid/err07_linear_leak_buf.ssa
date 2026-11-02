@@ -1,0 +1,8 @@
+// Error: %1 is a linear buffer still alive at return (LinearLeak)
+fn bad_buf_leak() -> i64 {
+bb0:
+    %0 = const_i64 64
+    %1 = buf_alloc %0
+    %2 = const_i64 0
+    ret %2
+}

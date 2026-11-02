@@ -1,0 +1,10 @@
+// Error: Condition register for br_if must be bool, got i64 (TypeMismatch)
+fn bad_cond_type() -> i64 {
+bb0:
+    %0 = const_i64 1
+    br_if %0 bb1 bb2
+bb1:
+    ret %0
+bb2:
+    ret %0
+}

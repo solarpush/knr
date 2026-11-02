@@ -1,0 +1,11 @@
+fn render_counter() -> map[str, str] effects(Ui) {
+bb0:
+    %0 = map_new str str
+    %1 = const_str "tag"
+    %2 = const_str "div"
+    %3 = map_set %0 %1 %2
+    %4 = const_str "text"
+    %5 = const_str "Counter: 42"
+    %6 = map_set %3 %4 %5
+    ret %6
+}

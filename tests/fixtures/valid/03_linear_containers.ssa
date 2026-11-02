@@ -1,0 +1,11 @@
+fn container_ops() -> i64 {
+bb0:
+    %0 = map_new str i64
+    %1 = const_str "key"
+    %2 = const_i64 100
+    %3 = map_set %0 %1 %2
+    %4 = const_str "key"
+    %5 = map_get %3 %4
+    free %3
+    ret %5
+}

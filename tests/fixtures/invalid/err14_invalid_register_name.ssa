@@ -1,0 +1,6 @@
+// Error: Invalid register identifier syntax
+fn bad_reg_name() -> i64 {
+bb0:
+    %foo = const_i64 123
+    ret %foo
+}

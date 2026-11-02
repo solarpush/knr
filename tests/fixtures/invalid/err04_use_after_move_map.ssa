@@ -1,0 +1,11 @@
+// Error: %0 is moved by map_set and then used in map_get (UseAfterMove)
+fn bad_map_move() -> i64 {
+bb0:
+    %0 = map_new str i64
+    %1 = const_str "k"
+    %2 = const_i64 42
+    %3 = map_set %0 %1 %2
+    %4 = map_get %0 %1
+    free %3
+    ret %4
+}

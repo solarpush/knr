@@ -1,0 +1,14 @@
+fn handle_request(%0: chan[map[str, buf]]) -> bool effects(Net, Async) {
+bb0:
+    %1 = chan_recv %0
+    %2 = const_str "path"
+    %3 = map_get %1 %2
+    %4 = const_i64 200
+    %5 = const_i64 12
+    %6 = buf_alloc %5
+    %7 = const_str "respond"
+    %8 = syscall Net %7 %6
+    free %1
+    %9 = const_bool true
+    ret %9
+}

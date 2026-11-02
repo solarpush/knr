@@ -1,0 +1,22 @@
+[package]
+name = "knr-cli"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "knr_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "knr"
+path = "src/main.rs"
+
+[dependencies]
+knr-core = { path = "../knr-core" }
+knr-verify = { path = "../knr-verify" }
+knr-interp = { path = "../knr-interp" }
+knr-runtime = { path = "../knr-runtime" }
+knr-codegen = { path = "../knr-codegen" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

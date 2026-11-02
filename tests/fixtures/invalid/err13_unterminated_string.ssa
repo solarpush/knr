@@ -1,0 +1,6 @@
+// Error: Unterminated string literal
+fn bad_syntax_string() -> str {
+bb0:
+    %0 = const_str "hello world unterminated
+    ret %0
+}

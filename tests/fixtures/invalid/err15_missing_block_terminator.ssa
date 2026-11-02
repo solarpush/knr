@@ -1,0 +1,5 @@
+// Error: Basic block does not end with a terminator (ret, br, br_if)
+fn bad_missing_term() -> i64 {
+bb0:
+    %0 = const_i64 100
+}

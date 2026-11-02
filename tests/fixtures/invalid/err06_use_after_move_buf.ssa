@@ -1,0 +1,12 @@
+// Error: %0 is moved by buf_write_u8 and then used in buf_read_u8 (UseAfterMove)
+fn bad_buf_move() -> i64 {
+bb0:
+    %0 = buf_alloc %1
+    %1 = const_i64 16
+    %2 = const_i64 0
+    %3 = const_i64 255
+    %4 = buf_write_u8 %0 %2 %3
+    %5 = buf_read_u8 %0 %2
+    free %4
+    ret %5
+}

@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/knr-core",
+    "crates/knr-verify",
+    "crates/knr-interp",
+    "crates/knr-runtime",
+    "crates/knr-codegen",
+    "crates/knr-cli",
+]
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+cranelift = "0.112"
+cranelift-module = "0.112"
+cranelift-object = "0.112"
+wasm-encoder = "0.217"
+tokio = { version = "1.40", features = ["full"] }
+proptest = "1.5"

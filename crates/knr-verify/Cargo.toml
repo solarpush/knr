@@ -1,0 +1,10 @@
+[package]
+name = "knr-verify"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+knr-core = { path = "../knr-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

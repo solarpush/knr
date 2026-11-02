@@ -1,0 +1,6 @@
+// Error: Target block bb99 does not exist in function
+fn bad_branch_target() -> i64 {
+bb0:
+    %0 = const_i64 1
+    br bb99
+}

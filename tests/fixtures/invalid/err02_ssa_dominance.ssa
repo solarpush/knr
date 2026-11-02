@@ -1,0 +1,8 @@
+// Error: Register %1 is used before it is defined (dominance violation)
+fn bad_dominance() -> i64 {
+bb0:
+    %0 = add %1 %2
+    %1 = const_i64 10
+    %2 = const_i64 20
+    ret %0
+}

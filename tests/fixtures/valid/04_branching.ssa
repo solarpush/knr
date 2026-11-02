@@ -1,0 +1,9 @@
+fn max_val(%0: i64, %1: i64) -> i64 {
+bb0:
+    %2 = cmp_lt %0 %1
+    br_if %2 bb1 bb2
+bb1:
+    ret %1
+bb2:
+    ret %0
+}

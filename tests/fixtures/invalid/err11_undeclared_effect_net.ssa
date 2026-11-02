@@ -1,0 +1,7 @@
+// Error: Function calls Net syscall without declaring effects(Net)
+fn bad_effect_net(%0: i64) -> bool {
+bb0:
+    %1 = const_str "listen"
+    %2 = syscall Net %1 %0
+    ret %2
+}

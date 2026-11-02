@@ -1,0 +1,10 @@
+// Error: map expects str key but provided i64 (TypeMismatch)
+fn bad_map_key_type() -> i64 {
+bb0:
+    %0 = map_new str i64
+    %1 = const_i64 999
+    %2 = const_i64 42
+    %3 = map_set %0 %1 %2
+    free %3
+    ret %2
+}

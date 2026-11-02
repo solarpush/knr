@@ -1,0 +1,26 @@
+[package]
+name = "knr-codegen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+knr-core = { path = "../knr-core" }
+knr-verify = { path = "../knr-verify" }
+knr-runtime = { path = "../knr-runtime" }
+cranelift = { workspace = true }
+cranelift-module = { workspace = true }
+cranelift-object = { workspace = true }
+cranelift-jit = "0.112"
+cranelift-native = "0.112"
+wasm-encoder = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+knr-interp = { path = "../knr-interp" }
+proptest = { workspace = true }
+
+[[test]]
+name = "proptest_vm_codegen"
+path = "../../tests/differential/proptest_vm_codegen.rs"

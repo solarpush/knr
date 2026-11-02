@@ -1,0 +1,5 @@
+fn main() -> i64 {
+bb0:
+    %0 = const_i64 42
+    ret %0
+}
