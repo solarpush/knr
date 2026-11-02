@@ -42,6 +42,7 @@ pub fn escape_html_attr(input: &str) -> String {
 pub const KNR_RUNTIME_BRIDGE_SCRIPT: &str = "<script data-knr-runtime=\"v1\">\
 (function(){\
 let w=window.__knr_wasm;\
+const B64='AGFzbQEAAAABBwFgAn5+AX4DAwIAAAUDAQABByYDBm1lbW9yeQIACmFwcGx5X3N0ZXAAAAxrbnJfZGlzcGF0Y2gAAQp4Ag4BAX4gACABfCECIAIPC2cCBn4Cf0EAIQkDQCAJQQBGBEBCACECIAEgAlEhCCAIBEBBASEJBUECIQkLDAELIAlBAUYEQCACDwsgCUECRgRAQgMhA0ICIQQgASAEfiEFIAMgBX0hBiAAIAYQACEHIAcPCwwACwAL';\
 async function getWasm(){\
 if(w)return w;\
 if(typeof location!=='undefined'&&location.protocol&&location.protocol.startsWith('http')){\
@@ -49,22 +50,23 @@ try{\
 const r=await fetch('site.wasm');\
 if(r.ok){\
 const b=await r.arrayBuffer();\
+const u=new Uint8Array(b);\
+if(u.length>4&&u[0]===0&&u[1]===97&&u[2]===115&&u[3]===109){\
 const m=await WebAssembly.instantiate(b,{});\
 w=window.__knr_wasm=m.instance.exports;\
 return w;\
 }\
+}\
 }catch(_){}\
 }\
-if(window.__knr_wasm_bytes){\
 try{\
-const bin=atob(window.__knr_wasm_bytes);\
+const bin=atob(window.__knr_wasm_bytes||B64);\
 const u=new Uint8Array(bin.length);\
 for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);\
 const m=await WebAssembly.instantiate(u.buffer,{});\
 w=window.__knr_wasm=m.instance.exports;\
 return w;\
 }catch(_){}\
-}\
 return null;\
 }\
 document.addEventListener('click',async function(e){\
@@ -74,18 +76,30 @@ const act=b.getAttribute('data-knr-action');\
 if(!act)return;\
 const tgt=b.getAttribute('data-knr-target')||'.counter-val';\
 const el=document.querySelector(tgt);\
-const st=document.querySelector('.counter-status');\
+const box=b.closest('.counter-box,.wasm-box')||b.parentElement||document;\
+const st=box.querySelector('.counter-status')||document.querySelector('.counter-status');\
 const cur=BigInt(parseInt((el?el.textContent:'0')||'0',10)||0);\
-if(typeof location!=='undefined'&&location.protocol&&location.protocol.startsWith('http')){\
+if(act.startsWith('/')&&typeof location!=='undefined'&&location.protocol&&location.protocol.startsWith('http')){\
 try{\
 const r=await fetch(act,{method:'POST'});\
 if(r.ok){\
 const t=(await r.text()).trim();\
+if(act.startsWith('/nav/')||/^-?\\d+$/.test(t)){\
 if(el)el.textContent=t;\
-if(st)st.textContent='Syscall Net + Ui SSR (site/server.ssa) -> reg %count muté en VM (count = '+t+')';\
+if(st)st.textContent=act.startsWith('/nav/')?('Routeur Multi-Pages SSR (site/server.ssa) -> route '+act):('Syscall Net + Ui SSR (site/server.ssa) -> reg muté en VM (val = '+t+')');\
 return;\
 }\
+}\
 }catch(_){}\
+}\
+if(act.startsWith('/nav/')){\
+const p=act.slice(5);\
+const all=['home','pillars','learn','isa','examples'];\
+const hide=p==='all'?[]:all.filter(x=>x!==p).map(x=>'.page-'+x);\
+const css=(hide.length?hide.join(',')+'{display:none!important}':'')+'.tab-'+p+'{background:#38bdf8!important;color:#050811!important;border-color:#38bdf8!important}';\
+if(el)el.textContent=css;\
+if(st)st.textContent='Routeur VDOM Client -> vue active : '+p;\
+return;\
 }\
 const op=act.endsWith('inc')?1n:(act.endsWith('dec')?2n:0n);\
 try{\

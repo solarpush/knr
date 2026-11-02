@@ -100,13 +100,15 @@ fn test_adv_site_site_ssa_diamond_dependency_resolution() {
     assert!(module.get_schema("Section").is_some());
     assert!(module.get_schema("Page").is_some());
 
-    // All 6 functions must be present exactly once
-    assert_eq!(module.functions.len(), 6, "Must have exactly 6 functions");
+    // All 8 functions must be present exactly once
+    assert_eq!(module.functions.len(), 8, "Must have exactly 8 functions");
     assert!(module.get_function("main").is_some());
     assert!(module.get_function("render_page").is_some());
     assert!(module.get_function("build_nav").is_some());
     assert!(module.get_function("build_hero").is_some());
     assert!(module.get_function("build_pillars").is_some());
+    assert!(module.get_function("build_learn").is_some());
+    assert!(module.get_function("build_opcodes").is_some());
     assert!(module.get_function("build_examples").is_some());
 
     // Verification must pass with 0 diagnostics
@@ -131,8 +133,8 @@ fn test_adv_site_server_ssa_diamond_and_schemas_resolution() {
     assert!(module.get_schema("Section").is_some());
     assert!(module.get_schema("Page").is_some());
 
-    // Functions: main + render_page + 4 components = 6 functions
-    assert_eq!(module.functions.len(), 6);
+    // Functions: main + render_page + 6 components = 8 functions
+    assert_eq!(module.functions.len(), 8);
     assert!(module.get_function("main").is_some());
     assert!(module.get_function("render_page").is_some());
 

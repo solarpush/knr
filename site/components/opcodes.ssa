@@ -1,0 +1,280 @@
+import "../schemas/vdom.ssa.schema"
+
+fn build_opcodes() -> struct[Section] {
+bb0:
+    // Header Card for Opcode Reference
+    %0 = struct_new Leaf
+    %1 = const_str "div"
+    %2 = struct_set %0 0 %1
+    %3 = const_str "card-tag"
+    %4 = struct_set %2 1 %3
+    %5 = const_str "SPÉCIFICATION ISA v1.0 — BIJECTION 1:1 TEXTE (.SSA) <-> BYTECODE 64-BIT (.KNRBIN)"
+    %6 = struct_set %4 2 %5
+
+    %7 = struct_new Leaf
+    %8 = const_str "h2"
+    %9 = struct_set %7 0 %8
+    %10 = const_str "sec-title"
+    %11 = struct_set %9 1 %10
+    %12 = const_str "Les 29 Opcodes Orthogonaux & 3 Terminateurs de Blocs"
+    %13 = struct_set %11 2 %12
+
+    %14 = struct_new Leaf
+    %15 = const_str "p"
+    %16 = struct_set %14 0 %15
+    %17 = const_str "sec-desc"
+    %18 = struct_set %16 1 %17
+    %19 = const_str "Chaque instruction knr est encodée dans un mot fixe de 64 bits [opcode:8 | type_tag:8 | dst:16 | src0:16 | src1:16]. Aucune ambiguïté syntaxique pour les LLM, décodage O(1) et vérification statique complète en 4 passes."
+    %20 = struct_set %18 2 %19
+
+    %21 = vec_new struct[Leaf]
+    %22 = vec_push %21 %6
+    %23 = vec_push %22 %13
+    %24 = vec_push %23 %20
+
+    %25 = struct_new Card
+    %26 = const_str "div"
+    %27 = struct_set %25 0 %26
+    %28 = const_str "sec-banner"
+    %29 = struct_set %27 1 %28
+    %30 = struct_set %29 3 %24
+
+    // Opcode Family 1: Constants (0x01..0x04)
+    %31 = struct_new Leaf
+    %32 = const_str "div"
+    %33 = struct_set %31 0 %32
+    %34 = const_str "card-tag"
+    %35 = struct_set %33 1 %34
+    %36 = const_str "FAMILLE 01 • OPCODES 0x01..0x04 (COPY)"
+    %37 = struct_set %35 2 %36
+
+    %38 = struct_new Leaf
+    %39 = const_str "h3"
+    %40 = struct_set %38 0 %39
+    %41 = const_str "card-title"
+    %42 = struct_set %40 1 %41
+    %43 = const_str "Constantes Typées & Pool"
+    %44 = struct_set %42 2 %43
+
+    %45 = struct_new Leaf
+    %46 = const_str "pre"
+    %47 = struct_set %45 0 %46
+    %48 = const_str "pre"
+    %49 = struct_set %47 1 %48
+    %50 = const_str "0x01 const_i64  %d = const_i64 42\n0x02 const_f64  %d = const_f64 3.5\n0x03 const_bool %d = const_bool true\n0x04 const_str  %d = const_str \"knr\""
+    %51 = struct_set %49 2 %50
+
+    %52 = vec_new struct[Leaf]
+    %53 = vec_push %52 %37
+    %54 = vec_push %53 %44
+    %55 = vec_push %54 %51
+
+    %56 = struct_new Card
+    %57 = const_str "article"
+    %58 = struct_set %56 0 %57
+    %59 = const_str "card"
+    %60 = struct_set %58 1 %59
+    %61 = struct_set %60 3 %55
+
+    // Opcode Family 2: Arithmetic & Bitwise (0x05..0x0E)
+    %62 = struct_new Leaf
+    %63 = const_str "div"
+    %64 = struct_set %62 0 %63
+    %65 = const_str "card-tag"
+    %66 = struct_set %64 1 %65
+    %67 = const_str "FAMILLE 02 • OPCODES 0x05..0x0E (ALU)"
+    %68 = struct_set %66 2 %67
+
+    %69 = struct_new Leaf
+    %70 = const_str "h3"
+    %71 = struct_set %69 0 %70
+    %72 = const_str "card-title"
+    %73 = struct_set %71 1 %72
+    %74 = const_str "Arithmétique & Bitwise"
+    %75 = struct_set %73 2 %74
+
+    %76 = struct_new Leaf
+    %77 = const_str "pre"
+    %78 = struct_set %76 0 %77
+    %79 = const_str "pre"
+    %80 = struct_set %78 1 %79
+    %81 = const_str "0x05 add     0x06 sub     0x07 mul\n0x08 div     0x09 rem     0x0A bit_and\n0x0B bit_or  0x0C bit_xor 0x0D shl\n0x0E shr     (i64 / f64 / bitwise)"
+    %82 = struct_set %80 2 %81
+
+    %83 = vec_new struct[Leaf]
+    %84 = vec_push %83 %68
+    %85 = vec_push %84 %75
+    %86 = vec_push %85 %82
+
+    %87 = struct_new Card
+    %88 = const_str "article"
+    %89 = struct_set %87 0 %88
+    %90 = const_str "card"
+    %91 = struct_set %89 1 %90
+    %92 = struct_set %91 3 %86
+
+    // Opcode Family 3: Comparisons & Terminators (0x0F..0x12)
+    %93 = struct_new Leaf
+    %94 = const_str "div"
+    %95 = struct_set %93 0 %94
+    %96 = const_str "card-tag"
+    %97 = struct_set %95 1 %96
+    %98 = const_str "FAMILLE 03 • OPCODES 0x0F..0x12 & CFG"
+    %99 = struct_set %97 2 %98
+
+    %100 = struct_new Leaf
+    %101 = const_str "h3"
+    %102 = struct_set %100 0 %101
+    %103 = const_str "card-title"
+    %104 = struct_set %102 1 %103
+    %105 = const_str "Comparaisons & Terminateurs"
+    %106 = struct_set %104 2 %105
+
+    %107 = struct_new Leaf
+    %108 = const_str "pre"
+    %109 = struct_set %107 0 %108
+    %110 = const_str "pre"
+    %111 = struct_set %109 1 %110
+    %112 = const_str "0x0F cmp_eq  0x10 cmp_ne\n0x11 cmp_lt  0x12 cmp_gt  (-> bool)\nCFG: br bbX | br_if %c bbT bbF | ret %v"
+    %113 = struct_set %111 2 %112
+
+    %114 = vec_new struct[Leaf]
+    %115 = vec_push %114 %99
+    %116 = vec_push %115 %106
+    %117 = vec_push %116 %113
+
+    %118 = struct_new Card
+    %119 = const_str "article"
+    %120 = struct_set %118 0 %119
+    %121 = const_str "card"
+    %122 = struct_set %120 1 %121
+    %123 = struct_set %122 3 %117
+
+    // Opcode Family 4: Linear Buffers (0x13..0x17)
+    %124 = struct_new Leaf
+    %125 = const_str "div"
+    %126 = struct_set %124 0 %125
+    %127 = const_str "card-tag"
+    %128 = struct_set %126 1 %127
+    %129 = const_str "FAMILLE 04 • OPCODES 0x13..0x17 (LINEAR BUF)"
+    %130 = struct_set %128 2 %129
+
+    %131 = struct_new Leaf
+    %132 = const_str "h3"
+    %133 = struct_set %131 0 %132
+    %134 = const_str "card-title"
+    %135 = struct_set %133 1 %134
+    %136 = const_str "Buffers Linéaires Alignés 64B"
+    %137 = struct_set %135 2 %136
+
+    %138 = struct_new Leaf
+    %139 = const_str "pre"
+    %140 = struct_set %138 0 %139
+    %141 = const_str "pre"
+    %142 = struct_set %140 1 %141
+    %143 = const_str "0x13 buf_alloc %sz   -> buf (Alive)\n0x14 buf_free  %b    -> consomme %b\n0x15 buf_read  %b %i -> i64 (Borrow)\n0x16 buf_write %b %i %v -> buf (Move)\n0x17 buf_slice %b %s %e -> buf (Move)"
+    %144 = struct_set %142 2 %143
+
+    %145 = vec_new struct[Leaf]
+    %146 = vec_push %145 %130
+    %147 = vec_push %146 %137
+    %148 = vec_push %147 %144
+
+    %149 = struct_new Card
+    %150 = const_str "article"
+    %151 = struct_set %149 0 %150
+    %152 = const_str "card"
+    %153 = struct_set %151 1 %152
+    %154 = struct_set %153 3 %148
+
+    // Opcode Family 5: Linear Vec & Map (0x18..0x1D)
+    %155 = struct_new Leaf
+    %156 = const_str "div"
+    %157 = struct_set %155 0 %156
+    %158 = const_str "card-tag"
+    %159 = struct_set %157 1 %158
+    %160 = const_str "FAMILLE 05 • OPCODES 0x18..0x1D (COLLECTIONS)"
+    %161 = struct_set %159 2 %160
+
+    %162 = struct_new Leaf
+    %163 = const_str "h3"
+    %164 = struct_set %162 0 %163
+    %165 = const_str "card-title"
+    %166 = struct_set %164 1 %165
+    %167 = const_str "Vecteurs & Maps In-Place"
+    %168 = struct_set %166 2 %167
+
+    %169 = struct_new Leaf
+    %170 = const_str "pre"
+    %171 = struct_set %169 0 %170
+    %172 = const_str "pre"
+    %173 = struct_set %171 1 %172
+    %174 = const_str "0x18 vec_new T       0x1B map_new K V\n0x19 vec_push %v %x  0x1C map_set %m %k %v\n0x1A vec_get  %v %i  0x1D map_get %m %k\n(Mutation linéaire sans allocation GC)"
+    %175 = struct_set %173 2 %174
+
+    %176 = vec_new struct[Leaf]
+    %177 = vec_push %176 %161
+    %178 = vec_push %177 %168
+    %179 = vec_push %178 %175
+
+    %180 = struct_new Card
+    %181 = const_str "article"
+    %182 = struct_set %180 0 %181
+    %183 = const_str "card"
+    %184 = struct_set %182 1 %183
+    %185 = struct_set %184 3 %179
+
+    // Opcode Family 6: Channels, Structs, Syscalls & Calls (0x1E..0x26)
+    %186 = struct_new Leaf
+    %187 = const_str "div"
+    %188 = struct_set %186 0 %187
+    %189 = const_str "card-tag"
+    %190 = struct_set %188 1 %189
+    %191 = const_str "FAMILLE 06 • SCHÉMAS, CANAUX, SYSCALL & CALL"
+    %192 = struct_set %190 2 %191
+
+    %193 = struct_new Leaf
+    %194 = const_str "h3"
+    %195 = struct_set %193 0 %194
+    %196 = const_str "card-title"
+    %197 = struct_set %195 1 %196
+    %198 = const_str "Structs, Async, Effets & Call"
+    %199 = struct_set %197 2 %198
+
+    %200 = struct_new Leaf
+    %201 = const_str "pre"
+    %202 = struct_set %200 0 %201
+    %203 = const_str "pre"
+    %204 = struct_set %202 1 %203
+    %205 = const_str "chan_new / chan_send / chan_recv\nstruct_new S / struct_get / struct_set\nsyscall Eff \"op\" %args... | free %r\ncall fn_name %arg0 %arg1 ... (0x1E)"
+    %206 = struct_set %204 2 %205
+
+    %207 = vec_new struct[Leaf]
+    %208 = vec_push %207 %192
+    %209 = vec_push %208 %199
+    %210 = vec_push %209 %206
+
+    %211 = struct_new Card
+    %212 = const_str "article"
+    %213 = struct_set %211 0 %212
+    %214 = const_str "card"
+    %215 = struct_set %213 1 %214
+    %216 = struct_set %215 3 %210
+
+    %217 = vec_new struct[Card]
+    %218 = vec_push %217 %30
+    %219 = vec_push %218 %61
+    %220 = vec_push %219 %92
+    %221 = vec_push %220 %123
+    %222 = vec_push %221 %154
+    %223 = vec_push %222 %185
+    %224 = vec_push %223 %216
+
+    %225 = struct_new Section
+    %226 = const_str "section"
+    %227 = struct_set %225 0 %226
+    %228 = const_str "grid page-isa"
+    %229 = struct_set %227 1 %228
+    %230 = struct_set %229 3 %224
+    ret %230
+}

@@ -2,6 +2,8 @@ import "../schemas/vdom.ssa.schema"
 import "./nav.ssa"
 import "./hero.ssa"
 import "./pillars.ssa"
+import "./learn.ssa"
+import "./opcodes.ssa"
 import "./examples.ssa"
 
 fn render_page(%0: str, %1: str, %2: str) -> str effects(Ui) {
@@ -14,24 +16,28 @@ bb0:
     %8 = struct_set %6 0 %7
     %9 = struct_set %8 3 %5
 
-    %10 = const_str "État réactif linear SSA"
+    %10 = const_str "État réactif linear SSA • Pont hybride HTTP SSR (site/server.ssa) + Client WASM (site/site.wasm)"
     %11 = call build_hero %1 %10
     %12 = call build_pillars
-    %13 = call build_examples %2
+    %13 = call build_learn
+    %14 = call build_opcodes
+    %15 = call build_examples %2
 
-    %14 = vec_new struct[Section]
-    %15 = vec_push %14 %9
-    %16 = vec_push %15 %11
-    %17 = vec_push %16 %12
-    %18 = vec_push %17 %13
+    %16 = vec_new struct[Section]
+    %17 = vec_push %16 %9
+    %18 = vec_push %17 %11
+    %19 = vec_push %18 %12
+    %20 = vec_push %19 %13
+    %21 = vec_push %20 %14
+    %22 = vec_push %21 %15
 
-    %19 = struct_new Page
-    %20 = const_str "main"
-    %21 = struct_set %19 0 %20
-    %22 = const_str "page"
-    %23 = struct_set %21 1 %22
-    %24 = struct_set %23 3 %18
+    %23 = struct_new Page
+    %24 = const_str "main"
+    %25 = struct_set %23 0 %24
+    %26 = const_str "page"
+    %27 = struct_set %25 1 %26
+    %28 = struct_set %27 3 %22
 
-    %25 = syscall Ui "ui.render" %24
-    ret %25
+    %29 = syscall Ui "ui.render" %28
+    ret %29
 }

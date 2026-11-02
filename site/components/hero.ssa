@@ -3,122 +3,248 @@ import "../schemas/vdom.ssa.schema"
 fn build_hero(%0: str, %1: str) -> struct[Section] {
 bb0:
     %2 = struct_new Leaf
-    %3 = const_str "h1"
+    %3 = const_str "span"
     %4 = struct_set %2 0 %3
-    %5 = const_str "hero-title"
+    %5 = const_str "hero-kicker"
     %6 = struct_set %4 1 %5
-    %7 = const_str "Le langage SSA à mémoire linéaire pensé pour les Agents IA et le bas niveau."
+    %7 = const_str "ARCHITECTURE SSA AI-FIRST • MÉMOIRE LINÉAIRE • ZÉRO GARBAGE COLLECTOR • RUNTIME WASM & SSR"
     %8 = struct_set %6 2 %7
 
     %9 = struct_new Leaf
-    %10 = const_str "p"
+    %10 = const_str "h1"
     %11 = struct_set %9 0 %10
-    %12 = const_str "hero-sub"
+    %12 = const_str "hero-title"
     %13 = struct_set %11 1 %12
-    %14 = const_str "Zéro Garbage Collector. Zéro emprunt complexe. Mutation sur place garantie par machine à états linéaire en moins de 100 µs, compilé vers Cranelift (Natif ELF) et WebAssembly."
+    %14 = const_str "Le langage SSA à mémoire linéaire pensé pour les Agents IA et le bas niveau."
     %15 = struct_set %13 2 %14
 
     %16 = struct_new Leaf
-    %17 = const_str "div"
+    %17 = const_str "p"
     %18 = struct_set %16 0 %17
-    %19 = const_str "pill"
+    %19 = const_str "hero-sub"
     %20 = struct_set %18 1 %19
-    %21 = const_str "$ knr run site/server.ssa   |   $ knr check site/site.ssa --json   |   $ knr asm site/site.ssa -o site/site.knrbin"
+    %21 = const_str "Zéro Garbage Collector. Zéro emprunt complexe. Mutation sur place garantie par machine à états linéaire en moins de 100 µs, compilé vers Cranelift (Natif ELF) et WebAssembly, avec cartographie AST instantanée (knr explore) et Skill IA embarqué (knr skill)."
     %22 = struct_set %20 2 %21
 
-    %23 = vec_new struct[Leaf]
-    %24 = vec_push %23 %8
-    %25 = vec_push %24 %15
-    %26 = vec_push %25 %22
+    %23 = struct_new Leaf
+    %24 = const_str "div"
+    %25 = struct_set %23 0 %24
+    %26 = const_str "pill"
+    %27 = struct_set %25 1 %26
+    %28 = const_str "$ knr skill install   |   $ knr explore site/   |   $ knr check site/site.ssa --graph   |   $ knr build site/client_state.ssa --target wasm -o site/site.wasm"
+    %29 = struct_set %27 2 %28
 
-    %27 = struct_new Card
-    %28 = const_str "div"
-    %29 = struct_set %27 0 %28
-    %30 = const_str "hero"
-    %31 = struct_set %29 1 %30
-    %32 = struct_set %31 3 %26
+    %30 = struct_new Leaf
+    %31 = const_str "div"
+    %32 = struct_set %30 0 %31
+    %33 = const_str "pill"
+    %34 = struct_set %32 1 %33
+    %35 = const_str "$ knr run site/server.ssa   |   $ knr check site/site.ssa --json   |   $ knr asm site/site.ssa -o site/site.knrbin"
+    %36 = struct_set %34 2 %35
 
-    // Counter Box Card
-    %33 = struct_new Leaf
-    %34 = const_str "div"
-    %35 = struct_set %33 0 %34
-    %36 = const_str "card-tag"
-    %37 = struct_set %35 1 %36
-    %38 = const_str "DÉMO INTERACTIVE — COMPTEUR LINÉAIRE (SITE/SERVER.SSA)"
-    %39 = struct_set %37 2 %38
+    %37 = vec_new struct[Leaf]
+    %38 = vec_push %37 %8
+    %39 = vec_push %38 %15
+    %40 = vec_push %39 %22
+    %41 = vec_push %40 %29
+    %42 = vec_push %41 %36
 
-    %40 = struct_new Leaf
-    %41 = const_str "span"
-    %42 = struct_set %40 0 %41
-    %43 = const_str "counter-val"
-    %44 = struct_set %42 1 %43
-    %45 = struct_set %44 2 %0
+    %43 = struct_new Card
+    %44 = const_str "div"
+    %45 = struct_set %43 0 %44
+    %46 = const_str "hero"
+    %47 = struct_set %45 1 %46
+    %48 = struct_set %47 3 %42
 
-    %46 = struct_new Leaf
-    %47 = const_str "button"
-    %48 = struct_set %46 0 %47
-    %49 = const_str "btn btn-sec act-dec"
-    %50 = struct_set %48 1 %49
-    %51 = const_str "-1"
-    %52 = struct_set %50 2 %51
-    %53 = const_str "/api/dec"
-    %54 = struct_set %52 3 %53
-    %55 = const_str ".counter-val"
-    %56 = struct_set %54 4 %55
+    // Interactive Demo 1: Counter Box Card (Canal #1 SSR + WASM fallback)
+    %49 = struct_new Leaf
+    %50 = const_str "div"
+    %51 = struct_set %49 0 %50
+    %52 = const_str "card-tag"
+    %53 = struct_set %51 1 %52
+    %54 = const_str "DÉMO INTERACTIVE — COMPTEUR LINÉAIRE (SITE/SERVER.SSA) & WASM REDUCER (SITE/SITE.WASM)"
+    %55 = struct_set %53 2 %54
 
-    %57 = struct_new Leaf
-    %58 = const_str "button"
-    %59 = struct_set %57 0 %58
-    %60 = const_str "btn act-inc"
-    %61 = struct_set %59 1 %60
-    %62 = const_str "+1 (add %cur 1)"
-    %63 = struct_set %61 2 %62
-    %64 = const_str "/api/inc"
-    %65 = struct_set %63 3 %64
-    %66 = const_str ".counter-val"
-    %67 = struct_set %65 4 %66
+    %56 = struct_new Leaf
+    %57 = const_str "span"
+    %58 = struct_set %56 0 %57
+    %59 = const_str "counter-val"
+    %60 = struct_set %58 1 %59
+    %61 = struct_set %60 2 %0
 
-    %68 = struct_new Leaf
-    %69 = const_str "button"
-    %70 = struct_set %68 0 %69
-    %71 = const_str "btn btn-sec act-reset"
-    %72 = struct_set %70 1 %71
-    %73 = const_str "Reset"
-    %74 = struct_set %72 2 %73
-    %75 = const_str "/api/reset"
-    %76 = struct_set %74 3 %75
-    %77 = const_str ".counter-val"
-    %78 = struct_set %76 4 %77
+    %62 = struct_new Leaf
+    %63 = const_str "button"
+    %64 = struct_set %62 0 %63
+    %65 = const_str "btn btn-sec act-dec"
+    %66 = struct_set %64 1 %65
+    %67 = const_str "-1 (sub %cur 1)"
+    %68 = struct_set %66 2 %67
+    %69 = const_str "/api/dec"
+    %70 = struct_set %68 3 %69
+    %71 = const_str ".counter-val"
+    %72 = struct_set %70 4 %71
 
-    %79 = struct_new Leaf
-    %80 = const_str "div"
-    %81 = struct_set %79 0 %80
-    %82 = const_str "counter-status"
-    %83 = struct_set %81 1 %82
-    %84 = struct_set %83 2 %1
+    %73 = struct_new Leaf
+    %74 = const_str "button"
+    %75 = struct_set %73 0 %74
+    %76 = const_str "btn act-inc"
+    %77 = struct_set %75 1 %76
+    %78 = const_str "+1 (add %cur 1)"
+    %79 = struct_set %77 2 %78
+    %80 = const_str "/api/inc"
+    %81 = struct_set %79 3 %80
+    %82 = const_str ".counter-val"
+    %83 = struct_set %81 4 %82
 
-    %85 = vec_new struct[Leaf]
-    %86 = vec_push %85 %39
-    %87 = vec_push %86 %45
-    %88 = vec_push %87 %56
-    %89 = vec_push %88 %67
-    %90 = vec_push %89 %78
-    %91 = vec_push %90 %84
+    %84 = struct_new Leaf
+    %85 = const_str "button"
+    %86 = struct_set %84 0 %85
+    %87 = const_str "btn btn-sec act-reset"
+    %88 = struct_set %86 1 %87
+    %89 = const_str "Reset (0)"
+    %90 = struct_set %88 2 %89
+    %91 = const_str "/api/reset"
+    %92 = struct_set %90 3 %91
+    %93 = const_str ".counter-val"
+    %94 = struct_set %92 4 %93
 
-    %92 = struct_new Card
-    %93 = const_str "div"
-    %94 = struct_set %92 0 %93
-    %95 = const_str "counter-box"
-    %96 = struct_set %94 1 %95
-    %97 = struct_set %96 3 %91
+    %95 = struct_new Leaf
+    %96 = const_str "div"
+    %97 = struct_set %95 0 %96
+    %98 = const_str "demo-sub"
+    %99 = struct_set %97 1 %98
+    %100 = const_str "Canal linéaire #1 (%3 dans site/server.ssa) • Cible : data-knr-target=\".counter-val\" • Routes : /api/inc | /api/dec | /api/reset"
+    %101 = struct_set %99 2 %100
 
-    %98 = vec_new struct[Card]
-    %99 = vec_push %98 %32
-    %100 = vec_push %99 %97
+    %102 = vec_new struct[Leaf]
+    %103 = vec_push %102 %55
+    %104 = vec_push %103 %61
+    %105 = vec_push %104 %72
+    %106 = vec_push %105 %83
+    %107 = vec_push %106 %94
+    %108 = vec_push %107 %101
 
-    %101 = struct_new Section
-    %102 = const_str "section"
-    %103 = struct_set %101 0 %102
-    %104 = struct_set %103 3 %100
-    ret %104
+    %109 = struct_new Card
+    %110 = const_str "div"
+    %111 = struct_set %109 0 %110
+    %112 = const_str "counter-box"
+    %113 = struct_set %111 1 %112
+    %114 = struct_set %113 3 %108
+
+    // Interactive Demo 2: Second Independent Channel & WASM Register (.wasm-reg-val)
+    %115 = struct_new Leaf
+    %116 = const_str "div"
+    %117 = struct_set %115 0 %116
+    %118 = const_str "card-tag"
+    %119 = struct_set %117 1 %118
+    %120 = const_str "DÉMO INTERACTIVE 2 — SECOND REGISTRE WEBASSEMBLY INDÉPENDANT (%ACC_WASM -> SITE/CLIENT_STATE.SSA)"
+    %121 = struct_set %119 2 %120
+
+    %122 = struct_new Leaf
+    %123 = const_str "span"
+    %124 = struct_set %122 0 %123
+    %125 = const_str "wasm-reg-val"
+    %126 = struct_set %124 1 %125
+    %127 = const_str "42"
+    %128 = struct_set %126 2 %127
+
+    %129 = struct_new Leaf
+    %130 = const_str "button"
+    %131 = struct_set %129 0 %130
+    %132 = const_str "btn btn-sec"
+    %133 = struct_set %131 1 %132
+    %134 = const_str "-1 (knr_dispatch %acc 2)"
+    %135 = struct_set %133 2 %134
+    %136 = const_str "/api/wasm/dec"
+    %137 = struct_set %135 3 %136
+    %138 = const_str ".wasm-reg-val"
+    %139 = struct_set %137 4 %138
+
+    %140 = struct_new Leaf
+    %141 = const_str "button"
+    %142 = struct_set %140 0 %141
+    %143 = const_str "btn-emerald"
+    %144 = struct_set %142 1 %143
+    %145 = const_str "+1 (call apply_step %acc 1)"
+    %146 = struct_set %144 2 %145
+    %147 = const_str "/api/wasm/inc"
+    %148 = struct_set %146 3 %147
+    %149 = const_str ".wasm-reg-val"
+    %150 = struct_set %148 4 %149
+
+    %151 = struct_new Leaf
+    %152 = const_str "button"
+    %153 = struct_set %151 0 %152
+    %154 = const_str "btn btn-sec"
+    %155 = struct_set %153 1 %154
+    %156 = const_str "Reset (%acc = 0)"
+    %157 = struct_set %155 2 %156
+    %158 = const_str "/api/wasm/reset"
+    %159 = struct_set %157 3 %158
+    %160 = const_str ".wasm-reg-val"
+    %161 = struct_set %159 4 %160
+
+    %162 = struct_new Leaf
+    %163 = const_str "div"
+    %164 = struct_set %162 0 %163
+    %165 = const_str "demo-sub"
+    %166 = struct_set %164 1 %165
+    %167 = const_str "Canal linéaire #2 (%6 dans site/server.ssa) & WASM (site.wasm) • Cible : data-knr-target=\".wasm-reg-val\" • Routes : /api/wasm/inc | /api/wasm/dec | /api/wasm/reset"
+    %168 = struct_set %166 2 %167
+
+    %169 = vec_new struct[Leaf]
+    %170 = vec_push %169 %121
+    %171 = vec_push %170 %128
+    %172 = vec_push %171 %139
+    %173 = vec_push %172 %150
+    %174 = vec_push %173 %161
+    %175 = vec_push %174 %168
+
+    %176 = struct_new Card
+    %177 = const_str "div"
+    %178 = struct_set %176 0 %177
+    %179 = const_str "wasm-box"
+    %180 = struct_set %178 1 %179
+    %181 = struct_set %180 3 %175
+
+    // Dedicated Live Telemetry Console (.telemetry-box) holding the single .counter-status
+    %182 = struct_new Leaf
+    %183 = const_str "div"
+    %184 = struct_set %182 0 %183
+    %185 = const_str "card-tag"
+    %186 = struct_set %184 1 %185
+    %187 = const_str "CONSOLE DE TÉLÉMÉTRIE LIVE DU PONT RUNTIME (SYSCALL NET SSR / ROUTEUR MULTI-PAGES / WEBASSEMBLY)"
+    %188 = struct_set %186 2 %187
+
+    %189 = struct_new Leaf
+    %190 = const_str "div"
+    %191 = struct_set %189 0 %190
+    %192 = const_str "counter-status"
+    %193 = struct_set %191 1 %192
+    %194 = struct_set %193 2 %1
+
+    %195 = vec_new struct[Leaf]
+    %196 = vec_push %195 %188
+    %197 = vec_push %196 %194
+
+    %198 = struct_new Card
+    %199 = const_str "div"
+    %200 = struct_set %198 0 %199
+    %201 = const_str "telemetry-box"
+    %202 = struct_set %200 1 %201
+    %203 = struct_set %202 3 %197
+
+    %204 = vec_new struct[Card]
+    %205 = vec_push %204 %48
+    %206 = vec_push %205 %114
+    %207 = vec_push %206 %181
+    %208 = vec_push %207 %203
+
+    %209 = struct_new Section
+    %210 = const_str "section"
+    %211 = struct_set %209 0 %210
+    %212 = const_str "page-home"
+    %213 = struct_set %211 1 %212
+    %214 = struct_set %213 3 %208
+    ret %214
 }

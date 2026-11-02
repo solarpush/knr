@@ -2,90 +2,418 @@ import "../schemas/vdom.ssa.schema"
 
 fn build_examples(%0: str) -> struct[Section] {
 bb0:
-    // Example 1: Structs
+    // Section Banner for Examples
     %1 = struct_new Leaf
     %2 = const_str "div"
     %3 = struct_set %1 0 %2
     %4 = const_str "card-tag"
     %5 = struct_set %3 1 %4
-    %6 = const_str "EXEMPLE 1 — SCHÉMAS STRICTS & TYPES LINÉAIRES"
+    %6 = const_str "GALERIE EXHAUSTIVE D'EXEMPLES KNR — DU BAS NIVEAU MATÉRIEL AU SERVEUR SSR & WEBASSEMBLY"
     %7 = struct_set %5 2 %6
 
     %8 = struct_new Leaf
-    %9 = const_str "pre"
+    %9 = const_str "h2"
     %10 = struct_set %8 0 %9
-    %11 = const_str "pre"
+    %11 = const_str "sec-title"
     %12 = struct_set %10 1 %11
-    %13 = const_str "schema User {\n    0: id i64,\n    1: email str,\n    2: active bool,\n}\n\nfn make_user(%0: i64, %1: str) -> struct[User] {\nbb0:\n    %2 = struct_new User\n    %3 = struct_set %2 0 %0\n    %4 = struct_set %3 1 %1\n    %5 = const_bool true\n    %6 = struct_set %4 2 %5\n    ret %6\n}"
+    %13 = const_str "12 Exemples Concrets de Code SSA Linéaire (v0.0.2)"
     %14 = struct_set %12 2 %13
 
-    %15 = vec_new struct[Leaf]
-    %16 = vec_push %15 %7
-    %17 = vec_push %16 %14
+    %15 = struct_new Leaf
+    %16 = const_str "p"
+    %17 = struct_set %15 0 %16
+    %18 = const_str "sec-desc"
+    %19 = struct_set %17 1 %18
+    %20 = const_str "Tous ces exemples suivent la grammaire stricte de knr : assignation unique monotone (%0, %1, %2...), propriété linéaire vérifiée sans GC, séparation .ssa.schema / .ssa et isolation explicite des effets."
+    %21 = struct_set %19 2 %20
 
-    %18 = struct_new Card
-    %19 = const_str "div"
-    %20 = struct_set %18 0 %19
-    %21 = const_str "code-card"
-    %22 = struct_set %20 1 %21
-    %23 = struct_set %22 3 %17
+    %22 = vec_new struct[Leaf]
+    %23 = vec_push %22 %7
+    %24 = vec_push %23 %14
+    %25 = vec_push %24 %21
 
-    // Example 2: HTTP Loop
-    %24 = struct_new Leaf
-    %25 = const_str "div"
-    %26 = struct_set %24 0 %25
-    %27 = const_str "card-tag"
-    %28 = struct_set %26 1 %27
-    %29 = const_str "EXEMPLE 2 — BOUCLE HTTP SSR EN KNR (SITE/SERVER.SSA)"
-    %30 = struct_set %28 2 %29
+    %26 = struct_new Card
+    %27 = const_str "div"
+    %28 = struct_set %26 0 %27
+    %29 = const_str "sec-banner"
+    %30 = struct_set %28 1 %29
+    %31 = struct_set %30 3 %25
 
-    %31 = struct_new Leaf
-    %32 = const_str "pre"
-    %33 = struct_set %31 0 %32
-    %34 = const_str "pre"
-    %35 = struct_set %33 1 %34
-    %36 = const_str "bb1:\n    %10 = syscall Net \"net.wait_req\" %1\n    %11 = struct_get %10 0\n    %12 = struct_get %10 2\n    free %10\n    %13 = chan_recv %3\n    %14 = cmp_eq %12 %7\n    br_if %14 bb2 bb3"
-    %37 = struct_set %35 2 %36
+    // Example 1: Structs & Schemas
+    %32 = struct_new Leaf
+    %33 = const_str "div"
+    %34 = struct_set %32 0 %33
+    %35 = const_str "card-tag"
+    %36 = struct_set %34 1 %35
+    %37 = const_str "EXEMPLE 1 — SCHÉMAS STRICTS & TYPES LINÉAIRES"
+    %38 = struct_set %36 2 %37
 
-    %38 = vec_new struct[Leaf]
-    %39 = vec_push %38 %30
-    %40 = vec_push %39 %37
+    %39 = struct_new Leaf
+    %40 = const_str "pre"
+    %41 = struct_set %39 0 %40
+    %42 = const_str "pre"
+    %43 = struct_set %41 1 %42
+    %44 = const_str "schema User {\n    0: id i64,\n    1: email str,\n    2: active bool,\n}\n\nfn make_user(%0: i64, %1: str) -> struct[User] {\nbb0:\n    %2 = struct_new User\n    %3 = struct_set %2 0 %0\n    %4 = struct_set %3 1 %1\n    %5 = const_bool true\n    %6 = struct_set %4 2 %5\n    ret %6\n}"
+    %45 = struct_set %43 2 %44
 
-    %41 = struct_new Card
-    %42 = const_str "div"
-    %43 = struct_set %41 0 %42
-    %44 = const_str "code-card"
-    %45 = struct_set %43 1 %44
-    %46 = struct_set %45 3 %40
+    %46 = vec_new struct[Leaf]
+    %47 = vec_push %46 %38
+    %48 = vec_push %47 %45
+
+    %49 = struct_new Card
+    %50 = const_str "div"
+    %51 = struct_set %49 0 %50
+    %52 = const_str "code-card"
+    %53 = struct_set %51 1 %52
+    %54 = struct_set %53 3 %48
+
+    // Example 2: HTTP Loop SSR
+    %55 = struct_new Leaf
+    %56 = const_str "div"
+    %57 = struct_set %55 0 %56
+    %58 = const_str "card-tag"
+    %59 = struct_set %57 1 %58
+    %60 = const_str "EXEMPLE 2 — BOUCLE HTTP SSR EN KNR (SITE/SERVER.SSA)"
+    %61 = struct_set %59 2 %60
+
+    %62 = struct_new Leaf
+    %63 = const_str "pre"
+    %64 = struct_set %62 0 %63
+    %65 = const_str "pre"
+    %66 = struct_set %64 1 %65
+    %67 = const_str "bb1:\n    %10 = syscall Net \"net.wait_req\" %1\n    %11 = struct_get %10 0\n    %12 = struct_get %10 2\n    free %10\n    %13 = chan_recv %3\n    %14 = cmp_eq %12 %7\n    br_if %14 bb2 bb3"
+    %68 = struct_set %66 2 %67
+
+    %69 = vec_new struct[Leaf]
+    %70 = vec_push %69 %61
+    %71 = vec_push %70 %68
+
+    %72 = struct_new Card
+    %73 = const_str "div"
+    %74 = struct_set %72 0 %73
+    %75 = const_str "code-card"
+    %76 = struct_set %74 1 %75
+    %77 = struct_set %76 3 %71
+
+    // Example 3: Client WebAssembly State Reducer
+    %78 = struct_new Leaf
+    %79 = const_str "div"
+    %80 = struct_set %78 0 %79
+    %81 = const_str "card-tag"
+    %82 = struct_set %80 1 %81
+    %83 = const_str "EXEMPLE 3 — RÉDUCTEUR CLIENT WEBASSEMBLY (SITE/CLIENT_STATE.SSA -> SITE.WASM)"
+    %84 = struct_set %82 2 %83
+
+    %85 = struct_new Leaf
+    %86 = const_str "pre"
+    %87 = struct_set %85 0 %86
+    %88 = const_str "pre"
+    %89 = struct_set %87 1 %88
+    %90 = const_str "fn apply_step(%0: i64, %1: i64) -> i64 {\nbb0:\n    %2 = add %0 %1\n    ret %2\n}\n\nfn knr_dispatch(%0: i64, %1: i64) -> i64 {\nbb0:\n    %2 = const_i64 0\n    %3 = cmp_eq %1 %2\n    br_if %3 bb1 bb2\nbb1:\n    ret %2\nbb2:\n    %4 = const_i64 3\n    %5 = const_i64 2\n    %6 = mul %1 %5\n    %7 = sub %4 %6\n    %8 = call apply_step %0 %7\n    ret %8\n}"
+    %91 = struct_set %89 2 %90
+
+    %92 = vec_new struct[Leaf]
+    %93 = vec_push %92 %84
+    %94 = vec_push %93 %91
+
+    %95 = struct_new Card
+    %96 = const_str "div"
+    %97 = struct_set %95 0 %96
+    %98 = const_str "code-card"
+    %99 = struct_set %97 1 %98
+    %100 = struct_set %99 3 %94
+
+    // Example 4: Declarative Zero-JS UI Button
+    %101 = struct_new Leaf
+    %102 = const_str "div"
+    %103 = struct_set %101 0 %102
+    %104 = const_str "card-tag"
+    %105 = struct_set %103 1 %104
+    %106 = const_str "EXEMPLE 4 — BOUTON VDOM DÉCLARATIF ZÉRO-JS (SITE/COMPONENTS/HERO.SSA)"
+    %107 = struct_set %105 2 %106
+
+    %108 = struct_new Leaf
+    %109 = const_str "pre"
+    %110 = struct_set %108 0 %109
+    %111 = const_str "pre"
+    %112 = struct_set %110 1 %111
+    %113 = const_str "// schema Leaf { 0: tag, 1: class, 2: text, 3: action, 4: target }\n%73 = struct_new Leaf\n%74 = const_str \"button\"\n%75 = struct_set %73 0 %74\n%76 = const_str \"btn act-inc\"\n%77 = struct_set %75 1 %76\n%78 = const_str \"+1 (add %cur 1)\"\n%79 = struct_set %77 2 %78\n%80 = const_str \"/api/inc\"      // -> data-knr-action\n%81 = struct_set %79 3 %80\n%82 = const_str \".counter-val\"  // -> data-knr-target\n%83 = struct_set %81 4 %82"
+    %114 = struct_set %112 2 %113
+
+    %115 = vec_new struct[Leaf]
+    %116 = vec_push %115 %107
+    %117 = vec_push %116 %114
+
+    %118 = struct_new Card
+    %119 = const_str "div"
+    %120 = struct_set %118 0 %119
+    %121 = const_str "code-card"
+    %122 = struct_set %120 1 %121
+    %123 = struct_set %122 3 %117
+
+    // Example 5: Multi-file Diamond Imports & Function Calls
+    %124 = struct_new Leaf
+    %125 = const_str "div"
+    %126 = struct_set %124 0 %125
+    %127 = const_str "card-tag"
+    %128 = struct_set %126 1 %127
+    %129 = const_str "EXEMPLE 5 — ORCHESTRATION MULTI-FICHIERS & APPELS CALL (SITE/COMPONENTS/PAGE.SSA)"
+    %130 = struct_set %128 2 %129
+
+    %131 = struct_new Leaf
+    %132 = const_str "pre"
+    %133 = struct_set %131 0 %132
+    %134 = const_str "pre"
+    %135 = struct_set %133 1 %134
+    %136 = const_str "import \"../schemas/vdom.ssa.schema\"\nimport \"./nav.ssa\"\nimport \"./hero.ssa\"\nimport \"./pillars.ssa\"\nimport \"./opcodes.ssa\"\nimport \"./examples.ssa\"\n\nfn render_page(%0: str, %1: str, %2: str) -> str effects(Ui) {\nbb0:\n    %3 = call build_nav %0\n    %11 = call build_hero %1 %10\n    %12 = call build_pillars\n    %13 = call build_opcodes\n    %14 = call build_examples %2\n    ...\n    %27 = syscall Ui \"ui.render\" %26\n    ret %27\n}"
+    %137 = struct_set %135 2 %136
+
+    %138 = vec_new struct[Leaf]
+    %139 = vec_push %138 %130
+    %140 = vec_push %139 %137
+
+    %141 = struct_new Card
+    %142 = const_str "div"
+    %143 = struct_set %141 0 %142
+    %144 = const_str "code-card"
+    %145 = struct_set %143 1 %144
+    %146 = struct_set %145 3 %140
+
+    // Example 6: Recursive / Branching Fibonacci in SSA
+    %147 = struct_new Leaf
+    %148 = const_str "div"
+    %149 = struct_set %147 0 %148
+    %150 = const_str "card-tag"
+    %151 = struct_set %149 1 %150
+    %152 = const_str "EXEMPLE 6 — RÉCURSION & BRANCHEMENT CFG EN SSA (FIBONACCI NATIF & WASM)"
+    %153 = struct_set %151 2 %152
+
+    %154 = struct_new Leaf
+    %155 = const_str "pre"
+    %156 = struct_set %154 0 %155
+    %157 = const_str "pre"
+    %158 = struct_set %156 1 %157
+    %159 = const_str "fn fib(%0: i64) -> i64 {\nbb0:\n    %1 = const_i64 2\n    %2 = cmp_lt %0 %1\n    br_if %2 bb1 bb2\nbb1:\n    ret %0\nbb2:\n    %3 = const_i64 1\n    %4 = sub %0 %3\n    %5 = call fib %4\n    %6 = sub %0 %1\n    %7 = call fib %6\n    %8 = add %5 %7\n    ret %8\n}"
+    %160 = struct_set %158 2 %159
+
+    %161 = vec_new struct[Leaf]
+    %162 = vec_push %161 %153
+    %163 = vec_push %162 %160
+
+    %164 = struct_new Card
+    %165 = const_str "div"
+    %166 = struct_set %164 0 %165
+    %167 = const_str "code-card"
+    %168 = struct_set %166 1 %167
+    %169 = struct_set %168 3 %163
+
+    // Example 7: Linear 64-Byte Aligned Buffer & Hardware Effects
+    %170 = struct_new Leaf
+    %171 = const_str "div"
+    %172 = struct_set %170 0 %171
+    %173 = const_str "card-tag"
+    %174 = struct_set %172 1 %173
+    %175 = const_str "EXEMPLE 7 — BUFFERS LINÉAIRES ALIGNÉS 64 OCTETS, SLICE & LIBÉRATION EXPLICITE"
+    %176 = struct_set %174 2 %175
+
+    %177 = struct_new Leaf
+    %178 = const_str "pre"
+    %179 = struct_set %177 0 %178
+    %180 = const_str "pre"
+    %181 = struct_set %179 1 %180
+    %182 = const_str "fn process_packet() -> i64 {\nbb0:\n    %0 = const_i64 64\n    %1 = buf_alloc %0          // %1: buf (Alive, aligné 64B)\n    %2 = const_i64 0\n    %3 = const_i64 1337\n    %4 = buf_write %1 %2 %3    // %1 -> Moved, %4 -> Alive\n    %5 = const_i64 16\n    %6 = buf_slice %4 %2 %5    // %4 -> Moved, %6 -> Alive\n    %7 = buf_read %6 %2        // Borrow lecture sans consommer %6\n    buf_free %6                // %6 -> Consommé (0 fuite mémoire)\n    ret %7\n}"
+    %183 = struct_set %181 2 %182
+
+    %184 = vec_new struct[Leaf]
+    %185 = vec_push %184 %176
+    %186 = vec_push %185 %183
+
+    %187 = struct_new Card
+    %188 = const_str "div"
+    %189 = struct_set %187 0 %188
+    %190 = const_str "code-card"
+    %191 = struct_set %189 1 %190
+    %192 = struct_set %191 3 %186
+
+    // Example 8: Linear Collections Vec & Map
+    %193 = struct_new Leaf
+    %194 = const_str "div"
+    %195 = struct_set %193 0 %194
+    %196 = const_str "card-tag"
+    %197 = struct_set %195 1 %196
+    %198 = const_str "EXEMPLE 8 — COLLECTIONS LINÉAIRES VEC[I64] & MAP[STR, I64] IN-PLACE"
+    %199 = struct_set %197 2 %198
+
+    %200 = struct_new Leaf
+    %201 = const_str "pre"
+    %202 = struct_set %200 0 %201
+    %203 = const_str "pre"
+    %204 = struct_set %202 1 %203
+    %205 = const_str "fn index_scores() -> i64 {\nbb0:\n    %0 = map_new str i64       // %0: map[str, i64] (Alive)\n    %1 = const_str \"alice\"\n    %2 = const_i64 100\n    %3 = map_set %0 %1 %2      // Mutation sur place : %0 Moved -> %3 Alive\n    %4 = map_get %3 %1         // Borrow lecture : %3 reste Alive\n    free %3                    // Destruction déterministe sans GC\n    ret %4\n}"
+    %206 = struct_set %204 2 %205
+
+    %207 = vec_new struct[Leaf]
+    %208 = vec_push %207 %199
+    %209 = vec_push %208 %206
+
+    %210 = struct_new Card
+    %211 = const_str "div"
+    %212 = struct_set %210 0 %211
+    %213 = const_str "code-card"
+    %214 = struct_set %212 1 %213
+    %215 = struct_set %214 3 %209
+
+    // Example 9: Async Channels & Effect Capabilities
+    %216 = struct_new Leaf
+    %217 = const_str "div"
+    %218 = struct_set %216 0 %217
+    %219 = const_str "card-tag"
+    %220 = struct_set %218 1 %219
+    %221 = const_str "EXEMPLE 9 — CANAUX ASYNCHRONES TYPÉS & CAPACITÉ EFFECTS(ASYNC)"
+    %222 = struct_set %220 2 %221
+
+    %223 = struct_new Leaf
+    %224 = const_str "pre"
+    %225 = struct_set %223 0 %224
+    %226 = const_str "pre"
+    %227 = struct_set %225 1 %226
+    %228 = const_str "fn pipeline_step(%0: i64) -> i64 effects(Async) {\nbb0:\n    %1 = const_i64 4\n    %2 = chan_new i64 %1       // File FIFO bornée de capacité 4\n    %3 = chan_send %2 %0       // Envoi linéaire (%2 -> %3)\n    %4 = chan_recv %3          // Réception (%3 reste Alive)\n    free %3                    // Fermeture propre du canal\n    ret %4\n}"
+    %229 = struct_set %227 2 %228
+
+    %230 = vec_new struct[Leaf]
+    %231 = vec_push %230 %222
+    %232 = vec_push %231 %229
+
+    %233 = struct_new Card
+    %234 = const_str "div"
+    %235 = struct_set %233 0 %234
+    %236 = const_str "code-card"
+    %237 = struct_set %235 1 %236
+    %238 = struct_set %237 3 %232
+
+    // Example 10: Static Judge JSON Diagnostics & fix_hint
+    %239 = struct_new Leaf
+    %240 = const_str "div"
+    %241 = struct_set %239 0 %240
+    %242 = const_str "card-tag"
+    %243 = struct_set %241 1 %242
+    %244 = const_str "EXEMPLE 10 — JUGE STATIQUE (< 100 µs) : DIAGNOSTIC JSON & FIX_HINT POUR L'IA"
+    %245 = struct_set %243 2 %244
+
+    %246 = struct_new Leaf
+    %247 = const_str "pre"
+    %248 = struct_set %246 0 %247
+    %249 = const_str "pre"
+    %250 = struct_set %248 1 %249
+    %251 = const_str "$ knr check bug.ssa --json\n[\n  {\n    \"error_kind\": \"UseAfterMove\",\n    \"function\": \"main\",\n    \"block\": \"bb0\",\n    \"instruction_idx\": 3,\n    \"register\": \"%1\",\n    \"registers_state\": { \"%0\": \"Alive\", \"%1\": \"Moved\", \"%2\": \"Alive\" },\n    \"fix_hint\": \"Register %1 was moved at instruction 2; use the new destination register %2 instead.\"\n  }\n]"
+    %252 = struct_set %250 2 %251
+
+    %253 = vec_new struct[Leaf]
+    %254 = vec_push %253 %245
+    %255 = vec_push %254 %252
+
+    %256 = struct_new Card
+    %257 = const_str "div"
+    %258 = struct_set %256 0 %257
+    %259 = const_str "code-card"
+    %260 = struct_set %258 1 %259
+    %261 = struct_set %260 3 %255
+
+    // Example 11: knr explore AI Structural Map
+    %262 = struct_new Leaf
+    %263 = const_str "div"
+    %264 = struct_set %262 0 %263
+    %265 = const_str "card-tag"
+    %266 = struct_set %264 1 %265
+    %267 = const_str "EXEMPLE 11 — EXPLORATION AST ONE-SHOT ($ KNR EXPLORE SITE/)"
+    %268 = struct_set %266 2 %267
+
+    %269 = struct_new Leaf
+    %270 = const_str "pre"
+    %271 = struct_set %269 0 %270
+    %272 = const_str "pre"
+    %273 = struct_set %271 1 %272
+    %274 = const_str "$ knr explore site/ --callees render_page\n[CALL GRAPH & SIGNATURES]\n  CALLEES OF render_page:\n    depth 1: build_examples (line 22 in render_page, site/components/examples.ssa:3)\n    depth 1: build_hero (line 19 in render_page, site/components/hero.ssa:3)\n    depth 1: build_nav (line 10 in render_page, site/components/nav.ssa:3)\n    depth 1: build_opcodes (line 21 in render_page, site/components/opcodes.ssa:3)\n    depth 1: build_pillars (line 20 in render_page, site/components/pillars.ssa:3)\n  SYSCALLS OF render_page:\n    depth 0: Ui:ui.render (line 38 in render_page, site/components/page.ssa)"
+    %275 = struct_set %273 2 %274
+
+    %276 = vec_new struct[Leaf]
+    %277 = vec_push %276 %268
+    %278 = vec_push %277 %275
+
+    %279 = struct_new Card
+    %280 = const_str "div"
+    %281 = struct_set %279 0 %280
+    %282 = const_str "code-card"
+    %283 = struct_set %281 1 %282
+    %284 = struct_set %283 3 %278
+
+    // Example 12: Full CLI Toolchain Reference
+    %285 = struct_new Leaf
+    %286 = const_str "div"
+    %287 = struct_set %285 0 %286
+    %288 = const_str "card-tag"
+    %289 = struct_set %287 1 %288
+    %290 = const_str "EXEMPLE 12 — TOOLCHAIN CLI UNIFIÉE KNR v0.0.2 (CHECK, EXPLORE, RUN, ASM, BUILD)"
+    %291 = struct_set %289 2 %290
+
+    %292 = struct_new Leaf
+    %293 = const_str "pre"
+    %294 = struct_set %292 0 %293
+    %295 = const_str "pre"
+    %296 = struct_set %294 1 %295
+    %297 = const_str "# 1. Explorer l'architecture et les relations AST (AI / JSON / Mermaid)\n$ knr explore site/ --symbol Card\n$ knr explore site/ --format mermaid\n\n# 2. Vérifier statiquement en < 100 µs (+ graphe d'architecture)\n$ knr check site/site.ssa --graph\n\n# 3. Compiler vers WebAssembly (.wasm) ou Exécutable Natif ELF (Cranelift)\n$ knr build site/client_state.ssa --target wasm -o site/site.wasm\n$ knr build app.ssa --target native -o app\n\n# 4. Assembler / Désassembler le bytecode 64-bit (.knrbin) & Exécuter en VM\n$ knr asm site/site.ssa -o site/site.knrbin && knr run site/server.ssa"
+    %298 = struct_set %296 2 %297
+
+    %299 = vec_new struct[Leaf]
+    %300 = vec_push %299 %291
+    %301 = vec_push %300 %298
+
+    %302 = struct_new Card
+    %303 = const_str "div"
+    %304 = struct_set %302 0 %303
+    %305 = const_str "code-card"
+    %306 = struct_set %304 1 %305
+    %307 = struct_set %306 3 %301
 
     // Footer
-    %47 = struct_new Leaf
-    %48 = const_str "p"
-    %49 = struct_set %47 0 %48
-    %50 = const_str "footer"
-    %51 = struct_set %49 1 %50
-    %52 = struct_set %51 2 %0
+    %308 = struct_new Leaf
+    %309 = const_str "p"
+    %310 = struct_set %308 0 %309
+    %311 = const_str "footer"
+    %312 = struct_set %310 1 %311
+    %313 = struct_set %312 2 %0
 
-    %53 = vec_new struct[Leaf]
-    %54 = vec_push %53 %52
+    %314 = vec_new struct[Leaf]
+    %315 = vec_push %314 %313
 
-    %55 = struct_new Card
-    %56 = const_str "footer"
-    %57 = struct_set %55 0 %56
-    %58 = const_str "footer-box"
-    %59 = struct_set %57 1 %58
-    %60 = struct_set %59 3 %54
+    %316 = struct_new Card
+    %317 = const_str "footer"
+    %318 = struct_set %316 0 %317
+    %319 = const_str "footer-box"
+    %320 = struct_set %318 1 %319
+    %321 = struct_set %320 3 %315
 
-    %61 = vec_new struct[Card]
-    %62 = vec_push %61 %23
-    %63 = vec_push %62 %46
-    %64 = vec_push %63 %60
+    %322 = vec_new struct[Card]
+    %323 = vec_push %322 %31
+    %324 = vec_push %323 %54
+    %325 = vec_push %324 %77
+    %326 = vec_push %325 %100
+    %327 = vec_push %326 %123
+    %328 = vec_push %327 %146
+    %329 = vec_push %328 %169
+    %330 = vec_push %329 %192
+    %331 = vec_push %330 %215
+    %332 = vec_push %331 %238
+    %333 = vec_push %332 %261
+    %334 = vec_push %333 %284
+    %335 = vec_push %334 %307
+    %336 = vec_push %335 %321
 
-    %65 = struct_new Section
-    %66 = const_str "section"
-    %67 = struct_set %65 0 %66
-    %68 = const_str "code-section"
-    %69 = struct_set %67 1 %68
-    %70 = struct_set %69 3 %64
-    ret %70
+    %337 = struct_new Section
+    %338 = const_str "section"
+    %339 = struct_set %337 0 %338
+    %340 = const_str "code-section page-examples"
+    %341 = struct_set %339 1 %340
+    %342 = struct_set %341 3 %336
+    ret %342
 }

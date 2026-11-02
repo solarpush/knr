@@ -34,6 +34,13 @@ pub struct ExploreArgs {
     pub orphans: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SkillArgs {
+    pub json: bool,
+    pub output: Option<PathBuf>,
+    pub install_dir: Option<PathBuf>,
+}
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +70,7 @@ pub enum CliCommand {
         version: Option<String>,
     },
     Explore(ExploreArgs),
+    Skill(SkillArgs),
     Help,
     Version,
 }
@@ -84,6 +92,7 @@ SUBCOMMANDS:
     disasm    Disassemble binary bytecode (.knrbin) to canonical textual SSA (.ssa)
     update    Check for updates and self-update from GitHub Releases
     explore   Explore project structure, call graphs, schemas, and dependencies
+    skill     Output or install the official AI Agent SKILL.md and VDOM helper for knr
 
 FLAGS:
     -h, --help       Print help information
@@ -99,7 +108,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliCommand,
     let args: Vec<String> = args.into_iter().collect();
     if args.len() <= 1 {
         return Err(CliError::Args(
-            "Usage: knr <check|run|build|asm|disasm|update|explore> [options]\nUse 'knr --help' for usage."
+            "Usage: knr <check|run|build|asm|disasm|update|explore|skill> [options]\nUse 'knr --help' for usage."
                 .to_string(),
         ));
     }
@@ -120,6 +129,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliCommand,
         "disasm" => parse_disasm(&args[2..]),
         "update" => parse_update(&args[2..]),
         "explore" => parse_explore(&args[2..]),
+        "skill" | "skills" => parse_skill(&args[2..]),
         cmd => Err(CliError::Args(format!(
             "Unknown subcommand: '{cmd}'. Use 'knr --help' for usage."
         ))),
@@ -614,4 +624,70 @@ OPTIONS:
         force,
         version,
     })
+}
+
+fn parse_skill(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut json = false;
+    let mut output: Option<PathBuf> = None;
+    let mut install_dir: Option<PathBuf> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--help" || arg == "-h" {
+            println!(
+                "knr skill - Output or install the official AI Agent SKILL.md and VDOM helper for knr
+
+USAGE:
+    knr skill [get|install] [OPTIONS]
+
+SUBCOMMANDS / ACTIONS:
+    get                  Print the official knr-ssa SKILL.md to stdout (default)
+    install [DIR]        Install .agents/skills/knr-ssa/SKILL.md (+ scripts/) into DIR (default: .)
+
+OPTIONS:
+    --json               Output skill metadata, SKILL.md, and helper script as JSON
+    --install [DIR]      Install .agents/skills/knr-ssa/SKILL.md (+ scripts/) into DIR (default: .)
+    -o, --output <PATH>  Write output to file instead of stdout
+    -h, --help           Print help information"
+            );
+            return Ok(CliCommand::Help);
+        } else if arg == "--json" {
+            json = true;
+        } else if arg == "get" {
+            // default action, no-op
+        } else if arg == "install" || arg == "--install" {
+            if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                i += 1;
+                install_dir = Some(PathBuf::from(&args[i]));
+            } else {
+                install_dir = Some(PathBuf::from("."));
+            }
+        } else if let Some(val) = arg.strip_prefix("--install=") {
+            install_dir = Some(PathBuf::from(val));
+        } else if arg == "-o" || arg == "--output" {
+            i += 1;
+            if i >= args.len() {
+                return Err(CliError::Args("Missing value for output '-o'".to_string()));
+            }
+            output = Some(PathBuf::from(&args[i]));
+        } else if let Some(val) = arg.strip_prefix("-o=") {
+            output = Some(PathBuf::from(val));
+        } else if let Some(val) = arg.strip_prefix("--output=") {
+            output = Some(PathBuf::from(val));
+        } else if arg.starts_with('-') {
+            return Err(CliError::Args(format!("Unknown option for 'skill': {arg}")));
+        } else {
+            return Err(CliError::Args(format!(
+                "Unexpected argument for 'skill': {arg}"
+            )));
+        }
+        i += 1;
+    }
+
+    Ok(CliCommand::Skill(SkillArgs {
+        json,
+        output,
+        install_dir,
+    }))
 }
