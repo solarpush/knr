@@ -22,5 +22,10 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> Result<(), CliError> {
         CliCommand::Disasm { file, output } => {
             commands::disasm::execute(&file, output.as_deref())
         }
+        CliCommand::Update {
+            check,
+            force,
+            version,
+        } => commands::update::execute(check, force, version.as_deref()),
     }
 }

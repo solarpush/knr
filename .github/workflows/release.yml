@@ -1,0 +1,165 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-main:
+    name: Verify Tag on main & Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tag commit belongs to main branch
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Tag ${GITHUB_REF_NAME} (${GITHUB_SHA}) is not on branch 'main'!"
+            exit 1
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Workspace Tests
+        run: cargo test --workspace
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: verify-main
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-13
+            cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install aarch64 cross-compilation toolchain
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Stamp release version from Git tag into Cargo.toml
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          for toml in crates/*/Cargo.toml; do
+            sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"${VERSION}\"/" "$toml"
+            rm -f "${toml}.bak"
+          done
+
+      - name: Build knr release binary
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          cargo build --release --target "${{ matrix.target }}" -p knr-cli --bin knr
+
+      - name: Package archive & SHA256 checksum
+        shell: bash
+        run: |
+          mkdir -p dist/stage
+          cp "target/${{ matrix.target }}/release/knr" dist/stage/knr
+          chmod 755 dist/stage/knr
+          cp README.md SPEC.md install.sh dist/stage/
+          ARCHIVE="knr-${{ matrix.target }}.tar.gz"
+          tar -czf "dist/${ARCHIVE}" -C dist/stage knr README.md SPEC.md install.sh
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          else
+            shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          fi
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/knr-${{ matrix.target }}.tar.gz
+            dist/knr-${{ matrix.target }}.tar.gz.sha256
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all target artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Prepare release assets & SHA256SUMS
+        shell: bash
+        run: |
+          cp install.sh artifacts/install.sh
+          cd artifacts
+          cat *.sha256 > SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ### Quick Install
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
+            ```
+            Or install this exact version (`${{ github.ref_name }}`):
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | KNR_VERSION=${{ github.ref_name }} sh
+            ```
+            ### Self-Update
+            If `knr` is already installed, update directly with:
+            ```bash
+            knr update
+            ```
+          files: |
+            artifacts/knr-*.tar.gz
+            artifacts/knr-*.tar.gz.sha256
+            artifacts/SHA256SUMS
+            artifacts/install.sh

@@ -26,7 +26,23 @@
 | **`knr-interp`** | `crates/knr-interp` | Machine virtuelle déterministe de référence avec compteur de cycles (*Gas Metering*) |
 | **`knr-runtime`** | `crates/knr-runtime` | Trait `HostPlatform` et ponts d'exécution (`Net`/Tokio, `Ui`/VDOM, `Hw`/SIMD & MMIO) |
 | **`knr-codegen`** | `crates/knr-codegen` | Backends de compilation AOT vers code natif (Cranelift) et WebAssembly (`wasm-encoder`) |
-| **`knr-cli`** | `crates/knr-cli` | Interface en ligne de commande `knr` (`check`, `run`, `build`, `asm`, `disasm`) |
+| **`knr-cli`** | `crates/knr-cli` | Interface en ligne de commande `knr` (`check`, `run`, `build`, `asm`, `disasm`, `update`) |
+
+---
+
+## Installation & Mise à jour
+
+```bash
+# Installer la dernière release depuis GitHub (Linux / macOS, x86_64 & arm64)
+curl -fsSL https://raw.githubusercontent.com/solarpush/knr/main/install.sh | sh
+
+# Vérifier si une nouvelle version est disponible sur GitHub Releases
+knr update --check
+
+# Mettre à jour le binaire knr vers la dernière release (ou une version précise)
+knr update
+knr update --version v0.1.0
+```
 
 ---
 
@@ -46,14 +62,17 @@ knr build programme.ssa --target wasm -o programme.wasm
 # 4. Assembler en bytecode binaire (.knrbin) et désassembler (.ssa)
 knr asm programme.ssa -o programme.knrbin
 knr disasm programme.knrbin
+
+# 5. Lancer le serveur SSR auto-hébergé du site en knr
+knr run site/server.ssa --gas 100000000
 ```
 
 ---
 
 ## Feuille de Route
 
-- [ ] **Étape 1** : Initialisation du workspace Cargo & `knr-core` (AST, parseur `.ssa`, codec `.knrbin`)
-- [ ] **Étape 2** : Vérificateur statique `knr-verify` (4 passes + diagnostics JSON + 20 tests unitaires)
-- [ ] **Étape 3** : Machine virtuelle `knr-interp` & CLI `knr-cli` (`check`, `run`, `asm`, `disasm`)
-- [ ] **Étape 4** : Ponts `knr-runtime` (`Net`, `Ui`, `Hw`)
-- [ ] **Étape 5** : Compilation AOT `knr-codegen` (Cranelift & WASM) + fuzzing différentiel (`proptest`)
+- [x] **Étape 1** : Initialisation du workspace Cargo & `knr-core` (AST, parseur `.ssa`, codec `.knrbin`, `schema`/`struct`)
+- [x] **Étape 2** : Vérificateur statique `knr-verify` (4 passes + diagnostics JSON + tests unitaires)
+- [x] **Étape 3** : Machine virtuelle `knr-interp` & CLI `knr-cli` (`check`, `run`, `asm`, `disasm`, `update`)
+- [x] **Étape 4** : Ponts `knr-runtime` (`Net`, `Ui`, `Hw`, `Async`)
+- [x] **Étape 5** : Compilation AOT `knr-codegen` (Cranelift & WASM) + fuzzing différentiel (`proptest`)

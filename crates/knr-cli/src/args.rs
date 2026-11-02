@@ -8,6 +8,8 @@ pub enum BuildTarget {
     Wasm,
 }
 
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
     Check {
@@ -32,13 +34,18 @@ pub enum CliCommand {
         file: PathBuf,
         output: Option<PathBuf>,
     },
+    Update {
+        check: bool,
+        force: bool,
+        version: Option<String>,
+    },
     Help,
     Version,
 }
 
 pub fn print_main_help() {
     println!(
-        "knr 0.1.0 - Knr SSA compiler, virtual machine, and bytecode toolchain
+        "knr {VERSION} - Knr SSA compiler, virtual machine, and bytecode toolchain
 
 USAGE:
     knr <SUBCOMMAND> [OPTIONS]
@@ -49,6 +56,7 @@ SUBCOMMANDS:
     build     Compile an SSA module to native executable or WebAssembly
     asm       Assemble textual SSA (.ssa) to compact binary bytecode (.knrbin)
     disasm    Disassemble binary bytecode (.knrbin) to canonical textual SSA (.ssa)
+    update    Check for updates and self-update from GitHub Releases
 
 FLAGS:
     -h, --help       Print help information
@@ -57,14 +65,14 @@ FLAGS:
 }
 
 pub fn print_version() {
-    println!("knr 0.1.0");
+    println!("knr {VERSION}");
 }
 
 pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliCommand, CliError> {
     let args: Vec<String> = args.into_iter().collect();
     if args.len() <= 1 {
         return Err(CliError::Args(
-            "Usage: knr <check|run|build|asm|disasm> [options]\nUse 'knr --help' for usage."
+            "Usage: knr <check|run|build|asm|disasm|update> [options]\nUse 'knr --help' for usage."
                 .to_string(),
         ));
     }
@@ -83,6 +91,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliCommand,
         "build" => parse_build(&args[2..]),
         "asm" => parse_asm(&args[2..]),
         "disasm" => parse_disasm(&args[2..]),
+        "update" => parse_update(&args[2..]),
         cmd => Err(CliError::Args(format!(
             "Unknown subcommand: '{cmd}'. Use 'knr --help' for usage."
         ))),
@@ -376,4 +385,55 @@ OPTIONS:
     })?;
 
     Ok(CliCommand::Disasm { file, output })
+}
+
+fn parse_update(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut check = false;
+    let mut force = false;
+    let mut version: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--help" || arg == "-h" {
+            println!(
+                "knr update - Check for updates and self-update from GitHub Releases
+
+USAGE:
+    knr update [OPTIONS]
+
+OPTIONS:
+    --check              Only check if a newer release is available without installing
+    --force              Force update even if the current version matches
+    --version <TAG>      Install a specific release tag (e.g. v0.2.0)
+    -h, --help           Print help information"
+            );
+            return Ok(CliCommand::Help);
+        } else if arg == "--check" || arg == "-c" {
+            check = true;
+        } else if arg == "--force" || arg == "-f" {
+            force = true;
+        } else if arg == "--version" || arg == "-v" {
+            i += 1;
+            if i >= args.len() {
+                return Err(CliError::Args("Missing value for '--version'".to_string()));
+            }
+            version = Some(args[i].clone());
+        } else if let Some(val) = arg.strip_prefix("--version=") {
+            version = Some(val.to_string());
+        } else if arg.starts_with('-') {
+            return Err(CliError::Args(format!("Unknown option for 'update': {arg}")));
+        } else {
+            return Err(CliError::Args(format!(
+                "Unexpected argument for 'update': {arg}"
+            )));
+        }
+        i += 1;
+    }
+
+    Ok(CliCommand::Update {
+        check,
+        force,
+        version,
+    })
 }

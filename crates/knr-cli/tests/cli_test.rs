@@ -500,3 +500,148 @@ bb0:
     assert!(disasm_text.contains("struct_new Point"), "Disassembly must contain struct_new Point: {disasm_text}");
 }
 
+// ============================================================================
+// 6. Subcommand: knr update & install.sh
+// ============================================================================
+
+#[test]
+fn test_update_semver_and_help() {
+    use knr_cli::commands::update::{is_newer_version, parse_semver};
+
+    assert_eq!(parse_semver("v0.1.0"), Some((0, 1, 0)));
+    assert_eq!(parse_semver("1.2.3-rc1"), Some((1, 2, 3)));
+    assert!(!is_newer_version("0.1.0", "v0.1.0"));
+    assert!(is_newer_version("0.1.0", "v0.2.0"));
+    assert!(is_newer_version("0.1.0", "v1.0.0"));
+    assert!(!is_newer_version("0.2.0", "v0.1.9"));
+
+    let out = knr_cmd()
+        .args(["update", "--help"])
+        .output()
+        .expect("knr update --help");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--check"));
+    assert!(stdout.contains("--force"));
+    assert!(stdout.contains("--version"));
+}
+
+#[test]
+fn test_update_check_and_self_replacement_with_install_sh() {
+    let target = knr_cli::commands::update::current_target_triple().expect("supported target");
+    let pid = std::process::id();
+    let work_dir = std::env::temp_dir().join(format!("knr_update_e2e_{pid}"));
+    let _ = fs::remove_dir_all(&work_dir);
+    fs::create_dir_all(&work_dir).expect("create work_dir");
+
+    // 1. Test `knr update --check` when already up to date (v0.1.0)
+    let json_same = work_dir.join("release_same.json");
+    fs::write(
+        &json_same,
+        r#"{"tag_name": "v0.1.0", "html_url": "https://github.com/solarpush/knr/releases/tag/v0.1.0", "assets": []}"#,
+    )
+    .unwrap();
+
+    let out_same = knr_cmd()
+        .args(["update", "--check"])
+        .env("KNR_RELEASE_API_URL", format!("file://{}", json_same.display()))
+        .output()
+        .expect("knr update --check same");
+    assert!(out_same.status.success());
+    let stdout_same = String::from_utf8_lossy(&out_same.stdout);
+    assert!(
+        stdout_same.contains("already up to date"),
+        "Expected 'already up to date', got: {stdout_same}"
+    );
+
+    // 2. Build a mock release archive `knr-<target>.tar.gz` containing a mock `knr` binary (v9.9.9)
+    let stage_dir = work_dir.join("stage");
+    fs::create_dir_all(&stage_dir).unwrap();
+    let mock_bin = stage_dir.join("knr");
+    fs::write(&mock_bin, "#!/usr/bin/env sh\necho \"knr 9.9.9\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&mock_bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&mock_bin, perms).unwrap();
+    }
+
+    let archive_name = format!("knr-{target}.tar.gz");
+    let archive_path = work_dir.join(&archive_name);
+    let tar_status = Command::new("tar")
+        .args(["-czf", archive_path.to_str().unwrap(), "-C", stage_dir.to_str().unwrap(), "knr"])
+        .status()
+        .expect("tar -czf");
+    assert!(tar_status.success());
+
+    // Create mock release JSON for v9.9.9 pointing to the local tarball
+    let json_newer = work_dir.join("release_newer.json");
+    let release_json_content = format!(
+        r#"{{
+            "tag_name": "v9.9.9",
+            "html_url": "https://github.com/solarpush/knr/releases/tag/v9.9.9",
+            "assets": [
+                {{
+                    "name": "{archive_name}",
+                    "browser_download_url": "file://{}"
+                }}
+            ]
+        }}"#,
+        archive_path.display()
+    );
+    fs::write(&json_newer, release_json_content).unwrap();
+
+    // 3. Test `knr update` replacing a target binary
+    let target_bin = work_dir.join("installed_knr");
+    fs::write(&target_bin, "old binary").unwrap();
+
+    let out_update = knr_cmd()
+        .arg("update")
+        .env("KNR_RELEASE_API_URL", format!("file://{}", json_newer.display()))
+        .env("KNR_UPDATE_BIN_PATH", &target_bin)
+        .output()
+        .expect("knr update");
+    assert!(
+        out_update.status.success(),
+        "knr update failed: {}",
+        String::from_utf8_lossy(&out_update.stderr)
+    );
+
+    let ver_out = Command::new(&target_bin)
+        .arg("--version")
+        .output()
+        .expect("run updated binary");
+    assert_eq!(String::from_utf8_lossy(&ver_out.stdout).trim(), "knr 9.9.9");
+
+    // 4. Test `install.sh` end-to-end with local release URL
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
+    let install_script = repo_root.join("install.sh");
+    let install_dir = work_dir.join("bin_from_installer");
+
+    let installer_out = Command::new("sh")
+        .arg(&install_script)
+        .env("KNR_RELEASE_API_URL", format!("file://{}", json_newer.display()))
+        .env("KNR_RELEASE_BASE_URL", format!("file://{}", work_dir.display()))
+        .env("KNR_INSTALL_DIR", &install_dir)
+        .output()
+        .expect("run install.sh");
+    assert!(
+        installer_out.status.success(),
+        "install.sh failed: {}\n{}",
+        String::from_utf8_lossy(&installer_out.stdout),
+        String::from_utf8_lossy(&installer_out.stderr)
+    );
+
+    let installed_bin = install_dir.join("knr");
+    assert!(installed_bin.is_file(), "install.sh must install knr binary");
+    let installed_ver = Command::new(&installed_bin)
+        .arg("--version")
+        .output()
+        .expect("run installed knr");
+    assert_eq!(String::from_utf8_lossy(&installed_ver.stdout).trim(), "knr 9.9.9");
+
+    let _ = fs::remove_dir_all(&work_dir);
+}
+
