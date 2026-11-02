@@ -75,209 +75,169 @@ bb8:
     %44 = chan_recv %6
     %45 = add %44 %2
     %46 = chan_send %6 %45
-    %47 = struct_new HttpResponseInt
-    %48 = struct_set %47 0 %14
-    %49 = struct_set %48 1 %9
-    %50 = struct_set %49 2 %45
-    %51 = syscall Net "net.respond" %50
+    %47 = call reply_int %14 %9 %45
     br bb1
 
 bb9:
-    %52 = const_str "/api/wasm/dec"
-    %53 = cmp_eq %15 %52
-    br_if %53 bb10 bb11
+    %48 = const_str "/api/wasm/dec"
+    %49 = cmp_eq %15 %48
+    br_if %49 bb10 bb11
 
 bb10:
-    %54 = chan_recv %6
-    %55 = sub %54 %2
-    %56 = chan_send %6 %55
-    %57 = struct_new HttpResponseInt
-    %58 = struct_set %57 0 %14
-    %59 = struct_set %58 1 %9
-    %60 = struct_set %59 2 %55
-    %61 = syscall Net "net.respond" %60
+    %50 = chan_recv %6
+    %51 = sub %50 %2
+    %52 = chan_send %6 %51
+    %53 = call reply_int %14 %9 %51
     br bb1
 
 bb11:
-    %62 = const_str "/api/wasm/reset"
-    %63 = cmp_eq %15 %62
-    br_if %63 bb12 bb13
+    %54 = const_str "/api/wasm/reset"
+    %55 = cmp_eq %15 %54
+    br_if %55 bb12 bb13
 
 bb12:
-    %64 = chan_recv %6
-    %65 = chan_send %6 %4
-    %66 = struct_new HttpResponseInt
-    %67 = struct_set %66 0 %14
-    %68 = struct_set %67 1 %9
-    %69 = struct_set %68 2 %4
-    %70 = syscall Net "net.respond" %69
+    %56 = chan_recv %6
+    %57 = chan_send %6 %4
+    %58 = call reply_int %14 %9 %4
     br bb1
 
 bb13:
-    %71 = const_str "/nav/home"
-    %72 = cmp_eq %15 %71
-    br_if %72 bb14 bb15
+    %59 = const_str "/nav/home"
+    %60 = cmp_eq %15 %59
+    br_if %60 bb14 bb15
 
 bb14:
-    %73 = const_str ".page-graph, .page-pillars, .page-learn, .page-isa, .page-examples { display: none !important; } .tab-home { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
-    %74 = struct_new HttpResponse
-    %75 = struct_set %74 0 %14
-    %76 = struct_set %75 1 %9
-    %77 = struct_set %76 2 %73
-    %78 = syscall Net "net.respond" %77
+    %61 = const_str ".page-graph, .page-pillars, .page-learn, .page-isa, .page-examples { display: none !important; } .tab-home { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %62 = call reply_text %14 %9 %61
     br bb1
 
 bb15:
-    %79 = const_str "/nav/graph"
-    %80 = cmp_eq %15 %79
-    br_if %80 bb16 bb17
+    %63 = const_str "/nav/graph"
+    %64 = cmp_eq %15 %63
+    br_if %64 bb16 bb17
 
 bb16:
-    %81 = const_str ".page-home, .page-pillars, .page-learn, .page-isa, .page-examples { display: none !important; } .tab-graph { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
-    %82 = struct_new HttpResponse
-    %83 = struct_set %82 0 %14
-    %84 = struct_set %83 1 %9
-    %85 = struct_set %84 2 %81
-    %86 = syscall Net "net.respond" %85
+    %65 = const_str ".page-home, .page-pillars, .page-learn, .page-isa, .page-examples { display: none !important; } .tab-graph { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %66 = call reply_text %14 %9 %65
     br bb1
 
 bb17:
-    %87 = const_str "/nav/pillars"
-    %88 = cmp_eq %15 %87
-    br_if %88 bb18 bb19
+    %67 = const_str "/nav/pillars"
+    %68 = cmp_eq %15 %67
+    br_if %68 bb18 bb19
 
 bb18:
-    %89 = const_str ".page-home, .page-graph, .page-learn, .page-isa, .page-examples { display: none !important; } .tab-pillars { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
-    %90 = struct_new HttpResponse
-    %91 = struct_set %90 0 %14
-    %92 = struct_set %91 1 %9
-    %93 = struct_set %92 2 %89
-    %94 = syscall Net "net.respond" %93
+    %69 = const_str ".page-home, .page-graph, .page-learn, .page-isa, .page-examples { display: none !important; } .tab-pillars { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %70 = call reply_text %14 %9 %69
     br bb1
 
 bb19:
-    %95 = const_str "/nav/learn"
-    %96 = cmp_eq %15 %95
-    br_if %96 bb20 bb21
+    %71 = const_str "/nav/learn"
+    %72 = cmp_eq %15 %71
+    br_if %72 bb20 bb21
 
 bb20:
-    %97 = const_str ".page-home, .page-graph, .page-pillars, .page-isa, .page-examples { display: none !important; } .tab-learn { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
-    %98 = struct_new HttpResponse
-    %99 = struct_set %98 0 %14
-    %100 = struct_set %99 1 %9
-    %101 = struct_set %100 2 %97
-    %102 = syscall Net "net.respond" %101
+    %73 = const_str ".page-home, .page-graph, .page-pillars, .page-isa, .page-examples { display: none !important; } .tab-learn { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %74 = call reply_text %14 %9 %73
     br bb1
 
 bb21:
-    %103 = const_str "/nav/isa"
-    %104 = cmp_eq %15 %103
-    br_if %104 bb22 bb23
+    %75 = const_str "/nav/isa"
+    %76 = cmp_eq %15 %75
+    br_if %76 bb22 bb23
 
 bb22:
-    %105 = const_str ".page-home, .page-graph, .page-pillars, .page-learn, .page-examples { display: none !important; } .tab-isa { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
-    %106 = struct_new HttpResponse
-    %107 = struct_set %106 0 %14
-    %108 = struct_set %107 1 %9
-    %109 = struct_set %108 2 %105
-    %110 = syscall Net "net.respond" %109
+    %77 = const_str ".page-home, .page-graph, .page-pillars, .page-learn, .page-examples { display: none !important; } .tab-isa { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %78 = call reply_text %14 %9 %77
     br bb1
 
 bb23:
-    %111 = const_str "/nav/examples"
-    %112 = cmp_eq %15 %111
-    br_if %112 bb24 bb25
+    %79 = const_str "/nav/examples"
+    %80 = cmp_eq %15 %79
+    br_if %80 bb24 bb25
 
 bb24:
-    %113 = const_str ".page-home, .page-graph, .page-pillars, .page-learn, .page-isa { display: none !important; } .tab-examples { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
-    %114 = struct_new HttpResponse
-    %115 = struct_set %114 0 %14
-    %116 = struct_set %115 1 %9
-    %117 = struct_set %116 2 %113
-    %118 = syscall Net "net.respond" %117
+    %81 = const_str ".page-home, .page-graph, .page-pillars, .page-learn, .page-isa { display: none !important; } .tab-examples { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %82 = call reply_text %14 %9 %81
     br bb1
 
 bb25:
-    %119 = const_str "/nav/all"
-    %120 = cmp_eq %15 %119
-    br_if %120 bb26 bb27
+    %83 = const_str "/nav/all"
+    %84 = cmp_eq %15 %83
+    br_if %84 bb26 bb27
 
 bb26:
-    %121 = const_str ".tab-all { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
-    %122 = struct_new HttpResponse
-    %123 = struct_set %122 0 %14
-    %124 = struct_set %123 1 %9
-    %125 = struct_set %124 2 %121
-    %126 = syscall Net "net.respond" %125
+    %85 = const_str ".tab-all { background: #38bdf8 !important; color: #050811 !important; border-color: #38bdf8 !important; }"
+    %86 = call reply_text %14 %9 %85
     br bb1
 
 bb27:
-    %127 = const_str "/trace/inc"
-    %128 = cmp_eq %15 %127
-    br_if %128 bb28 bb29
+    %87 = const_str "/trace/inc"
+    %88 = cmp_eq %15 %87
+    br_if %88 bb28 bb29
 
 bb28:
-    %129 = const_str ".node-ast, .node-verify, .node-bb0, .node-bb2, .node-call { border-color: #38bdf8 !important; box-shadow: 0 0 28px rgba(56, 189, 248, 0.35) !important; transform: translateY(-3px); } .node-bb1, .node-ssr { opacity: 0.35; } .trace-inc { box-shadow: 0 0 18px rgba(56, 189, 248, 0.65) !important; }"
-    %130 = struct_new HttpResponse
-    %131 = struct_set %130 0 %14
-    %132 = struct_set %131 1 %9
-    %133 = struct_set %132 2 %129
-    %134 = syscall Net "net.respond" %133
+    %89 = const_str ".node-ast, .node-verify, .node-bb0, .node-bb2, .node-call { border-color: #38bdf8 !important; box-shadow: 0 0 28px rgba(56, 189, 248, 0.35) !important; transform: translateY(-3px); } .node-bb1, .node-ssr { opacity: 0.35; } .trace-inc { box-shadow: 0 0 18px rgba(56, 189, 248, 0.65) !important; }"
+    %90 = call reply_text %14 %9 %89
     br bb1
 
 bb29:
-    %135 = const_str "/trace/dec"
-    %136 = cmp_eq %15 %135
-    br_if %136 bb30 bb31
+    %91 = const_str "/trace/dec"
+    %92 = cmp_eq %15 %91
+    br_if %92 bb30 bb31
 
 bb30:
-    %137 = const_str ".node-ast, .node-verify, .node-bb0, .node-bb2, .node-call { border-color: #a855f7 !important; box-shadow: 0 0 28px rgba(168, 85, 247, 0.35) !important; transform: translateY(-3px); } .node-bb1, .node-ssr { opacity: 0.35; } .trace-dec { border-color: #a855f7 !important; color: #e9d5ff !important; box-shadow: 0 0 18px rgba(168, 85, 247, 0.55) !important; }"
-    %138 = struct_new HttpResponse
-    %139 = struct_set %138 0 %14
-    %140 = struct_set %139 1 %9
-    %141 = struct_set %140 2 %137
-    %142 = syscall Net "net.respond" %141
+    %93 = const_str ".node-ast, .node-verify, .node-bb0, .node-bb2, .node-call { border-color: #a855f7 !important; box-shadow: 0 0 28px rgba(168, 85, 247, 0.35) !important; transform: translateY(-3px); } .node-bb1, .node-ssr { opacity: 0.35; } .trace-dec { border-color: #a855f7 !important; color: #e9d5ff !important; box-shadow: 0 0 18px rgba(168, 85, 247, 0.55) !important; }"
+    %94 = call reply_text %14 %9 %93
     br bb1
 
 bb31:
-    %143 = const_str "/trace/reset"
-    %144 = cmp_eq %15 %143
-    br_if %144 bb32 bb33
+    %95 = const_str "/trace/reset"
+    %96 = cmp_eq %15 %95
+    br_if %96 bb32 bb33
 
 bb32:
-    %145 = const_str ".node-ast, .node-verify, .node-bb0, .node-bb1 { border-color: #f59e0b !important; box-shadow: 0 0 28px rgba(245, 158, 11, 0.35) !important; transform: translateY(-3px); } .node-bb2, .node-call, .node-ssr { opacity: 0.35; } .trace-reset { border-color: #f59e0b !important; color: #fde68a !important; box-shadow: 0 0 18px rgba(245, 158, 11, 0.55) !important; }"
-    %146 = struct_new HttpResponse
-    %147 = struct_set %146 0 %14
-    %148 = struct_set %147 1 %9
-    %149 = struct_set %148 2 %145
-    %150 = syscall Net "net.respond" %149
+    %97 = const_str ".node-ast, .node-verify, .node-bb0, .node-bb1 { border-color: #f59e0b !important; box-shadow: 0 0 28px rgba(245, 158, 11, 0.35) !important; transform: translateY(-3px); } .node-bb2, .node-call, .node-ssr { opacity: 0.35; } .trace-reset { border-color: #f59e0b !important; color: #fde68a !important; box-shadow: 0 0 18px rgba(245, 158, 11, 0.55) !important; }"
+    %98 = call reply_text %14 %9 %97
     br bb1
 
 bb33:
-    %151 = const_str "/trace/ssr"
-    %152 = cmp_eq %15 %151
-    br_if %152 bb34 bb35
+    %99 = const_str "/trace/ssr"
+    %100 = cmp_eq %15 %99
+    br_if %100 bb34 bb35
 
 bb34:
-    %153 = const_str ".node-ast, .node-verify, .node-ssr { border-color: #10b981 !important; box-shadow: 0 0 28px rgba(16, 185, 129, 0.38) !important; transform: translateY(-3px); } .node-bb0, .node-bb1, .node-bb2, .node-call { opacity: 0.35; } .trace-ssr { box-shadow: 0 0 18px rgba(16, 185, 129, 0.65) !important; }"
-    %154 = struct_new HttpResponse
-    %155 = struct_set %154 0 %14
-    %156 = struct_set %155 1 %9
-    %157 = struct_set %156 2 %153
-    %158 = syscall Net "net.respond" %157
+    %101 = const_str ".node-ast, .node-verify, .node-ssr { border-color: #10b981 !important; box-shadow: 0 0 28px rgba(16, 185, 129, 0.38) !important; transform: translateY(-3px); } .node-bb0, .node-bb1, .node-bb2, .node-call { opacity: 0.35; } .trace-ssr { box-shadow: 0 0 18px rgba(16, 185, 129, 0.65) !important; }"
+    %102 = call reply_text %14 %9 %101
     br bb1
 
 bb35:
-    %159 = chan_recv %3
-    %160 = chan_send %3 %159
-    %161 = syscall Ui "ui.render" %159
-    %162 = const_str "LIVE SSR • 100% Pure knr (.ssa)"
-    %163 = const_str "Servi en direct en SSR par knr (site/server.ssa) via UiPlatform + NetPlatform (Tokio)."
-    %164 = call render_page %162 %161 %163
-    %165 = struct_new HttpResponse
-    %166 = struct_set %165 0 %14
-    %167 = struct_set %166 1 %9
-    %168 = struct_set %167 2 %164
-    %169 = syscall Net "net.respond" %168
+    %103 = chan_recv %3
+    %104 = chan_send %3 %103
+    %105 = syscall Ui "ui.render" %103
+    %106 = const_str "LIVE SSR • 100% Pure knr (.ssa)"
+    %107 = const_str "Servi en direct en SSR par knr (site/server.ssa) via UiPlatform + NetPlatform (Tokio)."
+    %108 = call render_page %106 %105 %107
+    %109 = call reply_text %14 %9 %108
     br bb1
+}
+
+fn reply_int(%0: i64, %1: i64, %2: i64) -> bool effects(Net) {
+bb0:
+    %3 = struct_new HttpResponseInt
+    %4 = struct_set %3 0 %0
+    %5 = struct_set %4 1 %1
+    %6 = struct_set %5 2 %2
+    %7 = syscall Net "net.respond" %6
+    ret %7
+}
+
+fn reply_text(%0: i64, %1: i64, %2: str) -> bool effects(Net) {
+bb0:
+    %3 = struct_new HttpResponse
+    %4 = struct_set %3 0 %0
+    %5 = struct_set %4 1 %1
+    %6 = struct_set %5 2 %2
+    %7 = syscall Net "net.respond" %6
+    ret %7
 }

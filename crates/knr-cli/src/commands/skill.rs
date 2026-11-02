@@ -6,9 +6,8 @@ use serde::Serialize;
 use crate::args::{SkillArgs, VERSION};
 use crate::error::CliError;
 
-pub const SKILL_MARKDOWN: &str = include_str!("../../../../.agents/skills/knr-ssa/SKILL.md");
-pub const GEN_VDOM_SCRIPT: &str =
-    include_str!("../../../../.agents/skills/knr-ssa/scripts/gen_vdom_ssa.py");
+pub const SKILL_MARKDOWN: &str = include_str!("../assets/SKILL.md");
+pub const GEN_VDOM_SCRIPT: &str = include_str!("../assets/gen_vdom_ssa.py");
 
 #[derive(Serialize)]
 struct SkillJsonPayload<'a> {

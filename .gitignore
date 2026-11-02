@@ -1,7 +1,7 @@
 /target
-.agents/
 *.o
 *.so
 *.dylib
 *.exe
 .DS_Store
+.agents/teamwork

@@ -134,8 +134,8 @@ fn test_adv_site_server_ssa_diamond_and_schemas_resolution() {
     assert!(module.get_schema("Section").is_some());
     assert!(module.get_schema("Page").is_some());
 
-    // Functions: main + render_page + 7 components = 9 functions
-    assert_eq!(module.functions.len(), 9);
+    // Functions: main + reply_int + reply_text + render_page + 7 components = 11 functions
+    assert_eq!(module.functions.len(), 11);
     assert!(module.get_function("main").is_some());
     assert!(module.get_function("render_page").is_some());
 
