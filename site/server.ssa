@@ -1,3 +1,21 @@
+schema HttpRequest {
+    0: req_id i64,
+    1: method str,
+    2: path str,
+}
+
+schema HttpResponse {
+    0: req_id i64,
+    1: status i64,
+    2: body str,
+}
+
+schema HttpResponseInt {
+    0: req_id i64,
+    1: status i64,
+    2: body i64,
+}
+
 schema Leaf {
     0: tag str,
     1: class str,
@@ -25,443 +43,502 @@ schema Page {
     3: children vec[struct[Section]],
 }
 
-fn main() -> i64 effects(Ui, Net) {
+fn main() -> i64 effects(Ui, Net, Async) {
 bb0:
     // =========================================================================
-    // 0. En-tête (<meta charset="utf-8" />, <title>, <style>, <script>) & Nav
+    // 0. Initialisation du serveur HTTP Tokio (port 8080) et de l'état Counter
     // =========================================================================
-    %0 = struct_new Leaf
-    %1 = const_str "meta"
-    %2 = struct_set %0 0 %1
-    %3 = const_str "utf-8"
-    %4 = struct_set %2 1 %3
+    %0 = const_i64 8080
+    %1 = syscall Net "net.listen" %0
+    %2 = const_i64 1
+    %3 = chan_new i64 %2
+    %4 = const_i64 0
+    %5 = chan_send %3 %4
+    %6 = const_i64 200
+    %7 = const_str "/api/inc"
+    %8 = const_str "/api/dec"
+    %9 = const_str "/api/reset"
+    br bb1
 
-    %5 = struct_new Leaf
-    %6 = const_str "title"
-    %7 = struct_set %5 0 %6
-    %8 = const_str "knr — SSA Linear Language (SSR)"
-    %9 = struct_set %7 2 %8
-
-    %10 = struct_new Leaf
-    %11 = const_str "style"
-    %12 = struct_set %10 0 %11
-    %13 = const_str "* { box-sizing: border-box; margin: 0; padding: 0; } body { background: #070b14; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; } .page { max-width: 1080px; margin: 0 auto; padding: 48px 24px 80px; } .nav { display: flex; justify-content: space-between; align-items: center; padding-bottom: 36px; border-bottom: 1px solid #1e293b; margin-bottom: 56px; } .logo { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.03em; color: #38bdf8; font-family: monospace; } .badge { background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); padding: 4px 12px; border-radius: 999px; font-size: 0.8rem; font-family: monospace; } .hero { text-align: left; margin-bottom: 48px; } .hero-title { font-size: 3rem; font-weight: 800; line-height: 1.15; letter-spacing: -0.03em; color: #f8fafc; margin-bottom: 18px; } .hero-sub { font-size: 1.18rem; color: #94a3b8; max-width: 760px; margin-bottom: 24px; } .pill { background: #0f172a; border: 1px solid #1e293b; color: #cbd5e1; padding: 10px 18px; border-radius: 8px; font-family: monospace; font-size: 0.88rem; display: inline-block; margin-bottom: 28px; } .counter-box { background: linear-gradient(135deg, #0f172a 0%, #111c35 100%); border: 1px solid #38bdf8; border-radius: 14px; padding: 22px 26px; display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 56px; box-shadow: 0 10px 30px rgba(56, 189, 248, 0.08); } .counter-val { font-family: monospace; font-size: 2.2rem; font-weight: 800; color: #38bdf8; min-width: 64px; text-align: center; background: #060a12; border: 1px solid #1e293b; padding: 6px 18px; border-radius: 10px; } .btn { background: #38bdf8; color: #050811; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; font-family: monospace; font-size: 0.95rem; cursor: pointer; transition: transform 0.1s, opacity 0.15s; } .btn:hover { opacity: 0.92; transform: translateY(-1px); } .btn:active { transform: translateY(0); } .btn-sec { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; } .counter-status { font-family: monospace; font-size: 0.8rem; color: #94a3b8; width: 100%; margin-top: 4px; } .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; margin-bottom: 56px; } .card { background: linear-gradient(180deg, #0f172a 0%, #0b1120 100%); border: 1px solid #1e293b; border-radius: 12px; padding: 24px; } .card-tag { font-family: monospace; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #38bdf8; margin-bottom: 8px; } .card-title { font-size: 1.15rem; font-weight: 700; color: #f1f5f9; margin-bottom: 10px; } .card-desc { font-size: 0.92rem; color: #94a3b8; } .code-section { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; margin-bottom: 56px; } .code-card { background: #090e1a; border: 1px solid #1e293b; border-radius: 12px; padding: 22px; } .pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; color: #a5f3fc; white-space: pre-wrap; background: #050811; padding: 16px; border-radius: 8px; border: 1px solid #162032; margin-top: 10px; } .footer-box { grid-column: 1 / -1; border-top: 1px solid #1e293b; padding-top: 28px; margin-top: 16px; } .footer { color: #64748b; font-size: 0.88rem; font-family: monospace; text-align: center; }"
-    %14 = struct_set %12 2 %13
-
-    %15 = struct_new Leaf
-    %16 = const_str "script"
-    %17 = struct_set %15 0 %16
-    %18 = const_str "async function knrAction(op) { const el = document.getElementById('knr-counter'); const st = document.getElementById('knr-status'); const cur = parseInt(el.textContent || '0', 10) || 0; if (location.protocol.startsWith('http')) { try { const r = await fetch('/api/' + op, { method: 'POST' }); if (r.ok) { const d = await r.json(); el.textContent = d.count; st.textContent = 'Syscall Net + Ui SSR -> reg %state muté in-place (count = ' + d.count + ')'; return; } } catch (_) {} } const next = op === 'inc' ? cur + 1 : (op === 'dec' ? cur - 1 : 0); el.textContent = next; st.textContent = 'Bridge VDOM local -> struct_set %state 0 ' + next + ' (0 allocation GC)'; }"
-    %19 = struct_set %17 2 %18
-
-    %20 = struct_new Leaf
-    %21 = const_str "span"
-    %22 = struct_set %20 0 %21
-    %23 = const_str "logo"
-    %24 = struct_set %22 1 %23
-    %25 = const_str "knr // SSA Linear IR"
-    %26 = struct_set %24 2 %25
-
-    %27 = struct_new Leaf
-    %28 = const_str "span"
-    %29 = struct_set %27 0 %28
-    %30 = const_str "badge"
-    %31 = struct_set %29 1 %30
-    %32 = const_str "LIVE SSR • Tokio HTTP + VDOM"
-    %33 = struct_set %31 2 %32
-
-    %34 = vec_new struct[Leaf]
-    %35 = vec_push %34 %4
-    %36 = vec_push %35 %9
-    %37 = vec_push %36 %14
-    %38 = vec_push %37 %19
-    %39 = vec_push %38 %26
-    %40 = vec_push %39 %33
-
-    %41 = struct_new Card
-    %42 = const_str "header"
-    %43 = struct_set %41 0 %42
-    %44 = const_str "nav"
-    %45 = struct_set %43 1 %44
-    %46 = struct_set %45 3 %40
-
+bb1:
     // =========================================================================
-    // 1. Section Hero + Composant Counter Réactif
+    // 1. Boucle d'événements HTTP : attente d'une requête et lecture du Counter
     // =========================================================================
-    %47 = struct_new Leaf
-    %48 = const_str "h1"
-    %49 = struct_set %47 0 %48
-    %50 = const_str "hero-title"
-    %51 = struct_set %49 1 %50
-    %52 = const_str "Le langage SSA à mémoire linéaire pensé pour les Agents IA et le bas niveau."
-    %53 = struct_set %51 2 %52
+    %10 = syscall Net "net.wait_req" %1
+    %11 = struct_get %10 0
+    %12 = struct_get %10 2
+    free %10
+    %13 = chan_recv %3
+    %14 = cmp_eq %12 %7
+    br_if %14 bb2 bb3
 
-    %54 = struct_new Leaf
-    %55 = const_str "p"
-    %56 = struct_set %54 0 %55
-    %57 = const_str "hero-sub"
-    %58 = struct_set %56 1 %57
-    %59 = const_str "Zéro Garbage Collector. Zéro emprunt complexe. Mutation sur place garantie par machine à états linéaire en moins de 100 µs, servi en direct par knr-runtime (Ui + Net)."
-    %60 = struct_set %58 2 %59
+bb2:
+    // Route POST /api/inc : incrémente %13 et répond avec la nouvelle valeur
+    %15 = add %13 %2
+    %16 = chan_send %3 %15
+    %17 = struct_new HttpResponseInt
+    %18 = struct_set %17 0 %11
+    %19 = struct_set %18 1 %6
+    %20 = struct_set %19 2 %15
+    %21 = syscall Net "net.respond" %20
+    br bb1
 
-    %61 = struct_new Leaf
-    %62 = const_str "div"
-    %63 = struct_set %61 0 %62
-    %64 = const_str "pill"
-    %65 = struct_set %63 1 %64
-    %66 = const_str "$ knr run site/server.ssa   -->   http://127.0.0.1:8080"
-    %67 = struct_set %65 2 %66
+bb3:
+    %22 = cmp_eq %12 %8
+    br_if %22 bb4 bb5
 
-    %68 = vec_new struct[Leaf]
-    %69 = vec_push %68 %53
-    %70 = vec_push %69 %60
-    %71 = vec_push %70 %67
+bb4:
+    // Route POST /api/dec : décrémente %13 et répond avec la nouvelle valeur
+    %23 = sub %13 %2
+    %24 = chan_send %3 %23
+    %25 = struct_new HttpResponseInt
+    %26 = struct_set %25 0 %11
+    %27 = struct_set %26 1 %6
+    %28 = struct_set %27 2 %23
+    %29 = syscall Net "net.respond" %28
+    br bb1
 
-    %72 = struct_new Card
-    %73 = const_str "div"
-    %74 = struct_set %72 0 %73
-    %75 = const_str "hero"
-    %76 = struct_set %74 1 %75
-    %77 = struct_set %76 3 %71
+bb5:
+    %30 = cmp_eq %12 %9
+    br_if %30 bb6 bb7
 
-    // Composant Interactif Counter (SSR + API Tokio)
-    %78 = struct_new Leaf
-    %79 = const_str "div"
-    %80 = struct_set %78 0 %79
-    %81 = const_str "card-tag"
-    %82 = struct_set %80 1 %81
-    %83 = const_str "DÉMO INTERACTIVE — COMPTEUR LINÉAIRE (STRUCT[COUNTER])"
-    %84 = struct_set %82 2 %83
+bb6:
+    // Route POST /api/reset : réinitialise le compteur à 0
+    %31 = chan_send %3 %4
+    %32 = struct_new HttpResponseInt
+    %33 = struct_set %32 0 %11
+    %34 = struct_set %33 1 %6
+    %35 = struct_set %34 2 %4
+    %36 = syscall Net "net.respond" %35
+    br bb1
 
-    %85 = struct_new Leaf
-    %86 = const_str "span"
-    %87 = struct_set %85 0 %86
-    %88 = const_str "counter-val|id=knr-counter"
-    %89 = struct_set %87 1 %88
-    %90 = const_str "{{KNR_COUNTER}}"
-    %91 = struct_set %89 2 %90
-
-    %92 = struct_new Leaf
-    %93 = const_str "button"
-    %94 = struct_set %92 0 %93
-    %95 = const_str "btn btn-sec|onclick=knrAction('dec')"
-    %96 = struct_set %94 1 %95
-    %97 = const_str "-1"
-    %98 = struct_set %96 2 %97
-
-    %99 = struct_new Leaf
-    %100 = const_str "button"
-    %101 = struct_set %99 0 %100
-    %102 = const_str "btn|onclick=knrAction('inc')"
-    %103 = struct_set %101 1 %102
-    %104 = const_str "+1 (struct_set in-place)"
-    %105 = struct_set %103 2 %104
-
-    %106 = struct_new Leaf
-    %107 = const_str "button"
-    %108 = struct_set %106 0 %107
-    %109 = const_str "btn btn-sec|onclick=knrAction('reset')"
-    %110 = struct_set %108 1 %109
-    %111 = const_str "Reset"
-    %112 = struct_set %110 2 %111
-
-    %113 = struct_new Leaf
-    %114 = const_str "div"
-    %115 = struct_set %113 0 %114
-    %116 = const_str "counter-status|id=knr-status"
-    %117 = struct_set %115 1 %116
-    %118 = const_str " État initial : %state = Alive(struct[Counter]) • Cliquez pour muter le registre"
-    %119 = struct_set %117 2 %118
-
-    %120 = vec_new struct[Leaf]
-    %121 = vec_push %120 %84
-    %122 = vec_push %121 %91
-    %123 = vec_push %122 %98
-    %124 = vec_push %123 %105
-    %125 = vec_push %124 %112
-    %126 = vec_push %125 %119
-
-    %127 = struct_new Card
-    %128 = const_str "div"
-    %129 = struct_set %127 0 %128
-    %130 = const_str "counter-box"
-    %131 = struct_set %129 1 %130
-    %132 = struct_set %131 3 %126
-
-    %133 = vec_new struct[Card]
-    %134 = vec_push %133 %46
-    %135 = vec_push %134 %77
-    %136 = vec_push %135 %132
-
-    %137 = struct_new Section
-    %138 = const_str "section"
-    %139 = struct_set %137 0 %138
-    %140 = struct_set %139 3 %136
-
+bb7:
     // =========================================================================
-    // 2. Grille des 4 Piliers Techniques
+    // 2. Route GET / : rendu SSR complet du VDOM avec la valeur vivante %13
     // =========================================================================
-    %141 = struct_new Leaf
-    %142 = const_str "div"
-    %143 = struct_set %141 0 %142
-    %144 = const_str "card-tag"
-    %145 = struct_set %143 1 %144
-    %146 = const_str "01 / PROPRIÉTÉ LINÉAIRE"
-    %147 = struct_set %145 2 %146
+    %37 = chan_send %3 %13
 
-    %148 = struct_new Leaf
-    %149 = const_str "h3"
-    %150 = struct_set %148 0 %149
-    %151 = const_str "card-title"
-    %152 = struct_set %150 1 %151
-    %153 = const_str "Mutation In-Place sans GC"
-    %154 = struct_set %152 2 %153
+    %38 = struct_new Leaf
+    %39 = const_str "title"
+    %40 = struct_set %38 0 %39
+    %41 = const_str "knr — SSA Linear Language (SSR)"
+    %42 = struct_set %40 2 %41
 
-    %155 = struct_new Leaf
-    %156 = const_str "p"
-    %157 = struct_set %155 0 %156
-    %158 = const_str "card-desc"
-    %159 = struct_set %157 1 %158
-    %160 = const_str "Les types linéaires (buf, vec, map, chan, struct) ont un propriétaire unique. struct_set et map_set mutent la mémoire sur place sans jamais cloner."
-    %161 = struct_set %159 2 %160
+    %43 = struct_new Leaf
+    %44 = const_str "style"
+    %45 = struct_set %43 0 %44
+    %46 = const_str "* { box-sizing: border-box; margin: 0; padding: 0; } body { background: #070b14; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; } .page { max-width: 1080px; margin: 0 auto; padding: 48px 24px 80px; } .nav { display: flex; justify-content: space-between; align-items: center; padding-bottom: 36px; border-bottom: 1px solid #1e293b; margin-bottom: 56px; } .logo { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.03em; color: #38bdf8; font-family: monospace; } .badge { background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); padding: 4px 12px; border-radius: 999px; font-size: 0.8rem; font-family: monospace; } .hero { text-align: left; margin-bottom: 48px; } .hero-title { font-size: 3rem; font-weight: 800; line-height: 1.15; letter-spacing: -0.03em; color: #f8fafc; margin-bottom: 18px; } .hero-sub { font-size: 1.18rem; color: #94a3b8; max-width: 760px; margin-bottom: 24px; } .pill { background: #0f172a; border: 1px solid #1e293b; color: #cbd5e1; padding: 10px 18px; border-radius: 8px; font-family: monospace; font-size: 0.88rem; display: inline-block; margin-bottom: 28px; } .counter-box { background: linear-gradient(135deg, #0f172a 0%, #111c35 100%); border: 1px solid #38bdf8; border-radius: 14px; padding: 22px 26px; display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 56px; box-shadow: 0 10px 30px rgba(56, 189, 248, 0.08); } .counter-val { font-family: monospace; font-size: 2.2rem; font-weight: 800; color: #38bdf8; min-width: 64px; text-align: center; background: #060a12; border: 1px solid #1e293b; padding: 6px 18px; border-radius: 10px; } .btn { background: #38bdf8; color: #050811; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; font-family: monospace; font-size: 0.95rem; cursor: pointer; transition: transform 0.1s, opacity 0.15s; } .btn:hover { opacity: 0.92; transform: translateY(-1px); } .btn:active { transform: translateY(0); } .btn-sec { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; } .counter-status { font-family: monospace; font-size: 0.8rem; color: #94a3b8; width: 100%; margin-top: 4px; } .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; margin-bottom: 56px; } .card { background: linear-gradient(180deg, #0f172a 0%, #0b1120 100%); border: 1px solid #1e293b; border-radius: 12px; padding: 24px; } .card-tag { font-family: monospace; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #38bdf8; margin-bottom: 8px; } .card-title { font-size: 1.15rem; font-weight: 700; color: #f1f5f9; margin-bottom: 10px; } .card-desc { font-size: 0.92rem; color: #94a3b8; } .code-section { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; margin-bottom: 56px; } .code-card { background: #090e1a; border: 1px solid #1e293b; border-radius: 12px; padding: 22px; } .pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; color: #a5f3fc; white-space: pre-wrap; background: #050811; padding: 16px; border-radius: 8px; border: 1px solid #162032; margin-top: 10px; } .footer-box { grid-column: 1 / -1; border-top: 1px solid #1e293b; padding-top: 28px; margin-top: 16px; } .footer { color: #64748b; font-size: 0.88rem; font-family: monospace; text-align: center; }"
+    %47 = struct_set %45 2 %46
 
-    %162 = vec_new struct[Leaf]
-    %163 = vec_push %162 %147
-    %164 = vec_push %163 %154
-    %165 = vec_push %164 %161
+    %48 = struct_new Leaf
+    %49 = const_str "script"
+    %50 = struct_set %48 0 %49
+    %51 = const_str "document.addEventListener('click', async function(e) { const btn = e.target.closest('button'); if (!btn) return; const op = btn.classList.contains('act-inc') ? 'inc' : (btn.classList.contains('act-dec') ? 'dec' : (btn.classList.contains('act-reset') ? 'reset' : null)); if (!op) return; const el = document.querySelector('.counter-val'); const st = document.querySelector('.counter-status'); const cur = parseInt(el.textContent || '0', 10) || 0; if (location.protocol.startsWith('http')) { try { const r = await fetch('/api/' + op, { method: 'POST' }); if (r.ok) { const txt = (await r.text()).trim(); el.textContent = txt; st.textContent = 'Syscall Net + Ui SSR (site/server.ssa) -> reg %13 muté en VM (count = ' + txt + ')'; return; } } catch (_) {} } const next = op === 'inc' ? cur + 1 : (op === 'dec' ? cur - 1 : 0); el.textContent = next; st.textContent = 'Bridge VDOM local -> struct_set %state 0 ' + next + ' (0 allocation GC)'; });"
+    %52 = struct_set %50 2 %51
 
-    %166 = struct_new Card
-    %167 = const_str "article"
-    %168 = struct_set %166 0 %167
-    %169 = const_str "card"
-    %170 = struct_set %168 1 %169
-    %171 = struct_set %170 3 %165
+    %53 = struct_new Leaf
+    %54 = const_str "span"
+    %55 = struct_set %53 0 %54
+    %56 = const_str "logo"
+    %57 = struct_set %55 1 %56
+    %58 = const_str "knr // SSA Linear IR"
+    %59 = struct_set %57 2 %58
 
-    %172 = struct_new Leaf
-    %173 = const_str "div"
-    %174 = struct_set %172 0 %173
-    %175 = const_str "card-tag"
-    %176 = struct_set %174 1 %175
-    %177 = const_str "02 / JUGE STATIQUE (< 100 µs)"
-    %178 = struct_set %176 2 %177
+    %60 = struct_new Leaf
+    %61 = const_str "span"
+    %62 = struct_set %60 0 %61
+    %63 = const_str "badge"
+    %64 = struct_set %62 1 %63
+    %65 = const_str "LIVE SSR • 100% Pure knr (.ssa)"
+    %66 = struct_set %64 2 %65
 
-    %179 = struct_new Leaf
-    %180 = const_str "h3"
-    %181 = struct_set %179 0 %180
-    %182 = const_str "card-title"
-    %183 = struct_set %181 1 %182
-    %184 = const_str "Diagnostics JSON & fix_hint"
-    %185 = struct_set %183 2 %184
+    %67 = vec_new struct[Leaf]
+    %68 = vec_push %67 %42
+    %69 = vec_push %68 %47
+    %70 = vec_push %69 %52
+    %71 = vec_push %70 %59
+    %72 = vec_push %71 %66
 
-    %186 = struct_new Leaf
-    %187 = const_str "p"
-    %188 = struct_set %186 0 %187
-    %189 = const_str "card-desc"
-    %190 = struct_set %188 1 %189
-    %191 = const_str "4 passes (SSA, Alive/Moved, Types, Effets). En cas de UseAfterMove ou LinearLeak, knr-verify renvoie l'état des registres vivants et le correctif exact."
-    %192 = struct_set %190 2 %191
+    %73 = struct_new Card
+    %74 = const_str "header"
+    %75 = struct_set %73 0 %74
+    %76 = const_str "nav"
+    %77 = struct_set %75 1 %76
+    %78 = struct_set %77 3 %72
 
-    %193 = vec_new struct[Leaf]
-    %194 = vec_push %193 %178
-    %195 = vec_push %194 %185
-    %196 = vec_push %195 %192
+    // Hero
+    %79 = struct_new Leaf
+    %80 = const_str "h1"
+    %81 = struct_set %79 0 %80
+    %82 = const_str "hero-title"
+    %83 = struct_set %81 1 %82
+    %84 = const_str "Le langage SSA à mémoire linéaire pensé pour les Agents IA et le bas niveau."
+    %85 = struct_set %83 2 %84
 
-    %197 = struct_new Card
-    %198 = const_str "article"
-    %199 = struct_set %197 0 %198
-    %200 = const_str "card"
-    %201 = struct_set %199 1 %200
-    %202 = struct_set %201 3 %196
+    %86 = struct_new Leaf
+    %87 = const_str "p"
+    %88 = struct_set %86 0 %87
+    %89 = const_str "hero-sub"
+    %90 = struct_set %88 1 %89
+    %91 = const_str "Zéro Garbage Collector. Zéro emprunt complexe. Mutation sur place garantie par machine à états linéaire en moins de 100 µs, servi en direct par une boucle HTTP écrite à 100% en knr (site/server.ssa)."
+    %92 = struct_set %90 2 %91
 
-    %203 = struct_new Leaf
-    %204 = const_str "div"
-    %205 = struct_set %203 0 %204
-    %206 = const_str "card-tag"
-    %207 = struct_set %205 1 %206
-    %208 = const_str "03 / SYSTÈME D'EFFETS"
-    %209 = struct_set %207 2 %208
+    %93 = struct_new Leaf
+    %94 = const_str "div"
+    %95 = struct_set %93 0 %94
+    %96 = const_str "pill"
+    %97 = struct_set %95 1 %96
+    %98 = const_str "$ knr run site/server.ssa --gas 100000000   -->   http://127.0.0.1:8080"
+    %99 = struct_set %97 2 %98
 
-    %210 = struct_new Leaf
-    %211 = const_str "h3"
-    %212 = struct_set %210 0 %211
-    %213 = const_str "card-title"
-    %214 = struct_set %212 1 %213
-    %215 = const_str "Net, Ui, Hw & Async isolés"
-    %216 = struct_set %214 2 %215
+    %100 = vec_new struct[Leaf]
+    %101 = vec_push %100 %85
+    %102 = vec_push %101 %92
+    %103 = vec_push %102 %99
 
-    %217 = struct_new Leaf
-    %218 = const_str "p"
-    %219 = struct_set %217 0 %218
-    %220 = const_str "card-desc"
-    %221 = struct_set %219 1 %220
-    %222 = const_str "Serveur HTTP Tokio, moteur VDOM HTML (qui sert cette page en direct !) et buffers matériels alignés sur 64 octets pour SIMD XOR et DMA."
-    %223 = struct_set %221 2 %222
+    %104 = struct_new Card
+    %105 = const_str "div"
+    %106 = struct_set %104 0 %105
+    %107 = const_str "hero"
+    %108 = struct_set %106 1 %107
+    %109 = struct_set %108 3 %103
 
-    %224 = vec_new struct[Leaf]
-    %225 = vec_push %224 %209
-    %226 = vec_push %225 %216
-    %227 = vec_push %226 %223
+    // Composant Interactif Counter (valeur %13 rendue dynamiquement dans le VDOM)
+    %110 = struct_new Leaf
+    %111 = const_str "div"
+    %112 = struct_set %110 0 %111
+    %113 = const_str "card-tag"
+    %114 = struct_set %112 1 %113
+    %115 = const_str "DÉMO INTERACTIVE — COMPTEUR SSR EN PUR KNR (SITE/SERVER.SSA)"
+    %116 = struct_set %114 2 %115
 
-    %228 = struct_new Card
-    %229 = const_str "article"
-    %230 = struct_set %228 0 %229
-    %231 = const_str "card"
-    %232 = struct_set %230 1 %231
-    %233 = struct_set %232 3 %227
+    %117 = struct_new Leaf
+    %118 = const_str "span"
+    %119 = struct_set %117 0 %118
+    %120 = const_str "counter-val"
+    %121 = struct_set %119 1 %120
+    %122 = syscall Ui "ui.render" %13
+    %123 = struct_set %121 2 %122
 
-    %234 = struct_new Leaf
-    %235 = const_str "div"
-    %236 = struct_set %234 0 %235
-    %237 = const_str "card-tag"
-    %238 = struct_set %236 1 %237
-    %239 = const_str "04 / MULTI-CIBLES & KNIR"
-    %240 = struct_set %238 2 %239
+    %124 = struct_new Leaf
+    %125 = const_str "button"
+    %126 = struct_set %124 0 %125
+    %127 = const_str "btn btn-sec act-dec"
+    %128 = struct_set %126 1 %127
+    %129 = const_str "-1"
+    %130 = struct_set %128 2 %129
 
-    %241 = struct_new Leaf
-    %242 = const_str "h3"
-    %243 = struct_set %241 0 %242
-    %244 = const_str "card-title"
-    %245 = struct_set %243 1 %244
-    %246 = const_str "VM Gas, Cranelift & WASM"
-    %247 = struct_set %245 2 %246
+    %131 = struct_new Leaf
+    %132 = const_str "button"
+    %133 = struct_set %131 0 %132
+    %134 = const_str "btn act-inc"
+    %135 = struct_set %133 1 %134
+    %136 = const_str "+1 (add %13 1)"
+    %137 = struct_set %135 2 %136
 
-    %248 = struct_new Leaf
-    %249 = const_str "p"
-    %250 = struct_set %248 0 %249
-    %251 = const_str "card-desc"
-    %252 = struct_set %250 1 %251
-    %253 = const_str "Bijection 1:1 entre texte .ssa et bytecode 64-bit .knrbin. Oracle VM avec compteur de cycles anti-boucle infinie et compilation native ELF / WebAssembly."
-    %254 = struct_set %252 2 %253
+    %138 = struct_new Leaf
+    %139 = const_str "button"
+    %140 = struct_set %138 0 %139
+    %141 = const_str "btn btn-sec act-reset"
+    %142 = struct_set %140 1 %141
+    %143 = const_str "Reset"
+    %144 = struct_set %142 2 %143
 
-    %255 = vec_new struct[Leaf]
-    %256 = vec_push %255 %240
-    %257 = vec_push %256 %247
-    %258 = vec_push %257 %254
+    %145 = struct_new Leaf
+    %146 = const_str "div"
+    %147 = struct_set %145 0 %146
+    %148 = const_str "counter-status"
+    %149 = struct_set %147 1 %148
+    %150 = const_str "État maintenu dans %3 (chan[i64]) par la boucle bb1 de site/server.ssa"
+    %151 = struct_set %149 2 %150
 
-    %259 = struct_new Card
-    %260 = const_str "article"
-    %261 = struct_set %259 0 %260
-    %262 = const_str "card"
-    %263 = struct_set %261 1 %262
-    %264 = struct_set %263 3 %258
+    %152 = vec_new struct[Leaf]
+    %153 = vec_push %152 %116
+    %154 = vec_push %153 %123
+    %155 = vec_push %154 %130
+    %156 = vec_push %155 %137
+    %157 = vec_push %156 %144
+    %158 = vec_push %157 %151
 
-    %265 = vec_new struct[Card]
-    %266 = vec_push %265 %171
-    %267 = vec_push %266 %202
-    %268 = vec_push %267 %233
-    %269 = vec_push %268 %264
+    %159 = struct_new Card
+    %160 = const_str "div"
+    %161 = struct_set %159 0 %160
+    %162 = const_str "counter-box"
+    %163 = struct_set %161 1 %162
+    %164 = struct_set %163 3 %158
 
-    %270 = struct_new Section
-    %271 = const_str "section"
-    %272 = struct_set %270 0 %271
-    %273 = const_str "grid"
-    %274 = struct_set %272 1 %273
-    %275 = struct_set %274 3 %269
+    %165 = vec_new struct[Card]
+    %166 = vec_push %165 %78
+    %167 = vec_push %166 %109
+    %168 = vec_push %167 %164
 
-    // =========================================================================
-    // 3. Section Exemples de Code (Schéma Struct + Serveur SSR)
-    // =========================================================================
-    %276 = struct_new Leaf
-    %277 = const_str "div"
-    %278 = struct_set %276 0 %277
-    %279 = const_str "card-tag"
-    %280 = struct_set %278 1 %279
-    %281 = const_str "EXEMPLE 1 — SCHÉMAS STRICTS & TYPES LINÉAIRES"
-    %282 = struct_set %280 2 %281
+    %169 = struct_new Section
+    %170 = const_str "section"
+    %171 = struct_set %169 0 %170
+    %172 = struct_set %171 3 %168
 
-    %283 = struct_new Leaf
-    %284 = const_str "pre"
-    %285 = struct_set %283 0 %284
-    %286 = const_str "pre"
-    %287 = struct_set %285 1 %286
-    %288 = const_str "schema User {\n    0: id i64,\n    1: email str,\n    2: active bool,\n}\n\nfn make_user(%0: i64, %1: str) -> struct[User] {\nbb0:\n    %2 = struct_new User\n    %3 = struct_set %2 0 %0\n    %4 = struct_set %3 1 %1\n    %5 = const_bool true\n    %6 = struct_set %4 2 %5\n    ret %6\n}"
-    %289 = struct_set %287 2 %288
+    // Grille des 4 Piliers Techniques
+    %173 = struct_new Leaf
+    %174 = const_str "div"
+    %175 = struct_set %173 0 %174
+    %176 = const_str "card-tag"
+    %177 = struct_set %175 1 %176
+    %178 = const_str "01 / PROPRIÉTÉ LINÉAIRE"
+    %179 = struct_set %177 2 %178
 
-    %290 = vec_new struct[Leaf]
-    %291 = vec_push %290 %282
-    %292 = vec_push %291 %289
+    %180 = struct_new Leaf
+    %181 = const_str "h3"
+    %182 = struct_set %180 0 %181
+    %183 = const_str "card-title"
+    %184 = struct_set %182 1 %183
+    %185 = const_str "Mutation In-Place sans GC"
+    %186 = struct_set %184 2 %185
 
-    %293 = struct_new Card
-    %294 = const_str "div"
-    %295 = struct_set %293 0 %294
-    %296 = const_str "code-card"
-    %297 = struct_set %295 1 %296
-    %298 = struct_set %297 3 %292
+    %187 = struct_new Leaf
+    %188 = const_str "p"
+    %189 = struct_set %187 0 %188
+    %190 = const_str "card-desc"
+    %191 = struct_set %189 1 %190
+    %192 = const_str "Les types linéaires (buf, vec, map, chan, struct) ont un propriétaire unique. struct_set et map_set mutent la mémoire sur place sans jamais cloner."
+    %193 = struct_set %191 2 %192
 
-    %299 = struct_new Leaf
-    %300 = const_str "div"
-    %301 = struct_set %299 0 %300
-    %302 = const_str "card-tag"
-    %303 = struct_set %301 1 %302
-    %304 = const_str "EXEMPLE 2 — SERVEUR SSR DIRECT (UI + NET)"
-    %305 = struct_set %303 2 %304
+    %194 = vec_new struct[Leaf]
+    %195 = vec_push %194 %179
+    %196 = vec_push %195 %186
+    %197 = vec_push %196 %193
 
-    %306 = struct_new Leaf
-    %307 = const_str "pre"
-    %308 = struct_set %306 0 %307
-    %309 = const_str "pre"
-    %310 = struct_set %308 1 %309
-    %311 = const_str "fn main() -> i64 effects(Ui, Net) {\nbb0:\n    // 1. Assemble le VDOM typé (struct[Page])\n    %357 = syscall Ui \"ui.render\" %356\n    // 2. Sert le HTML + endpoints /api/inc, /api/dec, /api/reset\n    %358 = syscall Net \"net.serve_html\" %357\n    ret %358\n}"
-    %312 = struct_set %310 2 %311
+    %198 = struct_new Card
+    %199 = const_str "article"
+    %200 = struct_set %198 0 %199
+    %201 = const_str "card"
+    %202 = struct_set %200 1 %201
+    %203 = struct_set %202 3 %197
 
-    %313 = vec_new struct[Leaf]
-    %314 = vec_push %313 %305
-    %315 = vec_push %314 %312
+    %204 = struct_new Leaf
+    %205 = const_str "div"
+    %206 = struct_set %204 0 %205
+    %207 = const_str "card-tag"
+    %208 = struct_set %206 1 %207
+    %209 = const_str "02 / JUGE STATIQUE (< 100 µs)"
+    %210 = struct_set %208 2 %209
 
-    %316 = struct_new Card
-    %317 = const_str "div"
-    %318 = struct_set %316 0 %317
-    %319 = const_str "code-card"
-    %320 = struct_set %318 1 %319
-    %321 = struct_set %320 3 %315
+    %211 = struct_new Leaf
+    %212 = const_str "h3"
+    %213 = struct_set %211 0 %212
+    %214 = const_str "card-title"
+    %215 = struct_set %213 1 %214
+    %216 = const_str "Diagnostics JSON & fix_hint"
+    %217 = struct_set %215 2 %216
+
+    %218 = struct_new Leaf
+    %219 = const_str "p"
+    %220 = struct_set %218 0 %219
+    %221 = const_str "card-desc"
+    %222 = struct_set %220 1 %221
+    %223 = const_str "4 passes (SSA, Alive/Moved, Types, Effets). En cas de UseAfterMove ou LinearLeak, knr-verify renvoie l'état des registres vivants et le correctif exact."
+    %224 = struct_set %222 2 %223
+
+    %225 = vec_new struct[Leaf]
+    %226 = vec_push %225 %210
+    %227 = vec_push %226 %217
+    %228 = vec_push %227 %224
+
+    %229 = struct_new Card
+    %230 = const_str "article"
+    %231 = struct_set %229 0 %230
+    %232 = const_str "card"
+    %233 = struct_set %231 1 %232
+    %234 = struct_set %233 3 %228
+
+    %235 = struct_new Leaf
+    %236 = const_str "div"
+    %237 = struct_set %235 0 %236
+    %238 = const_str "card-tag"
+    %239 = struct_set %237 1 %238
+    %240 = const_str "03 / SYSTÈME D'EFFETS"
+    %241 = struct_set %239 2 %240
+
+    %242 = struct_new Leaf
+    %243 = const_str "h3"
+    %244 = struct_set %242 0 %243
+    %245 = const_str "card-title"
+    %246 = struct_set %244 1 %245
+    %247 = const_str "Net, Ui, Hw & Async isolés"
+    %248 = struct_set %246 2 %247
+
+    %249 = struct_new Leaf
+    %250 = const_str "p"
+    %251 = struct_set %249 0 %250
+    %252 = const_str "card-desc"
+    %253 = struct_set %251 1 %252
+    %254 = const_str "Serveur HTTP Tokio (net.listen, net.wait_req, net.respond), moteur VDOM HTML et buffers matériels alignés sur 64 octets pour SIMD XOR."
+    %255 = struct_set %253 2 %254
+
+    %256 = vec_new struct[Leaf]
+    %257 = vec_push %256 %241
+    %258 = vec_push %257 %248
+    %259 = vec_push %258 %255
+
+    %260 = struct_new Card
+    %261 = const_str "article"
+    %262 = struct_set %260 0 %261
+    %263 = const_str "card"
+    %264 = struct_set %262 1 %263
+    %265 = struct_set %264 3 %259
+
+    %266 = struct_new Leaf
+    %267 = const_str "div"
+    %268 = struct_set %266 0 %267
+    %269 = const_str "card-tag"
+    %270 = struct_set %268 1 %269
+    %271 = const_str "04 / MULTI-CIBLES & KNIR"
+    %272 = struct_set %270 2 %271
+
+    %273 = struct_new Leaf
+    %274 = const_str "h3"
+    %275 = struct_set %273 0 %274
+    %276 = const_str "card-title"
+    %277 = struct_set %275 1 %276
+    %278 = const_str "VM Gas, Cranelift & WASM"
+    %279 = struct_set %277 2 %278
+
+    %280 = struct_new Leaf
+    %281 = const_str "p"
+    %282 = struct_set %280 0 %281
+    %283 = const_str "card-desc"
+    %284 = struct_set %282 1 %283
+    %285 = const_str "Bijection 1:1 entre texte .ssa et bytecode 64-bit .knrbin. Oracle VM avec compteur de cycles anti-boucle infinie et compilation native ELF / WebAssembly."
+    %286 = struct_set %284 2 %285
+
+    %287 = vec_new struct[Leaf]
+    %288 = vec_push %287 %272
+    %289 = vec_push %288 %279
+    %290 = vec_push %289 %286
+
+    %291 = struct_new Card
+    %292 = const_str "article"
+    %293 = struct_set %291 0 %292
+    %294 = const_str "card"
+    %295 = struct_set %293 1 %294
+    %296 = struct_set %295 3 %290
+
+    %297 = vec_new struct[Card]
+    %298 = vec_push %297 %203
+    %299 = vec_push %298 %234
+    %300 = vec_push %299 %265
+    %301 = vec_push %300 %296
+
+    %302 = struct_new Section
+    %303 = const_str "section"
+    %304 = struct_set %302 0 %303
+    %305 = const_str "grid"
+    %306 = struct_set %304 1 %305
+    %307 = struct_set %306 3 %301
+
+    // Exemples de code
+    %308 = struct_new Leaf
+    %309 = const_str "div"
+    %310 = struct_set %308 0 %309
+    %311 = const_str "card-tag"
+    %312 = struct_set %310 1 %311
+    %313 = const_str "EXEMPLE 1 — SCHÉMAS STRICTS & TYPES LINÉAIRES"
+    %314 = struct_set %312 2 %313
+
+    %315 = struct_new Leaf
+    %316 = const_str "pre"
+    %317 = struct_set %315 0 %316
+    %318 = const_str "pre"
+    %319 = struct_set %317 1 %318
+    %320 = const_str "schema User {\n    0: id i64,\n    1: email str,\n    2: active bool,\n}\n\nfn make_user(%0: i64, %1: str) -> struct[User] {\nbb0:\n    %2 = struct_new User\n    %3 = struct_set %2 0 %0\n    %4 = struct_set %3 1 %1\n    %5 = const_bool true\n    %6 = struct_set %4 2 %5\n    ret %6\n}"
+    %321 = struct_set %319 2 %320
+
+    %322 = vec_new struct[Leaf]
+    %323 = vec_push %322 %314
+    %324 = vec_push %323 %321
+
+    %325 = struct_new Card
+    %326 = const_str "div"
+    %327 = struct_set %325 0 %326
+    %328 = const_str "code-card"
+    %329 = struct_set %327 1 %328
+    %330 = struct_set %329 3 %324
+
+    %331 = struct_new Leaf
+    %332 = const_str "div"
+    %333 = struct_set %331 0 %332
+    %334 = const_str "card-tag"
+    %335 = struct_set %333 1 %334
+    %336 = const_str "EXEMPLE 2 — BOUCLE HTTP SSR EN KNR (SITE/SERVER.SSA)"
+    %337 = struct_set %335 2 %336
+
+    %338 = struct_new Leaf
+    %339 = const_str "pre"
+    %340 = struct_set %338 0 %339
+    %341 = const_str "pre"
+    %342 = struct_set %340 1 %341
+    %343 = const_str "bb1:\n    %10 = syscall Net \"net.wait_req\" %1\n    %11 = struct_get %10 0\n    %12 = struct_get %10 2\n    free %10\n    %13 = chan_recv %3\n    %14 = cmp_eq %12 %7\n    br_if %14 bb2 bb3"
+    %344 = struct_set %342 2 %343
+
+    %345 = vec_new struct[Leaf]
+    %346 = vec_push %345 %337
+    %347 = vec_push %346 %344
+
+    %348 = struct_new Card
+    %349 = const_str "div"
+    %350 = struct_set %348 0 %349
+    %351 = const_str "code-card"
+    %352 = struct_set %350 1 %351
+    %353 = struct_set %352 3 %347
 
     // Footer
-    %322 = struct_new Leaf
-    %323 = const_str "p"
-    %324 = struct_set %322 0 %323
-    %325 = const_str "footer"
-    %326 = struct_set %324 1 %325
-    %327 = const_str "Servi en direct en SSR par knr (site/server.ssa) via UiPlatform + NetPlatform (Tokio)."
-    %328 = struct_set %326 2 %327
+    %354 = struct_new Leaf
+    %355 = const_str "p"
+    %356 = struct_set %354 0 %355
+    %357 = const_str "footer"
+    %358 = struct_set %356 1 %357
+    %359 = const_str "Servi en direct en SSR par knr (site/server.ssa) via UiPlatform + NetPlatform (Tokio)."
+    %360 = struct_set %358 2 %359
 
-    %329 = vec_new struct[Leaf]
-    %330 = vec_push %329 %328
+    %361 = vec_new struct[Leaf]
+    %362 = vec_push %361 %360
 
-    %331 = struct_new Card
-    %332 = const_str "footer"
-    %333 = struct_set %331 0 %332
-    %334 = const_str "footer-box"
-    %335 = struct_set %333 1 %334
-    %336 = struct_set %335 3 %330
+    %363 = struct_new Card
+    %364 = const_str "footer"
+    %365 = struct_set %363 0 %364
+    %366 = const_str "footer-box"
+    %367 = struct_set %365 1 %366
+    %368 = struct_set %367 3 %362
 
-    %337 = vec_new struct[Card]
-    %338 = vec_push %337 %298
-    %339 = vec_push %338 %321
-    %340 = vec_push %339 %336
+    %369 = vec_new struct[Card]
+    %370 = vec_push %369 %330
+    %371 = vec_push %370 %353
+    %372 = vec_push %371 %368
 
-    %341 = struct_new Section
-    %342 = const_str "section"
-    %343 = struct_set %341 0 %342
-    %344 = const_str "code-section"
-    %345 = struct_set %343 1 %344
-    %346 = struct_set %345 3 %340
+    %373 = struct_new Section
+    %374 = const_str "section"
+    %375 = struct_set %373 0 %374
+    %376 = const_str "code-section"
+    %377 = struct_set %375 1 %376
+    %378 = struct_set %377 3 %372
 
-    // =========================================================================
-    // 4. Rendu VDOM (Ui) -> Serveur HTTP SSR (Net)
-    // =========================================================================
-    %347 = vec_new struct[Section]
-    %348 = vec_push %347 %140
-    %349 = vec_push %348 %275
-    %350 = vec_push %349 %346
+    // Assemblage final de la Page, rendu VDOM et envoi de la réponse HTTP 200
+    %379 = vec_new struct[Section]
+    %380 = vec_push %379 %172
+    %381 = vec_push %380 %307
+    %382 = vec_push %381 %378
 
-    %351 = struct_new Page
-    %352 = const_str "main"
-    %353 = struct_set %351 0 %352
-    %354 = const_str "page"
-    %355 = struct_set %353 1 %354
-    %356 = struct_set %355 3 %350
+    %383 = struct_new Page
+    %384 = const_str "main"
+    %385 = struct_set %383 0 %384
+    %386 = const_str "page"
+    %387 = struct_set %385 1 %386
+    %388 = struct_set %387 3 %382
 
-    %357 = syscall Ui "ui.render" %356
-    %358 = syscall Net "net.serve_html" %357
-    ret %358
+    %389 = syscall Ui "ui.render" %388
+    %390 = struct_new HttpResponse
+    %391 = struct_set %390 0 %11
+    %392 = struct_set %391 1 %6
+    %393 = struct_set %392 2 %389
+    %394 = syscall Net "net.respond" %393
+    br bb1
 }

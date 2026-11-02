@@ -56,12 +56,6 @@ pub fn execute(file: &Path, gas: u64, trace: bool) -> Result<(), CliError> {
         let json_output = serde_json::to_string_pretty(&trace_records)
             .map_err(|e| CliError::Other(e.to_string()))?;
         println!("{json_output}");
-    } else if let Value::Str(s) = &val {
-        if s.starts_with('<') && s.ends_with('>') {
-            println!("{s}");
-        } else {
-            println!("{val}");
-        }
     } else {
         println!("{val}");
     }

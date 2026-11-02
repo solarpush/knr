@@ -75,6 +75,9 @@ impl VNode {
     pub fn from_value(val: &Value) -> Result<Self, RuntimeError> {
         match val {
             Value::Str(s) => Ok(VNode::Text(s.clone())),
+            Value::I64(n) => Ok(VNode::Text(n.to_string())),
+            Value::F64(n) => Ok(VNode::Text(n.to_string())),
+            Value::Bool(b) => Ok(VNode::Text(b.to_string())),
             Value::Map(m) => {
                 let tag = m
                     .get("tag")
@@ -157,21 +160,7 @@ impl VNode {
                             }
                         }
                         Value::Str(s) if !s.is_empty() => {
-                            if tag.eq_ignore_ascii_case("meta") {
-                                props.insert("charset".to_string(), s.clone());
-                            } else if s.contains('|') {
-                                for (idx, part) in s.split('|').enumerate() {
-                                    let part = part.trim();
-                                    if part.is_empty() {
-                                        continue;
-                                    }
-                                    if idx == 0 && !part.contains('=') {
-                                        props.insert("class".to_string(), part.to_string());
-                                    } else if let Some((k, v)) = part.split_once('=') {
-                                        props.insert(k.trim().to_string(), v.trim().to_string());
-                                    }
-                                }
-                            } else if s.contains(':') {
+                            if s.contains(':') {
                                 props.insert("style".to_string(), s.clone());
                             } else {
                                 props.insert("class".to_string(), s.clone());
@@ -181,11 +170,13 @@ impl VNode {
                     }
                 }
 
-                let text = fields
-                    .get(2)
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string());
+                let text = match fields.get(2) {
+                    Some(Value::Str(s)) if !s.is_empty() => Some(s.clone()),
+                    Some(Value::I64(n)) => Some(n.to_string()),
+                    Some(Value::F64(n)) => Some(n.to_string()),
+                    Some(Value::Bool(b)) => Some(b.to_string()),
+                    _ => None,
+                };
 
                 let mut children = Vec::new();
                 if let Some(Value::Vec(cv)) = fields.get(3) {

@@ -234,7 +234,7 @@ impl NetPlatform {
         })
     }
 
-    /// Receives a pending request from a channel.
+    /// Receives a pending request from a channel (non-blocking).
     pub fn recv_request(&self, chan_id: usize) -> Result<Option<Value>, RuntimeError> {
         let rx_arc = self
             .request_receivers
@@ -247,6 +247,22 @@ impl NetPlatform {
         self.block_on(async move {
             let mut rx = rx_arc.lock().await;
             Ok(rx.try_recv().ok())
+        })
+    }
+
+    /// Waits asynchronously for the next incoming request on a channel (blocking until one arrives).
+    pub fn wait_request(&self, chan_id: usize) -> Result<Option<Value>, RuntimeError> {
+        let rx_arc = self
+            .request_receivers
+            .lock()
+            .unwrap()
+            .get(&chan_id)
+            .cloned()
+            .ok_or_else(|| RuntimeError::Channel(format!("Channel {chan_id} not found")))?;
+
+        self.block_on(async move {
+            let mut rx = rx_arc.lock().await;
+            Ok(rx.recv().await)
         })
     }
 }
@@ -276,6 +292,9 @@ impl HostPlatform for NetPlatform {
                     _ => 0,
                 };
                 let (chan_id, bound_port) = self.listen(port)?;
+                if port > 0 {
+                    eprintln!("Listening on http://127.0.0.1:{bound_port}");
+                }
                 let mut res = BTreeMap::new();
                 res.insert("chan".to_string(), Value::Chan(chan_id));
                 res.insert("port".to_string(), Value::I64(bound_port as i64));
@@ -309,6 +328,20 @@ impl HostPlatform for NetPlatform {
                         let body = match &v[2] {
                             Value::Buf(b) => b.clone(),
                             Value::Str(s) => s.as_bytes().to_vec(),
+                            Value::I64(n) => n.to_string().into_bytes(),
+                            _ => Vec::new(),
+                        };
+                        (req_id, status, body)
+                    }
+                    Value::Struct { fields, .. } if fields.len() >= 3 => {
+                        let req_id = fields[0].as_i64().ok_or_else(|| {
+                            RuntimeError::InvalidArgument("req_id must be i64".into())
+                        })? as usize;
+                        let status = fields[1].as_i64().unwrap_or(200);
+                        let body = match &fields[2] {
+                            Value::Buf(b) => b.clone(),
+                            Value::Str(s) => s.as_bytes().to_vec(),
+                            Value::I64(n) => n.to_string().into_bytes(),
                             _ => Vec::new(),
                         };
                         (req_id, status, body)
@@ -511,6 +544,46 @@ impl HostPlatform for NetPlatform {
                 }
             }
 
+            "net.wait_req" => {
+                let chan_id = match payload {
+                    Value::Chan(c) => c,
+                    Value::I64(c) => c as usize,
+                    Value::Map(m) => m
+                        .get("chan_id")
+                        .and_then(Value::as_i64)
+                        .or_else(|| m.get("chan").and_then(Value::as_chan).map(|c| c as i64))
+                        .ok_or_else(|| {
+                            RuntimeError::InvalidArgument(
+                                "net.wait_req expects chan ID or net.listen Map".into(),
+                            )
+                        })? as usize,
+                    _ => {
+                        return Err(RuntimeError::InvalidArgument(
+                            "net.wait_req expects chan ID".into(),
+                        ))
+                    }
+                };
+                match self.wait_request(chan_id)? {
+                    Some(Value::Map(m)) => {
+                        let req_id = m.get("req_id").cloned().unwrap_or(Value::I64(0));
+                        let method = m
+                            .get("method")
+                            .cloned()
+                            .unwrap_or_else(|| Value::Str("GET".into()));
+                        let path = m
+                            .get("path")
+                            .cloned()
+                            .unwrap_or_else(|| Value::Str("/".into()));
+                        Ok(Value::Struct {
+                            schema: "HttpRequest".to_string(),
+                            fields: vec![req_id, method, path],
+                        })
+                    }
+                    Some(req) => Ok(req),
+                    None => Ok(Value::Void),
+                }
+            }
+
             "net.close" => {
                 let id = match payload {
                     Value::I64(i) => i as usize,
@@ -523,130 +596,6 @@ impl HostPlatform for NetPlatform {
                 let closed_conn = self.connections.lock().unwrap().remove(&id).is_some();
                 let closed_listener = self.listeners.lock().unwrap().remove(&id).is_some();
                 Ok(Value::Bool(closed_conn || closed_listener))
-            }
-
-            "net.serve_html" => {
-                let default_port = std::env::var("KNR_PORT")
-                    .ok()
-                    .and_then(|s| s.parse::<u16>().ok())
-                    .unwrap_or(8080);
-
-                let (port, html) = match payload {
-                    Value::Str(s) => (default_port, s),
-                    Value::Map(m) => {
-                        let p = m
-                            .get("port")
-                            .and_then(Value::as_i64)
-                            .filter(|&p| (0..=65535).contains(&p))
-                            .map(|p| p as u16)
-                            .unwrap_or(default_port);
-                        let h = m
-                            .get("html")
-                            .or_else(|| m.get("body"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_string();
-                        (p, h)
-                    }
-                    Value::Struct { fields, .. } => {
-                        let p = fields
-                            .first()
-                            .and_then(Value::as_i64)
-                            .filter(|&p| (0..=65535).contains(&p))
-                            .map(|p| p as u16)
-                            .unwrap_or(default_port);
-                        let h = fields
-                            .get(1)
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_string();
-                        (p, h)
-                    }
-                    _ => {
-                        return Err(RuntimeError::InvalidArgument(
-                            "net.serve_html expects Str or {port, html}".into(),
-                        ))
-                    }
-                };
-
-                let max_reqs = std::env::var("KNR_MAX_REQUESTS")
-                    .ok()
-                    .and_then(|s| s.parse::<usize>().ok());
-
-                let served = self.block_on(async move {
-                    let bind_addr = format!("127.0.0.1:{port}");
-                    let listener = match TcpListener::bind(&bind_addr).await {
-                        Ok(l) => l,
-                        Err(_) => TcpListener::bind("127.0.0.1:0")
-                            .await
-                            .map_err(|e| RuntimeError::Io(format!("Failed to bind SSR server: {e}")))?,
-                    };
-                    let local_addr = listener
-                        .local_addr()
-                        .map_err(|e| RuntimeError::Io(format!("Failed to get local address: {e}")))?;
-                    eprintln!("🚀 Serveur SSR knr actif sur http://{local_addr}");
-
-                    let mut count = 0usize;
-                    let mut counter_val: i64 = 0;
-                    while let Ok((mut stream, _)) = listener.accept().await {
-                        let mut req_buf = [0u8; 2048];
-                        let n = stream.read(&mut req_buf).await.unwrap_or(0);
-                        let req_str = String::from_utf8_lossy(&req_buf[..n]);
-                        let first_line = req_str.lines().next().unwrap_or("");
-
-                        let resp_bytes = if first_line.contains("/api/inc") {
-                            counter_val += 1;
-                            let json = format!(
-                                "{{\"count\":{counter_val},\"status\":\"ok\",\"engine\":\"knr-runtime (Tokio SSR)\"}}"
-                            );
-                            format_http_response(
-                                200,
-                                json.as_bytes(),
-                                Some("application/json; charset=utf-8"),
-                            )
-                        } else if first_line.contains("/api/dec") {
-                            counter_val -= 1;
-                            let json = format!(
-                                "{{\"count\":{counter_val},\"status\":\"ok\",\"engine\":\"knr-runtime (Tokio SSR)\"}}"
-                            );
-                            format_http_response(
-                                200,
-                                json.as_bytes(),
-                                Some("application/json; charset=utf-8"),
-                            )
-                        } else if first_line.contains("/api/reset") {
-                            counter_val = 0;
-                            let json = format!(
-                                "{{\"count\":{counter_val},\"status\":\"ok\",\"engine\":\"knr-runtime (Tokio SSR)\"}}"
-                            );
-                            format_http_response(
-                                200,
-                                json.as_bytes(),
-                                Some("application/json; charset=utf-8"),
-                            )
-                        } else {
-                            let rendered = html.replace("{{KNR_COUNTER}}", &counter_val.to_string());
-                            format_http_response(
-                                200,
-                                rendered.as_bytes(),
-                                Some("text/html; charset=utf-8"),
-                            )
-                        };
-
-                        let _ = stream.write_all(&resp_bytes).await;
-                        let _ = stream.flush().await;
-                        let _ = stream.shutdown().await;
-                        count += 1;
-                        if let Some(limit) = max_reqs {
-                            if count >= limit {
-                                break;
-                            }
-                        }
-                    }
-                    Ok::<i64, RuntimeError>(count as i64)
-                })?;
-
-                Ok(Value::I64(served))
             }
 
             _ => Err(RuntimeError::InvalidOperation(format!(

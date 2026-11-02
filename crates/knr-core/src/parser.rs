@@ -719,6 +719,11 @@ fn parse_op(
             let payload = parse_one_reg(rest.trim(), line)?;
             let ret_ty = if eff == Effect::Ui && op_name.contains("render") {
                 Type::Str
+            } else if eff == Effect::Net
+                && op_name == "net.wait_req"
+                && schemas.iter().any(|s| s.name == "HttpRequest")
+            {
+                Type::Struct("HttpRequest".to_string())
             } else {
                 Type::I64
             };
