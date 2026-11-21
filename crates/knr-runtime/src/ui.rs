@@ -1,8 +1,10 @@
+use crate::gui::ExecutionGraph;
 use crate::platform::{HostPlatform, RuntimeError, Value};
 use knr_core::Effect;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+
 
 /// HTML self-closing void elements according to the W3C HTML5 specification.
 const VOID_ELEMENTS: &[&str] = &[
@@ -38,94 +40,31 @@ pub fn escape_html_attr(input: &str) -> String {
     escape_html_text(input)
 }
 
-/// Standard knr runtime bridge script with dual SSR (fetch POST) and WASM Client Reducer support.
+/// Clean, 100% generic knr runtime bridge script for declarative `[data-knr-action]` elements.
+/// Supports both SSR (`fetch(action, { method: 'POST' })`) and mounted WASM MVU hosts
+/// (`window.__knr_dispatch(action)`), with zero application-specific hardcoding.
 pub const KNR_RUNTIME_BRIDGE_SCRIPT: &str = "<script data-knr-runtime=\"v1\">\
 (function(){\
-let w=window.__knr_wasm;\
-const B64='AGFzbQEAAAABBwFgAn5+AX4DAwIAAAUDAQABByYDBm1lbW9yeQIACmFwcGx5X3N0ZXAAAAxrbnJfZGlzcGF0Y2gAAQp4Ag4BAX4gACABfCECIAIPC2cCBn4Cf0EAIQkDQCAJQQBGBEBCACECIAEgAlEhCCAIBEBBASEJBUECIQkLDAELIAlBAUYEQCACDwsgCUECRgRAQgMhA0ICIQQgASAEfiEFIAMgBX0hBiAAIAYQACEHIAcPCwwACwAL';\
-async function getWasm(){\
-if(w)return w;\
-if(typeof location!=='undefined'&&location.protocol&&location.protocol.startsWith('http')){\
-try{\
-const r=await fetch('site.wasm');\
-if(r.ok){\
-const b=await r.arrayBuffer();\
-const u=new Uint8Array(b);\
-if(u.length>4&&u[0]===0&&u[1]===97&&u[2]===115&&u[3]===109){\
-const m=await WebAssembly.instantiate(b,{});\
-w=window.__knr_wasm=m.instance.exports;\
-return w;\
-}\
-}\
-}catch(_){}\
-}\
-try{\
-const bin=atob(window.__knr_wasm_bytes||B64);\
-const u=new Uint8Array(bin.length);\
-for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);\
-const m=await WebAssembly.instantiate(u.buffer,{});\
-w=window.__knr_wasm=m.instance.exports;\
-return w;\
-}catch(_){}\
-return null;\
-}\
 document.addEventListener('click',async function(e){\
-const b=e.target.closest('[data-knr-action]');\
-if(!b)return;\
-const act=b.getAttribute('data-knr-action');\
+const btn=e.target&&e.target.closest?e.target.closest('[data-knr-action]'):null;\
+if(!btn)return;\
+const act=btn.getAttribute('data-knr-action');\
 if(!act)return;\
-const tgt=b.getAttribute('data-knr-target')||'.counter-val';\
-const el=document.querySelector(tgt);\
-const box=b.closest('.counter-box,.wasm-box')||b.parentElement||document;\
-const st=box.querySelector('.counter-status')||document.querySelector('.counter-status');\
-const cur=BigInt(parseInt((el?el.textContent:'0')||'0',10)||0);\
+if(typeof window.__knr_dispatch==='function'){\
+window.__knr_dispatch(act,btn);\
+return;\
+}\
+const tgt=btn.getAttribute('data-knr-target');\
+const el=tgt?document.querySelector(tgt):null;\
 if(act.startsWith('/')&&typeof location!=='undefined'&&location.protocol&&location.protocol.startsWith('http')){\
 try{\
 const r=await fetch(act,{method:'POST'});\
 if(r.ok){\
 const t=(await r.text()).trim();\
-if(act.startsWith('/nav/')||act.startsWith('/trace/')||/^-?\\d+$/.test(t)){\
 if(el)el.textContent=t;\
-if(st)st.textContent=act.startsWith('/nav/')?('Routeur Multi-Pages SSR (site/server.ssa) -> route '+act):(act.startsWith('/trace/')?('Trace CFG SSR (site/server.ssa) -> chemin '+act):('Syscall Net + Ui SSR (site/server.ssa) -> reg muté en VM (val = '+t+')'));\
-return;\
-}\
 }\
 }catch(_){}\
 }\
-if(act.startsWith('/nav/')){\
-const p=act.slice(5);\
-const all=['home','graph','pillars','learn','isa','examples'];\
-const hide=p==='all'?[]:all.filter(x=>x!==p).map(x=>'.page-'+x);\
-const css=(hide.length?hide.join(',')+'{display:none!important}':'')+'.tab-'+p+'{background:#38bdf8!important;color:#050811!important;border-color:#38bdf8!important}';\
-if(el)el.textContent=css;\
-if(st)st.textContent='Routeur VDOM Client -> vue active : '+p;\
-return;\
-}\
-if(act.startsWith('/trace/')){\
-const k=act.slice(7);\
-const m={\
-inc:'.node-ast,.node-verify,.node-bb0,.node-bb2,.node-call{border-color:#38bdf8!important;box-shadow:0 0 28px rgba(56,189,248,0.35)!important;transform:translateY(-3px)}.node-bb1,.node-ssr{opacity:0.35}',\
-dec:'.node-ast,.node-verify,.node-bb0,.node-bb2,.node-call{border-color:#a855f7!important;box-shadow:0 0 28px rgba(168,85,247,0.35)!important;transform:translateY(-3px)}.node-bb1,.node-ssr{opacity:0.35}',\
-reset:'.node-ast,.node-verify,.node-bb0,.node-bb1{border-color:#f59e0b!important;box-shadow:0 0 28px rgba(245,158,11,0.35)!important;transform:translateY(-3px)}.node-bb2,.node-call,.node-ssr{opacity:0.35}',\
-ssr:'.node-ast,.node-verify,.node-ssr{border-color:#10b981!important;box-shadow:0 0 28px rgba(16,185,129,0.38)!important;transform:translateY(-3px)}.node-bb0,.node-bb1,.node-bb2,.node-call{opacity:0.35}'\
-};\
-if(el&&m[k])el.textContent=m[k];\
-if(st)st.textContent='Simulation CFG Active -> chemin '+act+' illuminé dans le graphe';\
-return;\
-}\
-const op=act.endsWith('inc')?1n:(act.endsWith('dec')?2n:0n);\
-try{\
-const wasm=await getWasm();\
-if(wasm&&typeof wasm.knr_dispatch==='function'){\
-const next=wasm.knr_dispatch(cur,op);\
-if(el)el.textContent=next.toString();\
-if(st)st.textContent='WASM Client Reducer (site.wasm -> knr_dispatch('+cur+'n, '+op+'n)) = '+next;\
-return;\
-}\
-}catch(_){}\
-const next=op===1n?cur+1n:(op===2n?cur-1n:0n);\
-if(el)el.textContent=next.toString();\
-if(st)st.textContent='Bridge VDOM local -> struct_set %state 0 '+next+' (0 allocation GC)';\
 });\
 })();\
 </script>";
@@ -140,6 +79,7 @@ pub enum VNode {
         text: Option<String>,
     },
     Text(String),
+    RawHtml(String),
 }
 
 impl VNode {
@@ -162,6 +102,25 @@ impl VNode {
     pub fn text(content: impl Into<String>) -> Self {
         VNode::Text(content.into())
     }
+
+    /// Constructs a new raw HTML VNode that bypasses entity escaping.
+    pub fn raw_html(content: impl Into<String>) -> Self {
+        VNode::RawHtml(content.into())
+    }
+
+    /// Converts an `ExecutionGraph` into a semantic VNode wrapping clean SVG markup.
+    pub fn from_execution_graph(graph: &ExecutionGraph) -> Self {
+        let svg = graph.render_to_svg();
+        let mut props = BTreeMap::new();
+        props.insert("class".to_string(), "knr-exec-graph-container".to_string());
+        VNode::Element {
+            tag: "div".to_string(),
+            props,
+            children: vec![VNode::RawHtml(svg)],
+            text: None,
+        }
+    }
+
 
     /// Parses a `Value` (typically `Value::Map` or `Value::Str`) into a `VNode`.
     pub fn from_value(val: &Value) -> Result<Self, RuntimeError> {
@@ -336,7 +295,7 @@ impl VNode {
     /// Converts this `VNode` into a `Value` representation.
     pub fn to_value(&self) -> Value {
         match self {
-            VNode::Text(s) => Value::Str(s.clone()),
+            VNode::Text(s) | VNode::RawHtml(s) => Value::Str(s.clone()),
             VNode::Element {
                 tag,
                 props,
@@ -375,6 +334,7 @@ impl VNode {
     pub fn has_explicit_script(&self) -> bool {
         match self {
             VNode::Text(_) => false,
+            VNode::RawHtml(s) => s.to_ascii_lowercase().contains("<script"),
             VNode::Element { tag, children, .. } => {
                 if tag.eq_ignore_ascii_case("script") {
                     return true;
@@ -388,6 +348,7 @@ impl VNode {
     pub fn has_action_attrs(&self) -> bool {
         match self {
             VNode::Text(_) => false,
+            VNode::RawHtml(s) => s.contains("data-knr-action"),
             VNode::Element { props, children, .. } => {
                 if props.get("data-knr-action").is_some_and(|a| !a.is_empty()) {
                     return true;
@@ -418,6 +379,9 @@ impl VNode {
         match self {
             VNode::Text(s) => {
                 buf.push_str(&escape_html_text(s));
+            }
+            VNode::RawHtml(s) => {
+                buf.push_str(s);
             }
             VNode::Element {
                 tag,
@@ -469,6 +433,7 @@ impl VNode {
 /// UI Platform Adapter managing Virtual DOM state, native SSR rendering, and event dispatch channels.
 pub struct UiPlatform {
     mounted_root: Arc<Mutex<Option<VNode>>>,
+    mounted_graph: Arc<Mutex<Option<ExecutionGraph>>>,
     event_sender: mpsc::Sender<Value>,
     event_receiver: Arc<Mutex<mpsc::Receiver<Value>>>,
     channel_id: usize,
@@ -486,6 +451,7 @@ impl UiPlatform {
         let (tx, rx) = mpsc::channel(1024);
         Self {
             mounted_root: Arc::new(Mutex::new(None)),
+            mounted_graph: Arc::new(Mutex::new(None)),
             event_sender: tx,
             event_receiver: Arc::new(Mutex::new(rx)),
             channel_id: 1,
@@ -498,9 +464,22 @@ impl UiPlatform {
         self.channel_id
     }
 
+    /// Mounts an execution graph and returns the event channel ID.
+    pub fn mount_graph(&mut self, graph: ExecutionGraph) -> usize {
+        let vnode = VNode::from_execution_graph(&graph);
+        *self.mounted_graph.lock().unwrap() = Some(graph);
+        *self.mounted_root.lock().unwrap() = Some(vnode);
+        self.channel_id
+    }
+
     /// Returns the currently mounted root VNode, if any.
     pub fn get_mounted(&self) -> Option<VNode> {
         self.mounted_root.lock().unwrap().clone()
+    }
+
+    /// Returns the currently mounted execution graph, if any.
+    pub fn get_mounted_graph(&self) -> Option<ExecutionGraph> {
+        self.mounted_graph.lock().unwrap().clone()
     }
 
     /// Renders the currently mounted VDOM tree to an HTML string.
@@ -509,6 +488,15 @@ impl UiPlatform {
         match &*root {
             Some(vnode) => Ok(vnode.render_html()),
             None => Ok(String::new()),
+        }
+    }
+
+    /// Renders the mounted execution graph to a clean semantic SVG string.
+    pub fn render_svg(&self) -> Result<String, RuntimeError> {
+        if let Some(graph) = &*self.mounted_graph.lock().unwrap() {
+            Ok(graph.render_to_svg())
+        } else {
+            self.render()
         }
     }
 
@@ -538,6 +526,12 @@ impl HostPlatform for UiPlatform {
                 Ok(Value::Chan(chan_id))
             }
 
+            "ui.mount_graph" => {
+                let graph = ExecutionGraph::new("knr Pipeline Graph");
+                let chan_id = self.mount_graph(graph);
+                Ok(Value::Chan(chan_id))
+            }
+
             "ui.update" => {
                 let node = VNode::from_value(&payload)?;
                 *self.mounted_root.lock().unwrap() = Some(node);
@@ -548,9 +542,35 @@ impl HostPlatform for UiPlatform {
                 if payload.is_void() {
                     let html = self.render()?;
                     Ok(Value::Str(html))
+                } else if matches!(
+                    &payload,
+                    Value::Struct { schema, fields } if schema == "UiNode" || fields.len() >= 11
+                ) {
+                    let ui = crate::gui::UiNode::from_value(&payload)?;
+                    Ok(Value::Str(ui.render_document_html("knr")))
                 } else {
                     let node = VNode::from_value(&payload)?;
                     Ok(Value::Str(node.render_html()))
+                }
+            }
+
+            "ui.render_svg" => {
+                let svg = self.render_svg()?;
+                Ok(Value::Str(svg))
+            }
+
+            "ui.step_graph" => {
+                if let Some(mut graph) = self.get_mounted_graph() {
+                    let step = match payload {
+                        Value::I64(n) => n.max(0) as usize,
+                        _ => 0,
+                    };
+                    graph.active_step = step;
+                    *self.mounted_graph.lock().unwrap() = Some(graph.clone());
+                    *self.mounted_root.lock().unwrap() = Some(VNode::from_execution_graph(&graph));
+                    Ok(Value::Bool(true))
+                } else {
+                    Ok(Value::Bool(false))
                 }
             }
 

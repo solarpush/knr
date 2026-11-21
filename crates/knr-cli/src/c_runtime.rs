@@ -1,9 +1,115 @@
-pub const KNR_RT_C: &str = r#"/* knr runtime C library for native builds */
+/// Minimal entry shim when linking native binaries against the real Rust `libknr_runtime.a`.
+pub const KNR_ENTRY_SHIM_C: &str = r#"#include <stdint.h>
+#ifdef ENTRY_FN
+extern int64_t ENTRY_FN(void);
+#endif
+
+__attribute__((weak)) int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+#ifdef ENTRY_FN
+    return (int)ENTRY_FN();
+#else
+    return 0;
+#endif
+}
+"#;
+
+/// Fallback self-contained C runtime used only when `libknr_runtime.a` is unavailable.
+pub const KNR_RT_C: &str = r#"/* knr fallback runtime C library for native builds */
 #define _POSIX_C_SOURCE 200809L
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+/* --- Struct Implementation --- */
+typedef struct {
+    int64_t* fields;
+    size_t len;
+} RtStruct;
+
+int64_t rt_struct_new(int64_t field_count) {
+    if (field_count < 1) field_count = 1;
+    RtStruct* s = (RtStruct*)malloc(sizeof(RtStruct));
+    if (!s) return 0;
+    s->fields = (int64_t*)calloc((size_t)field_count, sizeof(int64_t));
+    s->len = (size_t)field_count;
+    return (int64_t)(uintptr_t)s;
+}
+
+int64_t rt_struct_get(int64_t ptr, int64_t idx) {
+    RtStruct* s = (RtStruct*)(uintptr_t)ptr;
+    if (!s || idx < 0 || (size_t)idx >= s->len) return 0;
+    return s->fields[idx];
+}
+
+int64_t rt_struct_set(int64_t ptr, int64_t idx, int64_t val) {
+    RtStruct* s = (RtStruct*)(uintptr_t)ptr;
+    if (!s || idx < 0) return ptr;
+    if ((size_t)idx >= s->len) {
+        size_t new_len = (size_t)idx + 1;
+        int64_t* nf = (int64_t*)realloc(s->fields, new_len * sizeof(int64_t));
+        if (!nf) return ptr;
+        memset(nf + s->len, 0, (new_len - s->len) * sizeof(int64_t));
+        s->fields = nf;
+        s->len = new_len;
+    }
+    s->fields[idx] = val;
+    return ptr;
+}
+
+void rt_struct_free(int64_t ptr) {
+    RtStruct* s = (RtStruct*)(uintptr_t)ptr;
+    if (!s) return;
+    if (s->fields) free(s->fields);
+    free(s);
+}
+
+/* --- String Helpers --- */
+int64_t rt_str_concat(int64_t a_ptr, int64_t b_ptr) {
+    const char* a = a_ptr ? (const char*)(uintptr_t)a_ptr : "";
+    const char* b = b_ptr ? (const char*)(uintptr_t)b_ptr : "";
+    size_t la = strlen(a), lb = strlen(b);
+    char* out = (char*)malloc(la + lb + 1);
+    if (!out) return 0;
+    memcpy(out, a, la);
+    memcpy(out + la, b, lb + 1);
+    return (int64_t)(uintptr_t)out;
+}
+
+int64_t rt_str_eq(int64_t a_ptr, int64_t b_ptr) {
+    if (a_ptr == b_ptr) return 1;
+    if (!a_ptr || !b_ptr) return 0;
+    return strcmp((const char*)(uintptr_t)a_ptr, (const char*)(uintptr_t)b_ptr) == 0 ? 1 : 0;
+}
+
+int64_t rt_str_len(int64_t s_ptr) {
+    if (!s_ptr) return 0;
+    return (int64_t)strlen((const char*)(uintptr_t)s_ptr);
+}
+
+int64_t rt_int_to_str(int64_t val) {
+    char* out = (char*)malloc(32);
+    if (!out) return 0;
+    snprintf(out, 32, "%lld", (long long)val);
+    return (int64_t)(uintptr_t)out;
+}
+
+int64_t rt_bool_to_str(int64_t val) {
+    const char* s = val ? "true" : "false";
+    char* out = (char*)malloc(8);
+    if (!out) return 0;
+    strcpy(out, s);
+    return (int64_t)(uintptr_t)out;
+}
+
+int64_t rt_f64_to_str(double val) {
+    char* out = (char*)malloc(48);
+    if (!out) return 0;
+    snprintf(out, 48, "%g", val);
+    return (int64_t)(uintptr_t)out;
+}
 
 /* --- Vector Implementation --- */
 typedef struct {
@@ -113,6 +219,27 @@ int64_t rt_map_get(int64_t map_ptr, int64_t key_ptr, int64_t key_len) {
     return 0;
 }
 
+int64_t rt_map_del(int64_t map_ptr, int64_t key_ptr, int64_t key_len) {
+    RtMap* m = (RtMap*)(uintptr_t)map_ptr;
+    if (!m || !key_ptr) return map_ptr;
+    if (key_len <= 0) {
+        key_len = (int64_t)strlen((const char*)(uintptr_t)key_ptr);
+    }
+    const uint8_t* k = (const uint8_t*)(uintptr_t)key_ptr;
+    MapEntry** prev = &m->head;
+    while (*prev) {
+        MapEntry* curr = *prev;
+        if (curr->key_len == (size_t)key_len && memcmp(curr->key, k, (size_t)key_len) == 0) {
+            *prev = curr->next;
+            free(curr->key);
+            free(curr);
+            break;
+        }
+        prev = &curr->next;
+    }
+    return map_ptr;
+}
+
 void rt_map_free(int64_t map_ptr) {
     RtMap* m = (RtMap*)(uintptr_t)map_ptr;
     if (!m) return;
@@ -144,6 +271,14 @@ void rt_buf_free(int64_t ptr, int64_t size, int64_t align) {
     if (ptr) {
         free((void*)(uintptr_t)ptr);
     }
+}
+
+/* --- Channels & Syscall Stubs for C-only fallback --- */
+int64_t rt_chan_new(int64_t cap) { (void)cap; return 1; }
+int64_t rt_chan_send(int64_t id, int64_t val) { (void)id; (void)val; return 1; }
+int64_t rt_chan_recv(int64_t id) { (void)id; return 0; }
+int64_t rt_syscall(int64_t eff, int64_t op, int64_t payload, int64_t kind) {
+    (void)eff; (void)op; (void)payload; (void)kind; return 0;
 }
 
 /* --- Fallback Main Entry --- */

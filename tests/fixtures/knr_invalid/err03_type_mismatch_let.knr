@@ -1,0 +1,5 @@
+// Error: TypeMismatch
+fn test_let() -> i64 {
+    let x: i64 = "string cannot be assigned to i64";
+    return 0;
+}

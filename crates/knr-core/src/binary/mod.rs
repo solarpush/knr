@@ -19,6 +19,7 @@ pub fn encode_knrbin(module: &Module) -> Result<Vec<u8>, BinaryError> {
     // First pass: pack all instructions and terminators while populating pools
     struct PrePackedBlock {
         id: BlockId,
+        params: Vec<(u16, u8)>,
         instructions: Vec<[u8; 8]>,
         terminator: [u8; 8],
     }
@@ -28,6 +29,7 @@ pub fn encode_knrbin(module: &Module) -> Result<Vec<u8>, BinaryError> {
         ret_ty_id: u8,
         effects_mask: u8,
         params: Vec<(u16, u8)>,
+        param_borrows: Vec<bool>,
         blocks: Vec<PrePackedBlock>,
     }
 
@@ -49,17 +51,30 @@ pub fn encode_knrbin(module: &Module) -> Result<Vec<u8>, BinaryError> {
         if func.effects.contains(&Effect::Async) {
             effects_mask |= 1 << 3;
         }
+        let has_borrows = func.param_borrows.iter().any(|&b| b);
+        if has_borrows {
+            effects_mask |= 1 << 7;
+        }
 
         let mut params = Vec::with_capacity(func.params.len());
-        for (reg, ty) in &func.params {
+        let mut param_borrows = Vec::with_capacity(func.params.len());
+        for (i, (reg, ty)) in func.params.iter().enumerate() {
             let reg_u16 = u16::try_from(*reg)
                 .map_err(|_| BinaryError::RegisterOverflow(*reg))?;
             let ty_id = type_pool.insert(ty)?;
             params.push((reg_u16, ty_id));
+            param_borrows.push(func.is_param_borrowed(i));
         }
 
         let mut blocks = Vec::with_capacity(func.blocks.len());
         for block in &func.blocks {
+            let mut bparams = Vec::with_capacity(block.params.len());
+            for (reg, ty) in &block.params {
+                let reg_u16 = u16::try_from(*reg)
+                    .map_err(|_| BinaryError::RegisterOverflow(*reg))?;
+                let ty_id = type_pool.insert(ty)?;
+                bparams.push((reg_u16, ty_id));
+            }
             let mut inst_words = Vec::with_capacity(block.instructions.len());
             for inst in &block.instructions {
                 let word = pack_instruction(inst, &mut const_pool, &mut type_pool, &mut extra_pool)?;
@@ -68,6 +83,7 @@ pub fn encode_knrbin(module: &Module) -> Result<Vec<u8>, BinaryError> {
             let term_word = pack_terminator(&block.terminator, &mut extra_pool)?;
             blocks.push(PrePackedBlock {
                 id: block.id,
+                params: bparams,
                 instructions: inst_words,
                 terminator: term_word,
             });
@@ -81,6 +97,7 @@ pub fn encode_knrbin(module: &Module) -> Result<Vec<u8>, BinaryError> {
             ret_ty_id,
             effects_mask,
             params,
+            param_borrows,
             blocks,
         });
     }
@@ -140,11 +157,27 @@ pub fn encode_knrbin(module: &Module) -> Result<Vec<u8>, BinaryError> {
             out.extend_from_slice(&reg.to_le_bytes());
             out.push(ty_id);
         }
+        if (func.effects_mask & (1 << 7)) != 0 {
+            for b in func.param_borrows {
+                out.push(if b { 1 } else { 0 });
+            }
+        }
 
         let block_count = func.blocks.len() as u32;
         out.extend_from_slice(&block_count.to_le_bytes());
         for block in func.blocks {
-            out.extend_from_slice(&block.id.to_le_bytes());
+            if block.params.is_empty() {
+                out.extend_from_slice(&block.id.to_le_bytes());
+            } else {
+                let tagged_id = block.id | 0x8000_0000;
+                out.extend_from_slice(&tagged_id.to_le_bytes());
+                let bp_count = block.params.len() as u16;
+                out.extend_from_slice(&bp_count.to_le_bytes());
+                for (reg, ty_id) in block.params {
+                    out.extend_from_slice(&reg.to_le_bytes());
+                    out.push(ty_id);
+                }
+            }
             let inst_count = block.instructions.len() as u32;
             out.extend_from_slice(&inst_count.to_le_bytes());
             for word in block.instructions {
@@ -349,6 +382,22 @@ pub fn decode_knrbin(bytes: &[u8]) -> Result<Module, BinaryError> {
             params.push((reg, param_ty));
         }
 
+        let has_borrows = (effects_mask & (1 << 7)) != 0;
+        let mut param_borrows = Vec::new();
+        if has_borrows {
+            param_borrows.reserve(param_count);
+            for _ in 0..param_count {
+                let mut b_buf = [0u8; 1];
+                cursor
+                    .read_exact(&mut b_buf)
+                    .map_err(|_| BinaryError::UnexpectedEof {
+                        expected: 1,
+                        actual: 0,
+                    })?;
+                param_borrows.push(b_buf[0] != 0);
+            }
+        }
+
         cursor
             .read_exact(&mut buf4)
             .map_err(|_| BinaryError::UnexpectedEof {
@@ -367,7 +416,39 @@ pub fn decode_knrbin(bytes: &[u8]) -> Result<Module, BinaryError> {
                     expected: 4,
                     actual: 0,
                 })?;
-            let block_id = u32::from_le_bytes(buf4) as BlockId;
+            let raw_block_id = u32::from_le_bytes(buf4);
+            let has_block_params = (raw_block_id & 0x8000_0000) != 0;
+            let block_id = (raw_block_id & 0x7FFF_FFFF) as BlockId;
+
+            let mut block_params = Vec::new();
+            if has_block_params {
+                cursor
+                    .read_exact(&mut buf2)
+                    .map_err(|_| BinaryError::UnexpectedEof {
+                        expected: 2,
+                        actual: 0,
+                    })?;
+                let bp_count = u16::from_le_bytes(buf2) as usize;
+                block_params.reserve(bp_count.min(cursor.len() / 3));
+                for _ in 0..bp_count {
+                    cursor
+                        .read_exact(&mut buf2)
+                        .map_err(|_| BinaryError::UnexpectedEof {
+                            expected: 2,
+                            actual: 0,
+                        })?;
+                    let reg = u16::from_le_bytes(buf2) as RegId;
+                    let mut ty_buf = [0u8; 1];
+                    cursor
+                        .read_exact(&mut ty_buf)
+                        .map_err(|_| BinaryError::UnexpectedEof {
+                            expected: 1,
+                            actual: 0,
+                        })?;
+                    let bty = type_pool.get(ty_buf[0])?;
+                    block_params.push((reg, bty));
+                }
+            }
 
             cursor
                 .read_exact(&mut buf4)
@@ -412,6 +493,7 @@ pub fn decode_knrbin(bytes: &[u8]) -> Result<Module, BinaryError> {
 
             blocks.push(BasicBlock {
                 id: block_id,
+                params: block_params,
                 instructions,
                 terminator,
             });
@@ -422,6 +504,7 @@ pub fn decode_knrbin(bytes: &[u8]) -> Result<Module, BinaryError> {
         functions.push(Function {
             name,
             params,
+            param_borrows,
             ret_ty,
             effects,
             blocks,

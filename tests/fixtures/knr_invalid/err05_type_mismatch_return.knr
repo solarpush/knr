@@ -1,0 +1,4 @@
+// Error: TypeMismatch
+fn test_ret() -> i64 {
+    return "expected i64, got str";
+}

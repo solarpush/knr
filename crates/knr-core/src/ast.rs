@@ -129,8 +129,11 @@ pub enum Op {
     Sub(RegId, RegId),
     Mul(RegId, RegId),
     Div(RegId, RegId),
+    Rem(RegId, RegId),
     CmpEq(RegId, RegId),
     CmpLt(RegId, RegId),
+    IntToStr(RegId),
+    StrLen(RegId),
     BufAlloc(RegId),
     BufReadU8(RegId, RegId),
     BufWriteU8(RegId, RegId, RegId),
@@ -180,12 +183,73 @@ pub enum Terminator {
         then_blk: BlockId,
         else_blk: BlockId,
     },
+    BrArgs {
+        target: BlockId,
+        args: Vec<RegId>,
+    },
+    BrIfArgs {
+        cond: RegId,
+        then_blk: BlockId,
+        then_args: Vec<RegId>,
+        else_blk: BlockId,
+        else_args: Vec<RegId>,
+    },
 }
 
-/// An SSA Basic Block comprising instructions followed by a single terminator.
+impl Terminator {
+    /// Returns all outgoing (target_block, branch_args) edges for this terminator.
+    pub fn targets(&self) -> Vec<(BlockId, &[RegId])> {
+        match self {
+            Terminator::Ret(_) => Vec::new(),
+            Terminator::Br(t) => vec![(*t, &[])],
+            Terminator::BrIf {
+                then_blk,
+                else_blk,
+                ..
+            } => vec![(*then_blk, &[]), (*else_blk, &[])],
+            Terminator::BrArgs { target, args } => vec![(*target, args.as_slice())],
+            Terminator::BrIfArgs {
+                then_blk,
+                then_args,
+                else_blk,
+                else_args,
+                ..
+            } => vec![
+                (*then_blk, then_args.as_slice()),
+                (*else_blk, else_args.as_slice()),
+            ],
+        }
+    }
+
+    /// Returns all registers read by this terminator (condition, return value, branch args).
+    pub fn used_regs(&self) -> Vec<RegId> {
+        match self {
+            Terminator::Ret(Some(r)) => vec![*r],
+            Terminator::Ret(None) | Terminator::Br(_) => Vec::new(),
+            Terminator::BrIf { cond, .. } => vec![*cond],
+            Terminator::BrArgs { args, .. } => args.clone(),
+            Terminator::BrIfArgs {
+                cond,
+                then_args,
+                else_args,
+                ..
+            } => {
+                let mut regs = Vec::with_capacity(1 + then_args.len() + else_args.len());
+                regs.push(*cond);
+                regs.extend_from_slice(then_args);
+                regs.extend_from_slice(else_args);
+                regs
+            }
+        }
+    }
+}
+
+/// An SSA Basic Block comprising optional block parameters, instructions, and a single terminator.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BasicBlock {
     pub id: BlockId,
+    #[serde(default)]
+    pub params: Vec<(RegId, Type)>,
     pub instructions: Vec<Instruction>,
     pub terminator: Terminator,
 }
@@ -194,6 +258,16 @@ impl BasicBlock {
     pub fn new(id: BlockId, terminator: Terminator) -> Self {
         Self {
             id,
+            params: Vec::new(),
+            instructions: Vec::new(),
+            terminator,
+        }
+    }
+
+    pub fn with_params(id: BlockId, params: Vec<(RegId, Type)>, terminator: Terminator) -> Self {
+        Self {
+            id,
+            params,
             instructions: Vec::new(),
             terminator,
         }
@@ -209,6 +283,10 @@ impl BasicBlock {
 pub struct Function {
     pub name: String,
     pub params: Vec<(RegId, Type)>,
+    /// Marks whether parameter `i` is a second-class borrow (`&T`), meaning it is read-only
+    /// at call sites (not consumed by the caller) and cannot escape inside the callee.
+    #[serde(default)]
+    pub param_borrows: Vec<bool>,
     pub ret_ty: Type,
     pub effects: Vec<Effect>,
     pub blocks: Vec<BasicBlock>,
@@ -219,6 +297,7 @@ impl Function {
         Self {
             name: name.into(),
             params: Vec::new(),
+            param_borrows: Vec::new(),
             ret_ty,
             effects: Vec::new(),
             blocks: Vec::new(),
@@ -227,6 +306,22 @@ impl Function {
 
     pub fn add_param(&mut self, reg: RegId, ty: Type) {
         self.params.push((reg, ty));
+        if !self.param_borrows.is_empty() {
+            self.param_borrows.push(false);
+        }
+    }
+
+    pub fn add_borrowed_param(&mut self, reg: RegId, ty: Type) {
+        while self.param_borrows.len() < self.params.len() {
+            self.param_borrows.push(false);
+        }
+        self.params.push((reg, ty));
+        self.param_borrows.push(true);
+    }
+
+    #[inline]
+    pub fn is_param_borrowed(&self, idx: usize) -> bool {
+        self.param_borrows.get(idx).copied().unwrap_or(false)
     }
 
     pub fn add_effect(&mut self, effect: Effect) {

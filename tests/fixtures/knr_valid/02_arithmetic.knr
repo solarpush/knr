@@ -1,0 +1,7 @@
+// Valid 02: Arithmetic with precedence and let bindings
+fn calculate(base: i64, factor: i64) -> i64 {
+    let offset = 10;
+    let intermediate = (base + offset) * factor;
+    let result = intermediate / 2 - 5;
+    return result;
+}

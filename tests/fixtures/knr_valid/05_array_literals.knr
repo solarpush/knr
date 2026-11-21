@@ -1,0 +1,5 @@
+// Valid 05: Vector array literal
+fn get_numbers() -> vec[i64] {
+    let numbers = [10, 20, 30, 40, 50];
+    return numbers;
+}

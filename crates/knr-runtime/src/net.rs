@@ -281,16 +281,19 @@ impl HostPlatform for NetPlatform {
 
         match op {
             "net.listen" => {
-                let port = match payload {
-                    Value::I64(p) if (0..=65535).contains(&p) => p as u16,
-                    Value::Map(m) => m
-                        .get("port")
-                        .and_then(Value::as_i64)
-                        .filter(|&p| (0..=65535).contains(&p))
-                        .map(|p| p as u16)
-                        .unwrap_or(0),
-                    _ => 0,
-                };
+                let port = std::env::var("KNR_PORT")
+                    .ok()
+                    .and_then(|s| s.parse::<u16>().ok())
+                    .unwrap_or_else(|| match payload {
+                        Value::I64(p) if (0..=65535).contains(&p) => p as u16,
+                        Value::Map(m) => m
+                            .get("port")
+                            .and_then(Value::as_i64)
+                            .filter(|&p| (0..=65535).contains(&p))
+                            .map(|p| p as u16)
+                            .unwrap_or(0),
+                        _ => 0,
+                    });
                 let (chan_id, bound_port) = self.listen(port)?;
                 if port > 0 {
                     eprintln!("Listening on http://127.0.0.1:{bound_port}");

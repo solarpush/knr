@@ -1,0 +1,5 @@
+// Error: ParseError
+fn broken() -> i64 {
+    let @#$ = 123;
+    return 0;
+}

@@ -41,6 +41,11 @@ pub const OP_STRUCT_NEW: u8 = 0x21;
 pub const OP_STRUCT_GET: u8 = 0x22;
 pub const OP_STRUCT_SET: u8 = 0x23;
 pub const OP_CALL: u8 = 0x1E;
+pub const OP_REM: u8 = 0x24;
+pub const OP_INT_TO_STR: u8 = 0x25;
+pub const OP_STR_LEN: u8 = 0x26;
+pub const OP_BR_ARGS: u8 = 0x27;
+pub const OP_BR_IF_ARGS: u8 = 0x28;
 
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -187,8 +192,11 @@ pub fn pack_instruction(
         Op::Sub(r1, r2) => (OP_SUB, reg_to_u16(*r1)?, reg_to_u16(*r2)?),
         Op::Mul(r1, r2) => (OP_MUL, reg_to_u16(*r1)?, reg_to_u16(*r2)?),
         Op::Div(r1, r2) => (OP_DIV, reg_to_u16(*r1)?, reg_to_u16(*r2)?),
+        Op::Rem(r1, r2) => (OP_REM, reg_to_u16(*r1)?, reg_to_u16(*r2)?),
         Op::CmpEq(r1, r2) => (OP_CMP_EQ, reg_to_u16(*r1)?, reg_to_u16(*r2)?),
         Op::CmpLt(r1, r2) => (OP_CMP_LT, reg_to_u16(*r1)?, reg_to_u16(*r2)?),
+        Op::IntToStr(r) => (OP_INT_TO_STR, reg_to_u16(*r)?, NO_REG),
+        Op::StrLen(r) => (OP_STR_LEN, reg_to_u16(*r)?, NO_REG),
         Op::BufAlloc(size) => (OP_BUF_ALLOC, reg_to_u16(*size)?, NO_REG),
         Op::BufReadU8(b, idx) => (OP_BUF_READ_U8, reg_to_u16(*b)?, reg_to_u16(*idx)?),
         Op::BufWriteU8(b, idx, v) => {
@@ -324,8 +332,11 @@ pub fn unpack_instruction(
         OP_SUB => Op::Sub(src1 as RegId, src2 as RegId),
         OP_MUL => Op::Mul(src1 as RegId, src2 as RegId),
         OP_DIV => Op::Div(src1 as RegId, src2 as RegId),
+        OP_REM => Op::Rem(src1 as RegId, src2 as RegId),
         OP_CMP_EQ => Op::CmpEq(src1 as RegId, src2 as RegId),
         OP_CMP_LT => Op::CmpLt(src1 as RegId, src2 as RegId),
+        OP_INT_TO_STR => Op::IntToStr(src1 as RegId),
+        OP_STR_LEN => Op::StrLen(src1 as RegId),
         OP_BUF_ALLOC => Op::BufAlloc(src1 as RegId),
         OP_BUF_READ_U8 => Op::BufReadU8(src1 as RegId, src2 as RegId),
         OP_BUF_WRITE_U8 => {
@@ -458,6 +469,46 @@ pub fn pack_terminator(
             word[4..6].copy_from_slice(&src1.to_le_bytes());
             word[6..8].copy_from_slice(&extra.to_le_bytes());
         }
+        Terminator::BrArgs { target, args } => {
+            word[0] = OP_BR_ARGS;
+            word[1] = 0;
+            word[2..4].copy_from_slice(&NO_REG.to_le_bytes());
+            let src1 = reg_to_u16(*target)?;
+            let src2 = if args.is_empty() {
+                NO_REG
+            } else {
+                extra_pool.insert_call_args(args)?
+            };
+            word[4..6].copy_from_slice(&src1.to_le_bytes());
+            word[6..8].copy_from_slice(&src2.to_le_bytes());
+        }
+        Terminator::BrIfArgs {
+            cond,
+            then_blk,
+            then_args,
+            else_blk,
+            else_args,
+        } => {
+            word[0] = OP_BR_IF_ARGS;
+            word[1] = 0;
+            word[2..4].copy_from_slice(&NO_REG.to_le_bytes());
+            let t_args_idx = if then_args.is_empty() {
+                NO_REG
+            } else {
+                extra_pool.insert_call_args(then_args)?
+            };
+            let e_args_idx = if else_args.is_empty() {
+                NO_REG
+            } else {
+                extra_pool.insert_call_args(else_args)?
+            };
+            let then_entry = extra_pool.insert(reg_to_u16(*then_blk)?, t_args_idx)?;
+            let else_entry = extra_pool.insert(reg_to_u16(*else_blk)?, e_args_idx)?;
+            let pair_entry = extra_pool.insert(then_entry, else_entry)?;
+            let src1 = reg_to_u16(*cond)?;
+            word[4..6].copy_from_slice(&src1.to_le_bytes());
+            word[6..8].copy_from_slice(&pair_entry.to_le_bytes());
+        }
     }
     Ok(word)
 }
@@ -486,6 +537,27 @@ pub fn unpack_terminator(
                 cond: src1 as RegId,
                 then_blk: extra[0] as BlockId,
                 else_blk: extra[1] as BlockId,
+            })
+        }
+        OP_BR_ARGS => {
+            let args = extra_pool.get_call_args(src2)?;
+            Ok(Terminator::BrArgs {
+                target: src1 as BlockId,
+                args,
+            })
+        }
+        OP_BR_IF_ARGS => {
+            let pair = extra_pool.get(src2)?;
+            let then_info = extra_pool.get(pair[0])?;
+            let else_info = extra_pool.get(pair[1])?;
+            let then_args = extra_pool.get_call_args(then_info[1])?;
+            let else_args = extra_pool.get_call_args(else_info[1])?;
+            Ok(Terminator::BrIfArgs {
+                cond: src1 as RegId,
+                then_blk: then_info[0] as BlockId,
+                then_args,
+                else_blk: else_info[0] as BlockId,
+                else_args,
             })
         }
         other => Err(BinaryError::InvalidOpcode(other)),

@@ -1,17 +1,32 @@
 use crate::CodegenError;
-use knr_core::{BasicBlock, Function, Instruction as KnrInst, Module, Op, RegId, Terminator, Type};
+use knr_core::{BasicBlock, BlockId, Function, Instruction as KnrInst, Module, Op, RegId, Schema, Terminator, Type};
 use std::collections::{BTreeMap, HashMap};
 use wasm_encoder::{
     BlockType, CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection,
-    Function as WasmFunction, FunctionSection, ImportSection, Instruction, MemArg, MemorySection,
-    MemoryType, Module as WasmModule, TypeSection, ValType,
+    Function as WasmFunction, FunctionSection, GlobalSection, GlobalType, ImportSection,
+    Instruction, MemArg, MemorySection, MemoryType, Module as WasmModule, TypeSection, ValType,
 };
 
 type ImportSpec = (&'static str, Vec<ValType>, Vec<ValType>);
 
 /// WebAssembly code generator lowering SSA `Module` / `Function` to `.wasm` binary bytes.
+/// Supports block parameters, structs, enums, vectors, strings, and inter-function calls
+/// using an embedded linear-memory allocator so pure apps run with ZERO external JS imports.
 #[derive(Debug, Default, Clone)]
 pub struct WasmBackend;
+
+#[derive(Default)]
+struct BuiltinIndices {
+    alloc: Option<u32>,
+    str_len: Option<u32>,
+    str_eq: Option<u32>,
+    str_concat: Option<u32>,
+    int_to_str: Option<u32>,
+    vec_new: Option<u32>,
+    vec_push: Option<u32>,
+    vec_get: Option<u32>,
+    vec_len: Option<u32>,
+}
 
 impl WasmBackend {
     pub fn new() -> Self {
@@ -31,7 +46,6 @@ impl WasmBackend {
         let mut types = TypeSection::new();
         let mut type_map: HashMap<String, u32> = HashMap::new();
 
-        // Helper to register function signatures in the type section
         let mut register_type = |params: &[ValType], results: &[ValType]| -> u32 {
             let key = format!("{params:?}->{results:?}");
             if let Some(&idx) = type_map.get(&key) {
@@ -44,7 +58,7 @@ impl WasmBackend {
             }
         };
 
-        // Determine if external runtime imports from "env" are needed
+        // Determine if external host imports from "env" are needed (maps / buffers / syscalls)
         let (needs_imports, import_specs) = Self::collect_imports(module);
         let mut import_indices: HashMap<&'static str, u32> = HashMap::new();
 
@@ -57,15 +71,17 @@ impl WasmBackend {
             }
         }
 
-        // Register signatures for all functions defined in the module
         let num_imports = if needs_imports {
             import_specs.len() as u32
         } else {
             0
         };
-        let mut func_type_indices = Vec::with_capacity(module.functions.len());
 
-        // Lookup map: function name -> WebAssembly function index
+        // Determine if in-Wasm heap/string/vec builtins are needed
+        let needs_builtins = Self::needs_in_wasm_runtime(module);
+
+        // Register signatures for all user functions first, then internal builtins
+        let mut func_type_indices = Vec::new();
         let mut func_indices: HashMap<String, u32> = HashMap::with_capacity(module.functions.len());
         for (i, func) in module.functions.iter().enumerate() {
             func_indices.insert(func.name.clone(), num_imports + i as u32);
@@ -85,6 +101,39 @@ impl WasmBackend {
             func_type_indices.push(type_idx);
         }
 
+        // Register internal runtime builtins if needed
+        let mut builtins = BuiltinIndices::default();
+        if needs_builtins {
+            let base = num_imports + module.functions.len() as u32;
+            // 0: __knr_alloc(size: i32) -> i64
+            builtins.alloc = Some(base);
+            func_type_indices.push(register_type(&[ValType::I32], &[ValType::I64]));
+            // 1: __knr_str_len(ptr: i64) -> i64
+            builtins.str_len = Some(base + 1);
+            func_type_indices.push(register_type(&[ValType::I64], &[ValType::I64]));
+            // 2: __knr_str_eq(a: i64, b: i64) -> i32
+            builtins.str_eq = Some(base + 2);
+            func_type_indices.push(register_type(&[ValType::I64, ValType::I64], &[ValType::I32]));
+            // 3: __knr_str_concat(a: i64, b: i64) -> i64
+            builtins.str_concat = Some(base + 3);
+            func_type_indices.push(register_type(&[ValType::I64, ValType::I64], &[ValType::I64]));
+            // 4: __knr_int_to_str(n: i64) -> i64
+            builtins.int_to_str = Some(base + 4);
+            func_type_indices.push(register_type(&[ValType::I64], &[ValType::I64]));
+            // 5: __knr_vec_new() -> i64
+            builtins.vec_new = Some(base + 5);
+            func_type_indices.push(register_type(&[], &[ValType::I64]));
+            // 6: __knr_vec_push(vec: i64, val: i64) -> i64
+            builtins.vec_push = Some(base + 6);
+            func_type_indices.push(register_type(&[ValType::I64, ValType::I64], &[ValType::I64]));
+            // 7: __knr_vec_get(vec: i64, idx: i64) -> i64
+            builtins.vec_get = Some(base + 7);
+            func_type_indices.push(register_type(&[ValType::I64, ValType::I64], &[ValType::I64]));
+            // 8: __knr_vec_len(vec: i64) -> i64
+            builtins.vec_len = Some(base + 8);
+            func_type_indices.push(register_type(&[ValType::I64], &[ValType::I64]));
+        }
+
         // 1. Type Section
         wasm.section(&types);
 
@@ -100,10 +149,10 @@ impl WasmBackend {
         }
         wasm.section(&functions);
 
-        // 5. Memory Section: 1 page minimum (64 KiB)
+        // 5. Memory Section: 4 pages (256 KiB) if heap used, 1 page otherwise
         let mut memories = MemorySection::new();
         memories.memory(MemoryType {
-            minimum: 1,
+            minimum: if needs_builtins { 4 } else { 1 },
             maximum: None,
             memory64: false,
             shared: false,
@@ -111,13 +160,29 @@ impl WasmBackend {
         });
         wasm.section(&memories);
 
-        // 7. Export Section: export memory and functions
+        // 6. Global Section (heap pointer at 65536 when in-Wasm runtime is active)
+        if needs_builtins {
+            let mut globals = GlobalSection::new();
+            globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(65536),
+            );
+            wasm.section(&globals);
+        }
+
+        // 7. Export Section
         let mut exports = ExportSection::new();
         exports.export("memory", ExportKind::Memory, 0);
-
         for (i, func) in module.functions.iter().enumerate() {
             let func_idx = num_imports + i as u32;
             exports.export(&func.name, ExportKind::Func, func_idx);
+        }
+        if let Some(alloc_idx) = builtins.alloc {
+            exports.export("__knr_alloc", ExportKind::Func, alloc_idx);
         }
         wasm.section(&exports);
 
@@ -133,12 +198,29 @@ impl WasmBackend {
             }
         }
 
-        // 10. Code Section: function bodies
+        // 10. Code Section
         let mut code = CodeSection::new();
         for func in &module.functions {
-            let wasm_fn =
-                Self::compile_func_body(func, &import_indices, &func_indices, &string_pool)?;
+            let wasm_fn = Self::compile_func_body(
+                func,
+                &module.schemas,
+                &import_indices,
+                &func_indices,
+                &builtins,
+                &string_pool,
+            )?;
             code.function(&wasm_fn);
+        }
+        if needs_builtins {
+            code.function(&Self::emit_builtin_alloc());
+            code.function(&Self::emit_builtin_str_len());
+            code.function(&Self::emit_builtin_str_eq());
+            code.function(&Self::emit_builtin_str_concat(builtins.alloc.unwrap()));
+            code.function(&Self::emit_builtin_int_to_str(builtins.alloc.unwrap()));
+            code.function(&Self::emit_builtin_vec_new(builtins.alloc.unwrap()));
+            code.function(&Self::emit_builtin_vec_push(builtins.alloc.unwrap()));
+            code.function(&Self::emit_builtin_vec_get());
+            code.function(&Self::emit_builtin_vec_len());
         }
         wasm.section(&code);
 
@@ -156,18 +238,50 @@ impl WasmBackend {
         Ok(wasm.finish())
     }
 
-    /// Maps knr Types to Wasm ValTypes.
     fn type_to_wasm(ty: &Type) -> Option<ValType> {
         match ty {
             Type::I64 => Some(ValType::I64),
             Type::F64 => Some(ValType::F64),
             Type::Bool => Some(ValType::I32),
             Type::Void => None,
-            // Linear references (Buf, Str, Vec, Map, Chan, Struct) mapped to 64-bit pointers/handles
             Type::Str | Type::Buf | Type::Vec(_) | Type::Map(_, _) | Type::Chan(_) | Type::Struct(_) => {
                 Some(ValType::I64)
             }
         }
+    }
+
+    fn needs_in_wasm_runtime(module: &Module) -> bool {
+        for func in &module.functions {
+            let mut reg_types: HashMap<RegId, Type> = HashMap::new();
+            for (r, t) in &func.params {
+                reg_types.insert(*r, t.clone());
+            }
+            for block in &func.blocks {
+                for (r, t) in &block.params {
+                    reg_types.insert(*r, t.clone());
+                }
+                for inst in &block.instructions {
+                    if let Some(d) = inst.dst {
+                        reg_types.insert(d, inst.ty.clone());
+                    }
+                    match &inst.op {
+                        Op::StructNew(_)
+                        | Op::StructGet(_, _)
+                        | Op::StructSet(_, _, _)
+                        | Op::IntToStr(_)
+                        | Op::StrLen(_)
+                        | Op::VecNew(_)
+                        | Op::VecPush(_, _)
+                        | Op::VecGet(_, _)
+                        | Op::VecLen(_) => return true,
+                        Op::Add(_, _) if inst.ty == Type::Str => return true,
+                        Op::CmpEq(a, _) if reg_types.get(a) == Some(&Type::Str) => return true,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        false
     }
 
     fn collect_imports(module: &Module) -> (bool, Vec<ImportSpec>) {
@@ -177,11 +291,6 @@ impl WasmBackend {
                 for inst in &block.instructions {
                     match &inst.op {
                         Op::BufAlloc(_)
-                        | Op::Free(_)
-                        | Op::VecNew(_)
-                        | Op::VecPush(_, _)
-                        | Op::VecGet(_, _)
-                        | Op::VecLen(_)
                         | Op::MapNew(_, _)
                         | Op::MapSet(_, _, _)
                         | Op::MapGet(_, _)
@@ -193,6 +302,13 @@ impl WasmBackend {
                         | Op::Syscall(_, _, _) => {
                             needs = true;
                             break;
+                        }
+                        Op::Free(r) => {
+                            // Only need external free import if freeing buf/map
+                            if func.params.iter().any(|(pr, t)| pr == r && matches!(t, Type::Buf | Type::Map(_, _))) {
+                                needs = true;
+                                break;
+                            }
                         }
                         _ => {}
                     }
@@ -251,15 +367,635 @@ impl WasmBackend {
         (true, specs)
     }
 
-    /// Compiles a function's instructions and terminators into a `WasmFunction`.
+    // ========================================================================
+    // Embedded Pure-WASM Runtime Helpers (Zero JS Imports!)
+    // ========================================================================
+
+    /// `__knr_alloc(size: i32) -> i64` : 8-byte aligned bump allocator over linear memory.
+    fn emit_builtin_alloc() -> WasmFunction {
+        // param 0: size (i32)
+        // local 1: aligned_size (i32), local 2: ptr (i32), local 3: new_end (i32), local 4: cur_bytes (i32)
+        let mut f = WasmFunction::new([(4, ValType::I32)]);
+        // aligned_size = (size + 7) & !7; if aligned_size < 8 { aligned_size = 8 }
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I32Const(7));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I32Const(-8));
+        f.instruction(&Instruction::I32And);
+        f.instruction(&Instruction::LocalSet(1));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32LtU);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::LocalSet(1));
+        f.instruction(&Instruction::End);
+
+        // ptr = global[0]
+        f.instruction(&Instruction::GlobalGet(0));
+        f.instruction(&Instruction::LocalTee(2));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalTee(3));
+
+        // cur_bytes = memory.size * 65536
+        f.instruction(&Instruction::MemorySize(0));
+        f.instruction(&Instruction::I32Const(16));
+        f.instruction(&Instruction::I32Shl);
+        f.instruction(&Instruction::LocalTee(4));
+        f.instruction(&Instruction::I32GtU);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        // grow by ((new_end - cur_bytes + 65535) >> 16) + 1 pages
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::I32Sub);
+        f.instruction(&Instruction::I32Const(65535));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I32Const(16));
+        f.instruction(&Instruction::I32ShrU);
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::MemoryGrow(0));
+        f.instruction(&Instruction::Drop);
+        f.instruction(&Instruction::End);
+
+        // global[0] = new_end
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::GlobalSet(0));
+        // return ptr as i64
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::I64ExtendI32U);
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// `__knr_str_len(ptr: i64) -> i64`: reads 8-byte length prefix at `ptr - 8`.
+    fn emit_builtin_str_len() -> WasmFunction {
+        let mut f = WasmFunction::new([]);
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I64Const(8));
+        f.instruction(&Instruction::I64LtU);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::I64Const(0));
+        f.instruction(&Instruction::Return);
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32Sub);
+        f.instruction(&Instruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// `__knr_str_eq(a: i64, b: i64) -> i32`: compares length prefixes & UTF-8 bytes.
+    fn emit_builtin_str_eq() -> WasmFunction {
+        // params: 0=a (i64), 1=b (i64)
+        // locals: 2=pa (i32), 3=pb (i32), 4=len (i32), 5=i (i32)
+        let mut f = WasmFunction::new([(4, ValType::I32)]);
+        // fast path: a == b -> 1
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I64Eq);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::Return);
+        f.instruction(&Instruction::End);
+        // null check
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I64Const(8));
+        f.instruction(&Instruction::I64LtU);
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I64Const(8));
+        f.instruction(&Instruction::I64LtU);
+        f.instruction(&Instruction::I32Or);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::Return);
+        f.instruction(&Instruction::End);
+
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(2));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(3));
+
+        // len_a = *(pa - 8) as i32
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32Sub);
+        f.instruction(&Instruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalTee(4));
+        // len_b = *(pb - 8) as i32
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32Sub);
+        f.instruction(&Instruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::I32Ne);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::Return);
+        f.instruction(&Instruction::End);
+
+        // loop i = 0..len
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::LocalSet(5));
+        f.instruction(&Instruction::Block(BlockType::Empty));
+        f.instruction(&Instruction::Loop(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::I32GeU);
+        f.instruction(&Instruction::BrIf(1));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I32Load8U(MemArg { offset: 0, align: 0, memory_index: 0 }));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I32Load8U(MemArg { offset: 0, align: 0, memory_index: 0 }));
+        f.instruction(&Instruction::I32Ne);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::Return);
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalSet(5));
+        f.instruction(&Instruction::Br(0));
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::End);
+
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// `__knr_str_concat(a: i64, b: i64) -> i64`
+    fn emit_builtin_str_concat(alloc_idx: u32) -> WasmFunction {
+        // params: 0=a(i64), 1=b(i64)
+        // locals: 2=pa, 3=pb, 4=la, 5=lb, 6=base, 7=dst, 8=i (all i32)
+        let mut f = WasmFunction::new([(7, ValType::I32)]);
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(2));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(3));
+
+        // la = (pa >= 8) ? *(pa - 8) : 0
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32GeU);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32Sub);
+        f.instruction(&Instruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(4));
+        f.instruction(&Instruction::End);
+
+        // lb = (pb >= 8) ? *(pb - 8) : 0
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32GeU);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32Sub);
+        f.instruction(&Instruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(5));
+        f.instruction(&Instruction::End);
+
+        // base = alloc(8 + la + lb + 1) as i32
+        f.instruction(&Instruction::I32Const(9));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::Call(alloc_idx));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalTee(6));
+        // write total length at base
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I64ExtendI32U);
+        f.instruction(&Instruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
+
+        // dst = base + 8
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalSet(7));
+
+        // copy a
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::LocalSet(8));
+        f.instruction(&Instruction::Block(BlockType::Empty));
+        f.instruction(&Instruction::Loop(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::I32GeU);
+        f.instruction(&Instruction::BrIf(1));
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I32Load8U(MemArg { offset: 0, align: 0, memory_index: 0 }));
+        f.instruction(&Instruction::I32Store8(MemArg { offset: 0, align: 0, memory_index: 0 }));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalSet(8));
+        f.instruction(&Instruction::Br(0));
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::End);
+
+        // copy b
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::LocalSet(8));
+        f.instruction(&Instruction::Block(BlockType::Empty));
+        f.instruction(&Instruction::Loop(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::I32GeU);
+        f.instruction(&Instruction::BrIf(1));
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I32Load8U(MemArg { offset: 0, align: 0, memory_index: 0 }));
+        f.instruction(&Instruction::I32Store8(MemArg { offset: 0, align: 0, memory_index: 0 }));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalSet(8));
+        f.instruction(&Instruction::Br(0));
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::End);
+
+        // null terminator
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::I32Store8(MemArg { offset: 0, align: 0, memory_index: 0 }));
+
+        // return dst as i64
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::I64ExtendI32U);
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// `__knr_int_to_str(n: i64) -> i64`: formats signed i64 as decimal ASCII string with 8-byte len prefix.
+    fn emit_builtin_int_to_str(alloc_idx: u32) -> WasmFunction {
+        // param 0: n (i64)
+        // locals: 1=base(i32), 2=pos(i32), 3=len(i32), 4=neg(i32), 5=dst(i32), 6=i(i32), 7=abs_n(i64)
+        let mut f = WasmFunction::new([(6, ValType::I32), (1, ValType::I64)]);
+        // Allocate 64 bytes: [0..32) scratch digits reversed, [32..40) len, [40..64) final string
+        f.instruction(&Instruction::I32Const(64));
+        f.instruction(&Instruction::Call(alloc_idx));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(1));
+
+        // Handle 0 directly
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I64Eqz);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I64Const(1));
+        f.instruction(&Instruction::I64Store(MemArg { offset: 32, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I32Const(48)); // '0'
+        f.instruction(&Instruction::I32Store8(MemArg { offset: 40, align: 0, memory_index: 0 }));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::I32Store8(MemArg { offset: 41, align: 0, memory_index: 0 }));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I32Const(40));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I64ExtendI32U);
+        f.instruction(&Instruction::Return);
+        f.instruction(&Instruction::End);
+
+        // neg = (n < 0)
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I64Const(0));
+        f.instruction(&Instruction::I64LtS);
+        f.instruction(&Instruction::LocalTee(4));
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::I64Const(0));
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I64Sub);
+        f.instruction(&Instruction::LocalSet(7));
+        f.instruction(&Instruction::Else);
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::LocalSet(7));
+        f.instruction(&Instruction::End);
+
+        // Extract digits in reverse into scratch[0..pos]
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::LocalSet(2));
+        f.instruction(&Instruction::Block(BlockType::Empty));
+        f.instruction(&Instruction::Loop(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::I64Eqz);
+        f.instruction(&Instruction::BrIf(1));
+        // scratch[pos] = '0' + (abs_n % 10)
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::I64Const(10));
+        f.instruction(&Instruction::I64RemU);
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::I32Const(48));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I32Store8(MemArg { offset: 0, align: 0, memory_index: 0 }));
+        // abs_n /= 10
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::I64Const(10));
+        f.instruction(&Instruction::I64DivU);
+        f.instruction(&Instruction::LocalSet(7));
+        // pos += 1
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalSet(2));
+        f.instruction(&Instruction::Br(0));
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::End);
+
+        // len = pos + neg
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalSet(3));
+
+        // store len at base + 32
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::I64ExtendI32U);
+        f.instruction(&Instruction::I64Store(MemArg { offset: 32, align: 3, memory_index: 0 }));
+
+        // dst = base + 40
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I32Const(40));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalSet(5));
+
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::I32Const(45)); // '-'
+        f.instruction(&Instruction::I32Store8(MemArg { offset: 0, align: 0, memory_index: 0 }));
+        f.instruction(&Instruction::End);
+
+        // copy reversed digits: dst[neg + i] = scratch[pos - 1 - i]
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::LocalSet(6));
+        f.instruction(&Instruction::Block(BlockType::Empty));
+        f.instruction(&Instruction::Loop(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::I32GeU);
+        f.instruction(&Instruction::BrIf(1));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::I32Sub);
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::I32Sub);
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I32Load8U(MemArg { offset: 0, align: 0, memory_index: 0 }));
+        f.instruction(&Instruction::I32Store8(MemArg { offset: 0, align: 0, memory_index: 0 }));
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalSet(6));
+        f.instruction(&Instruction::Br(0));
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::End);
+
+        // null terminator
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::I32Store8(MemArg { offset: 0, align: 0, memory_index: 0 }));
+
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::I64ExtendI32U);
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// `__knr_vec_new() -> i64`: allocates 24-byte header `[len=0, cap=8, data_ptr]`.
+    fn emit_builtin_vec_new(alloc_idx: u32) -> WasmFunction {
+        // locals: 0=hdr(i32), 1=data(i64)
+        let mut f = WasmFunction::new([(1, ValType::I32), (1, ValType::I64)]);
+        f.instruction(&Instruction::I32Const(24));
+        f.instruction(&Instruction::Call(alloc_idx));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(0));
+
+        f.instruction(&Instruction::I32Const(64)); // 8 * 8 bytes
+        f.instruction(&Instruction::Call(alloc_idx));
+        f.instruction(&Instruction::LocalSet(1));
+
+        // len = 0
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I64Const(0));
+        f.instruction(&Instruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
+        // cap = 8
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I64Const(8));
+        f.instruction(&Instruction::I64Store(MemArg { offset: 8, align: 3, memory_index: 0 }));
+        // data_ptr = data
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I64Store(MemArg { offset: 16, align: 3, memory_index: 0 }));
+
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I64ExtendI32U);
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// `__knr_vec_push(vec: i64, val: i64) -> i64`
+    fn emit_builtin_vec_push(alloc_idx: u32) -> WasmFunction {
+        // params: 0=vec(i64), 1=val(i64)
+        // locals: 2=hdr(i32), 3=len(i32), 4=cap(i32), 5=data(i32), 6=new_cap(i32), 7=new_data(i32), 8=i(i32)
+        let mut f = WasmFunction::new([(7, ValType::I32)]);
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(2));
+
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(3));
+
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::I64Load(MemArg { offset: 8, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(4));
+
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::I64Load(MemArg { offset: 16, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(5));
+
+        // Grow if len >= cap
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::I32GeU);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::I32Const(2));
+        f.instruction(&Instruction::I32Mul);
+        f.instruction(&Instruction::LocalTee(6));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32Mul);
+        f.instruction(&Instruction::Call(alloc_idx));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalSet(7));
+
+        // copy old items
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::LocalSet(8));
+        f.instruction(&Instruction::Block(BlockType::Empty));
+        f.instruction(&Instruction::Loop(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::I32GeU);
+        f.instruction(&Instruction::BrIf(1));
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32Mul);
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32Mul);
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalSet(8));
+        f.instruction(&Instruction::Br(0));
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::End);
+
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::LocalSet(5));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::I64ExtendI32U);
+        f.instruction(&Instruction::I64Store(MemArg { offset: 8, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::I64ExtendI32U);
+        f.instruction(&Instruction::I64Store(MemArg { offset: 16, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::End);
+
+        // data[len] = val
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32Mul);
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
+
+        // len += 1
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I64ExtendI32U);
+        f.instruction(&Instruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
+
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// `__knr_vec_get(vec: i64, idx: i64) -> i64`
+    fn emit_builtin_vec_get() -> WasmFunction {
+        // params: 0=vec(i64), 1=idx(i64)
+        let mut f = WasmFunction::new([]);
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::I64Load(MemArg { offset: 16, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::I32Const(8));
+        f.instruction(&Instruction::I32Mul);
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// `__knr_vec_len(vec: i64) -> i64`
+    fn emit_builtin_vec_len() -> WasmFunction {
+        let mut f = WasmFunction::new([]);
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::I32WrapI64);
+        f.instruction(&Instruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    // ========================================================================
+    // Function Compilation
+    // ========================================================================
+
     fn compile_func_body(
         func: &Function,
+        schemas: &[Schema],
         import_indices: &HashMap<&'static str, u32>,
         func_indices: &HashMap<String, u32>,
+        builtins: &BuiltinIndices,
         string_pool: &StringPool,
     ) -> Result<WasmFunction, CodegenError> {
         let mut reg_types: HashMap<RegId, Type> = HashMap::new();
         let mut reg_to_local: HashMap<RegId, u32> = HashMap::new();
+        let block_params_map: HashMap<BlockId, Vec<RegId>> = func
+            .blocks
+            .iter()
+            .map(|b| (b.id, b.params.iter().map(|(r, _)| *r).collect()))
+            .collect();
 
         // 1. Assign local indices for function parameters
         for (i, (reg, ty)) in func.params.iter().enumerate() {
@@ -268,8 +1004,11 @@ impl WasmBackend {
         }
         let param_count = func.params.len() as u32;
 
-        // 2. Discover all non-param destination registers
+        // 2. Discover all non-param registers (block params + instruction dsts)
         for block in &func.blocks {
+            for (preg, pty) in &block.params {
+                reg_types.insert(*preg, pty.clone());
+            }
             for inst in &block.instructions {
                 if let Some(dst) = inst.dst {
                     reg_types.insert(dst, inst.ty.clone());
@@ -277,7 +1016,6 @@ impl WasmBackend {
             }
         }
 
-        // Group non-param locals by ValType
         let mut non_param_i64: Vec<RegId> = Vec::new();
         let mut non_param_f64: Vec<RegId> = Vec::new();
         let mut non_param_i32: Vec<RegId> = Vec::new();
@@ -294,7 +1032,6 @@ impl WasmBackend {
             }
         }
 
-        // Sort for deterministic bytecode
         non_param_i64.sort_unstable();
         non_param_f64.sort_unstable();
         non_param_i32.sort_unstable();
@@ -313,17 +1050,22 @@ impl WasmBackend {
             next_local += 1;
         }
 
-        // If multiple blocks or single-block loops/branches, allocate an extra i32 local for basic block state dispatching
         let needs_dispatch = func.blocks.len() > 1
-            || func.blocks.iter().any(|b| matches!(b.terminator, Terminator::Br(_) | Terminator::BrIf { .. }));
+            || func.blocks.iter().any(|b| {
+                matches!(
+                    b.terminator,
+                    Terminator::Br(_)
+                        | Terminator::BrIf { .. }
+                        | Terminator::BrArgs { .. }
+                        | Terminator::BrIfArgs { .. }
+                )
+            });
         let state_local = if needs_dispatch {
-            let l = next_local;
-            Some(l)
+            Some(next_local)
         } else {
             None
         };
 
-        // Build locals declaration
         let mut locals_decl = Vec::new();
         if !non_param_i64.is_empty() {
             locals_decl.push((non_param_i64.len() as u32, ValType::I64));
@@ -339,15 +1081,16 @@ impl WasmBackend {
         let mut wasm_fn = WasmFunction::new(locals_decl);
 
         if !needs_dispatch {
-            // Straight-line single basic block: execute straight-through
             if let Some(block) = func.blocks.first() {
                 Self::emit_block_instructions(
                     block,
+                    schemas,
                     &mut wasm_fn,
                     &reg_to_local,
                     &reg_types,
                     import_indices,
                     func_indices,
+                    builtins,
                     string_pool,
                 )?;
                 Self::emit_single_block_terminator(&block.terminator, &mut wasm_fn, &reg_to_local);
@@ -355,19 +1098,15 @@ impl WasmBackend {
                 wasm_fn.instruction(&Instruction::Return);
             }
         } else {
-            // Multi-block: structured dispatch loop
             let state_var = state_local.unwrap();
             let first_block_id = func.blocks[0].id;
 
-            // Initialize state_var = first_block_id
             wasm_fn.instruction(&Instruction::I32Const(first_block_id as i32));
             wasm_fn.instruction(&Instruction::LocalSet(state_var));
 
-            // loop $dispatch
             wasm_fn.instruction(&Instruction::Loop(BlockType::Empty));
 
             for block in &func.blocks {
-                // if (state_var == block.id)
                 wasm_fn.instruction(&Instruction::LocalGet(state_var));
                 wasm_fn.instruction(&Instruction::I32Const(block.id as i32));
                 wasm_fn.instruction(&Instruction::I32Eq);
@@ -375,15 +1114,16 @@ impl WasmBackend {
 
                 Self::emit_block_instructions(
                     block,
+                    schemas,
                     &mut wasm_fn,
                     &reg_to_local,
                     &reg_types,
                     import_indices,
                     func_indices,
+                    builtins,
                     string_pool,
                 )?;
 
-                // Terminator for block inside loop
                 match &block.terminator {
                     Terminator::Ret(Some(r)) => {
                         let loc = reg_to_local[r];
@@ -396,7 +1136,18 @@ impl WasmBackend {
                     Terminator::Br(target) => {
                         wasm_fn.instruction(&Instruction::I32Const(*target as i32));
                         wasm_fn.instruction(&Instruction::LocalSet(state_var));
-                        // Jump back to loop header (depth 1 from inside if)
+                        wasm_fn.instruction(&Instruction::Br(1));
+                    }
+                    Terminator::BrArgs { target, args } => {
+                        Self::emit_parallel_param_copy(
+                            *target,
+                            args,
+                            &block_params_map,
+                            &reg_to_local,
+                            &mut wasm_fn,
+                        );
+                        wasm_fn.instruction(&Instruction::I32Const(*target as i32));
+                        wasm_fn.instruction(&Instruction::LocalSet(state_var));
                         wasm_fn.instruction(&Instruction::Br(1));
                     }
                     Terminator::BrIf {
@@ -413,57 +1164,118 @@ impl WasmBackend {
                         wasm_fn.instruction(&Instruction::I32Const(*else_blk as i32));
                         wasm_fn.instruction(&Instruction::LocalSet(state_var));
                         wasm_fn.instruction(&Instruction::End);
-                        // Jump back to loop header
+                        wasm_fn.instruction(&Instruction::Br(1));
+                    }
+                    Terminator::BrIfArgs {
+                        cond,
+                        then_blk,
+                        then_args,
+                        else_blk,
+                        else_args,
+                    } => {
+                        let c_loc = reg_to_local[cond];
+                        wasm_fn.instruction(&Instruction::LocalGet(c_loc));
+                        wasm_fn.instruction(&Instruction::If(BlockType::Empty));
+                        Self::emit_parallel_param_copy(
+                            *then_blk,
+                            then_args,
+                            &block_params_map,
+                            &reg_to_local,
+                            &mut wasm_fn,
+                        );
+                        wasm_fn.instruction(&Instruction::I32Const(*then_blk as i32));
+                        wasm_fn.instruction(&Instruction::LocalSet(state_var));
+                        wasm_fn.instruction(&Instruction::Else);
+                        Self::emit_parallel_param_copy(
+                            *else_blk,
+                            else_args,
+                            &block_params_map,
+                            &reg_to_local,
+                            &mut wasm_fn,
+                        );
+                        wasm_fn.instruction(&Instruction::I32Const(*else_blk as i32));
+                        wasm_fn.instruction(&Instruction::LocalSet(state_var));
+                        wasm_fn.instruction(&Instruction::End);
                         wasm_fn.instruction(&Instruction::Br(1));
                     }
                 }
 
-                wasm_fn.instruction(&Instruction::End); // end if (state_var == block.id)
+                wasm_fn.instruction(&Instruction::End);
             }
 
-            // At end of loop: loop back
             wasm_fn.instruction(&Instruction::Br(0));
-            wasm_fn.instruction(&Instruction::End); // end loop
+            wasm_fn.instruction(&Instruction::End);
 
             if func.ret_ty != Type::Void {
                 wasm_fn.instruction(&Instruction::Unreachable);
             }
         }
 
-        wasm_fn.instruction(&Instruction::End); // end function body
+        wasm_fn.instruction(&Instruction::End);
         Ok(wasm_fn)
     }
 
+    /// Parallel-copies branch `args` into `target` block parameters via the Wasm operand stack
+    /// (pushes all args first, then pops in reverse order so swaps/self-references never clobber).
+    fn emit_parallel_param_copy(
+        target: BlockId,
+        args: &[RegId],
+        block_params_map: &HashMap<BlockId, Vec<RegId>>,
+        reg_to_local: &HashMap<RegId, u32>,
+        wasm_fn: &mut WasmFunction,
+    ) {
+        if args.is_empty() {
+            return;
+        }
+        if let Some(params) = block_params_map.get(&target) {
+            let count = args.len().min(params.len());
+            for arg in &args[..count] {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[arg]));
+            }
+            for param in params[..count].iter().rev() {
+                wasm_fn.instruction(&Instruction::LocalSet(reg_to_local[param]));
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn emit_block_instructions(
         block: &BasicBlock,
+        schemas: &[Schema],
         wasm_fn: &mut WasmFunction,
         reg_to_local: &HashMap<RegId, u32>,
         reg_types: &HashMap<RegId, Type>,
         import_indices: &HashMap<&'static str, u32>,
         func_indices: &HashMap<String, u32>,
+        builtins: &BuiltinIndices,
         string_pool: &StringPool,
     ) -> Result<(), CodegenError> {
         for inst in &block.instructions {
             Self::emit_instruction(
                 inst,
+                schemas,
                 wasm_fn,
                 reg_to_local,
                 reg_types,
                 import_indices,
                 func_indices,
+                builtins,
                 string_pool,
             )?;
         }
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn emit_instruction(
         inst: &KnrInst,
+        schemas: &[Schema],
         wasm_fn: &mut WasmFunction,
         reg_to_local: &HashMap<RegId, u32>,
         reg_types: &HashMap<RegId, Type>,
         import_indices: &HashMap<&'static str, u32>,
         func_indices: &HashMap<String, u32>,
+        builtins: &BuiltinIndices,
         string_pool: &StringPool,
     ) -> Result<(), CodegenError> {
         let dst_loc = inst.dst.and_then(|d| reg_to_local.get(&d).copied());
@@ -499,6 +1311,8 @@ impl WasmBackend {
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
                 if inst.ty == Type::F64 {
                     wasm_fn.instruction(&Instruction::F64Add);
+                } else if inst.ty == Type::Str {
+                    wasm_fn.instruction(&Instruction::Call(builtins.str_concat.unwrap()));
                 } else {
                     wasm_fn.instruction(&Instruction::I64Add);
                 }
@@ -542,11 +1356,21 @@ impl WasmBackend {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
+            Op::Rem(a, b) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                wasm_fn.instruction(&Instruction::I64RemS);
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
             Op::CmpEq(a, b) => {
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
                 let ty_a = reg_types.get(a).unwrap_or(&Type::I64);
-                if *ty_a == Type::F64 {
+                if *ty_a == Type::Str {
+                    wasm_fn.instruction(&Instruction::Call(builtins.str_eq.unwrap()));
+                } else if *ty_a == Type::F64 {
                     wasm_fn.instruction(&Instruction::F64Eq);
                 } else if *ty_a == Type::Bool {
                     wasm_fn.instruction(&Instruction::I32Eq);
@@ -570,6 +1394,38 @@ impl WasmBackend {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
+            Op::IntToStr(a) => {
+                let ty_a = reg_types.get(a).unwrap_or(&Type::I64);
+                match ty_a {
+                    Type::Str => {
+                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                    }
+                    Type::Bool => {
+                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                        wasm_fn.instruction(&Instruction::I64ExtendI32U);
+                        wasm_fn.instruction(&Instruction::Call(builtins.int_to_str.unwrap()));
+                    }
+                    Type::F64 => {
+                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                        wasm_fn.instruction(&Instruction::I64TruncF64S);
+                        wasm_fn.instruction(&Instruction::Call(builtins.int_to_str.unwrap()));
+                    }
+                    _ => {
+                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                        wasm_fn.instruction(&Instruction::Call(builtins.int_to_str.unwrap()));
+                    }
+                }
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::StrLen(a) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::Call(builtins.str_len.unwrap()));
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
             Op::BufAlloc(size) => {
                 let call_idx = import_indices.get("rt_buf_alloc_aligned").copied().unwrap_or(0);
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[size]));
@@ -580,7 +1436,6 @@ impl WasmBackend {
                 }
             }
             Op::BufReadU8(buf, idx) => {
-                // address = (buf + idx) as i32
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[buf]));
                 wasm_fn.instruction(&Instruction::I32WrapI64);
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[idx]));
@@ -597,7 +1452,6 @@ impl WasmBackend {
                 }
             }
             Op::BufWriteU8(buf, idx, val) => {
-                // address = (buf + idx) as i32
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[buf]));
                 wasm_fn.instruction(&Instruction::I32WrapI64);
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[idx]));
@@ -610,7 +1464,6 @@ impl WasmBackend {
                     align: 0,
                     memory_index: 0,
                 }));
-                // Returns the consumed buffer
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[buf]));
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
@@ -625,32 +1478,50 @@ impl WasmBackend {
                 }
             }
             Op::VecNew(_) => {
-                let call_idx = import_indices.get("rt_vec_new").copied().unwrap_or(0);
+                let call_idx = builtins.vec_new.unwrap();
                 wasm_fn.instruction(&Instruction::Call(call_idx));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::VecPush(v, val) => {
-                let call_idx = import_indices.get("rt_vec_push").copied().unwrap_or(0);
+                let call_idx = builtins.vec_push.unwrap();
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[v]));
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[val]));
+                match reg_types.get(val) {
+                    Some(Type::F64) => {
+                        wasm_fn.instruction(&Instruction::I64ReinterpretF64);
+                    }
+                    Some(Type::Bool) => {
+                        wasm_fn.instruction(&Instruction::I64ExtendI32U);
+                    }
+                    _ => {}
+                }
                 wasm_fn.instruction(&Instruction::Call(call_idx));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::VecGet(v, idx) => {
-                let call_idx = import_indices.get("rt_vec_get").copied().unwrap_or(0);
+                let call_idx = builtins.vec_get.unwrap();
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[v]));
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[idx]));
                 wasm_fn.instruction(&Instruction::Call(call_idx));
+                match inst.ty {
+                    Type::F64 => {
+                        wasm_fn.instruction(&Instruction::F64ReinterpretI64);
+                    }
+                    Type::Bool => {
+                        wasm_fn.instruction(&Instruction::I32WrapI64);
+                    }
+                    _ => {}
+                }
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::VecLen(v) => {
-                let call_idx = import_indices.get("rt_vec_len").copied().unwrap_or(0);
+                let call_idx = builtins.vec_len.unwrap();
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[v]));
                 wasm_fn.instruction(&Instruction::Call(call_idx));
                 if let Some(dst) = dst_loc {
@@ -668,7 +1539,7 @@ impl WasmBackend {
                 let call_idx = import_indices.get("rt_map_set").copied().unwrap_or(0);
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[m]));
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[k]));
-                wasm_fn.instruction(&Instruction::I64Const(0)); // len if pointer or 0
+                wasm_fn.instruction(&Instruction::I64Const(0));
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[v]));
                 wasm_fn.instruction(&Instruction::Call(call_idx));
                 if let Some(dst) = dst_loc {
@@ -686,7 +1557,6 @@ impl WasmBackend {
                 }
             }
             Op::MapDel(m, _k) => {
-                // map_del returns consumed map
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[m]));
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
@@ -726,34 +1596,113 @@ impl WasmBackend {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
-            Op::Free(r) => {
-                match reg_types.get(r) {
-                    Some(Type::Vec(_)) => {
-                        let call_idx = import_indices.get("rt_vec_free").copied().unwrap_or(0);
+            Op::Free(r) => match reg_types.get(r) {
+                Some(Type::Map(_, _)) => {
+                    if let Some(&call_idx) = import_indices.get("rt_map_free") {
                         wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[r]));
                         wasm_fn.instruction(&Instruction::Call(call_idx));
                     }
-                    Some(Type::Map(_, _)) => {
-                        let call_idx = import_indices.get("rt_map_free").copied().unwrap_or(0);
-                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[r]));
-                        wasm_fn.instruction(&Instruction::Call(call_idx));
-                    }
-                    _ => {
-                        let call_idx = import_indices.get("rt_buf_free").copied().unwrap_or(0);
+                }
+                Some(Type::Buf) => {
+                    if let Some(&call_idx) = import_indices.get("rt_buf_free") {
                         wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[r]));
                         wasm_fn.instruction(&Instruction::I64Const(0));
                         wasm_fn.instruction(&Instruction::I64Const(64));
                         wasm_fn.instruction(&Instruction::Call(call_idx));
                     }
                 }
+                // Structs and Vecs live in Wasm linear memory (arena-reclaimed per render/frame)
+                _ => {}
+            },
+            Op::StructNew(name) => {
+                let field_count = schemas
+                    .iter()
+                    .find(|s| s.name == *name)
+                    .map(|sc| {
+                        sc.fields
+                            .iter()
+                            .map(|f| f.index + 1)
+                            .max()
+                            .unwrap_or(sc.fields.len() as u32)
+                    })
+                    .unwrap_or(8)
+                    .max(1);
+                wasm_fn.instruction(&Instruction::I32Const((field_count * 8) as i32));
+                wasm_fn.instruction(&Instruction::Call(builtins.alloc.unwrap()));
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
             }
-            Op::StructNew(_) | Op::StructGet(_, _) | Op::StructSet(_, _, _) => {
-                return Err(CodegenError::Wasm(format!("Unsupported struct opcode: {:?}", inst.op)));
+            Op::StructGet(s, field_idx) => {
+                let byte_off = (*field_idx as u64) * 8;
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[s]));
+                wasm_fn.instruction(&Instruction::I32WrapI64);
+                match inst.ty {
+                    Type::F64 => {
+                        wasm_fn.instruction(&Instruction::F64Load(MemArg {
+                            offset: byte_off,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                    }
+                    Type::Bool => {
+                        wasm_fn.instruction(&Instruction::I64Load(MemArg {
+                            offset: byte_off,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                        wasm_fn.instruction(&Instruction::I32WrapI64);
+                    }
+                    _ => {
+                        wasm_fn.instruction(&Instruction::I64Load(MemArg {
+                            offset: byte_off,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                    }
+                }
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::StructSet(s, field_idx, val) => {
+                let byte_off = (*field_idx as u64) * 8;
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[s]));
+                wasm_fn.instruction(&Instruction::I32WrapI64);
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[val]));
+                match reg_types.get(val) {
+                    Some(Type::F64) => {
+                        wasm_fn.instruction(&Instruction::F64Store(MemArg {
+                            offset: byte_off,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                    }
+                    Some(Type::Bool) => {
+                        wasm_fn.instruction(&Instruction::I64ExtendI32U);
+                        wasm_fn.instruction(&Instruction::I64Store(MemArg {
+                            offset: byte_off,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                    }
+                    _ => {
+                        wasm_fn.instruction(&Instruction::I64Store(MemArg {
+                            offset: byte_off,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                    }
+                }
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[s]));
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
             }
             Op::Call(fn_name, args) => {
-                let target_idx = func_indices
-                    .get(fn_name)
-                    .ok_or_else(|| CodegenError::Wasm(format!("Unknown function in call: {fn_name}")))?;
+                let target_idx = func_indices.get(fn_name).ok_or_else(|| {
+                    CodegenError::Wasm(format!("Unknown function in call: {fn_name}"))
+                })?;
 
                 for arg in args {
                     let loc = reg_to_local.get(arg).ok_or_else(|| {
@@ -791,8 +1740,10 @@ impl WasmBackend {
             Terminator::Ret(None) => {
                 wasm_fn.instruction(&Instruction::Return);
             }
-            Terminator::Br(_) | Terminator::BrIf { .. } => {
-                // Branching terminators are routed through the dispatch loop
+            Terminator::Br(_)
+            | Terminator::BrIf { .. }
+            | Terminator::BrArgs { .. }
+            | Terminator::BrIfArgs { .. } => {
                 wasm_fn.instruction(&Instruction::Unreachable);
             }
         }
@@ -826,7 +1777,6 @@ impl StringPool {
         self.data.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
         self.data.extend_from_slice(bytes);
         self.data.push(0);
-        // Align to 8 bytes
         while !self.data.len().is_multiple_of(8) {
             self.data.push(0);
         }

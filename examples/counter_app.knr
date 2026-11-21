@@ -1,0 +1,115 @@
+// Real MVU Declarative UI App in .knr!
+// Runs natively on Desktop (Wayland / X11 / macOS / Windows):
+//   knr run examples/counter_app.knr --gui
+// Exports cleanly to standalone Web + zero-import WASM:
+//   knr build examples/counter_app.knr --target web -o dist/
+// Tests deterministically without a browser or display:
+//   knr test examples/counter_app.knr
+
+import "./ui.knr";
+
+schema State {
+    0: count i64,
+    1: step i64,
+    2: status str,
+}
+
+fn init() -> State {
+    return State {
+        count: 0,
+        step: 1,
+        status: "Ready — click any action",
+    };
+}
+
+fn update(state: State, action: str) -> State {
+    let next_count = match action {
+        "inc" => state.count + state.step,
+        "dec" => state.count - state.step,
+        "reset" => 0,
+        _ => state.count,
+    };
+    let next_step = match action {
+        "step_1" => 1,
+        "step_5" => 5,
+        "step_10" => 10,
+        _ => state.step,
+    };
+    let next_status = match action {
+        "inc" => "Incremented by +" + to_str(state.step),
+        "dec" => "Decremented by -" + to_str(state.step),
+        "reset" => "Counter reset to 0",
+        "step_1" => "Step changed to x1",
+        "step_5" => "Step changed to x5",
+        "step_10" => "Step changed to x10",
+        _ => state.status,
+    };
+    return State {
+        count: next_count,
+        step: next_step,
+        status: next_status,
+    };
+}
+
+fn view(state: &State) -> UiNode {
+    let badge = ui_badge("knr MVU · Zero GC · Desktop + WASM", "#1e293b", "#38bdf8");
+    let title = ui_text("Interactive Counter", 28, "#f8fafc");
+    let counter_txt = ui_text("Count: " + to_str(state.count), 42, "#38bdf8");
+    let step_txt = ui_text("Active step: x" + to_str(state.step) + "  |  " + state.status, 15, "#94a3b8");
+
+    let actions: vec[UiNode] = vec_new();
+    actions = vec_push(actions, ui_button("- Decrease", "dec", "#334155", "#f8fafc"));
+    actions = vec_push(actions, ui_button("+ Increase", "inc", "#0284c7", "#ffffff"));
+    actions = vec_push(actions, ui_button("Reset", "reset", "#dc2626", "#ffffff"));
+    let action_row = ui_row(0, 12, actions);
+
+    let step_bg_1 = if state.step == 1 { "#0f766e" } else { "#1e293b" };
+    let step_bg_5 = if state.step == 5 { "#0f766e" } else { "#1e293b" };
+    let step_bg_10 = if state.step == 10 { "#0f766e" } else { "#1e293b" };
+    let steps: vec[UiNode] = vec_new();
+    steps = vec_push(steps, ui_button("Step x1", "step_1", step_bg_1, "#e2e8f0"));
+    steps = vec_push(steps, ui_button("Step x5", "step_5", step_bg_5, "#e2e8f0"));
+    steps = vec_push(steps, ui_button("Step x10", "step_10", step_bg_10, "#e2e8f0"));
+    let step_row = ui_row(0, 10, steps);
+
+    let card_children: vec[UiNode] = vec_new();
+    card_children = vec_push(card_children, badge);
+    card_children = vec_push(card_children, title);
+    card_children = vec_push(card_children, counter_txt);
+    card_children = vec_push(card_children, step_txt);
+    card_children = vec_push(card_children, action_row);
+    card_children = vec_push(card_children, step_row);
+    let card = ui_card(28, 16, "#111827", "#1e293b", card_children);
+
+    let root_children: vec[UiNode] = vec_new();
+    root_children = vec_push(root_children, card);
+    return ui_col(32, 20, "#0b1120", root_children);
+}
+
+// ============================================================================
+// Deterministic Built-in Unit Tests (run via `knr test examples/counter_app.knr`)
+// ============================================================================
+
+fn test_initial_state() -> bool {
+    let s = init();
+    return s.count == 0 && s.step == 1;
+}
+
+fn test_inc_dec_and_step() -> bool {
+    let s = init();
+    s = update(s, "step_5");
+    s = update(s, "inc");
+    s = update(s, "inc");
+    s = update(s, "dec");
+    return s.count == 5 && s.step == 5;
+}
+
+fn test_reset_and_view_borrow() -> bool {
+    let s = init();
+    s = update(s, "step_10");
+    s = update(s, "inc");
+    let v1 = view(&s);
+    s = update(s, "reset");
+    let v2 = view(&s);
+    return s.count == 0 && v1.kind == "col" && v2.kind == "col";
+}

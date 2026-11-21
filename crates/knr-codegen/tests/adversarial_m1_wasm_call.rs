@@ -457,11 +457,16 @@ fn test_adv_wasm_call_num_imports_offset_exhaustive() {
     assert!(contains_call_to(&bytes_a, 0), "mod_a: Must call a1 at index 0");
 
     // Module B: Imports needed (11 imports from collect_imports: rt_map_*, rt_vec_*, rt_buf_*)
-    // Triggered by Op::VecNew
+    // Triggered by Op::MapNew (while Vec/Struct run self-contained inside WASM linear memory!)
     let mut mod_b = Module::new();
     let mut f_b1 = Function::new("b1", Type::I64);
     let mut bb1 = BasicBlock::new(0, Terminator::Ret(Some(0)));
-    bb1.push(Instruction::new(Some(0), Type::Vec(Box::new(Type::I64)), Op::VecNew(Type::I64), 1));
+    bb1.push(Instruction::new(
+        Some(0),
+        Type::Map(Box::new(Type::Str), Box::new(Type::I64)),
+        Op::MapNew(Type::Str, Type::I64),
+        1,
+    ));
     bb1.push(Instruction::new(None, Type::Void, Op::Free(0), 2));
     f_b1.add_block(bb1);
     mod_b.add_function(f_b1);

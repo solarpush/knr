@@ -1,0 +1,4 @@
+// Valid 01: Minimal function returning constant
+fn main() -> i64 {
+    return 42;
+}

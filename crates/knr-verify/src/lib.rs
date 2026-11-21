@@ -3,29 +3,31 @@
 pub mod diagnostic;
 pub mod effects;
 pub mod linear;
+pub mod program;
 pub mod ssa;
 pub mod types;
 
 pub use diagnostic::Diagnostic;
 pub use effects::{verify_effects, verify_module_effects};
-pub use linear::verify_linear;
+pub use linear::{verify_linear, verify_linear_with_env};
+pub use program::{verify_program, verify_program_from_file, verify_program_with_schemas};
 pub use ssa::verify_ssa;
 pub use types::{verify_types, verify_types_with_env, verify_types_with_schemas};
 
 use knr_core::{Function, Module, Schema};
 
 /// Verifies a single function against all static analysis passes with module schemas and known functions:
-/// 1. Linear ownership state machine (`linear.rs`)
-/// 2. SSA structural validation and dominance (`ssa.rs`)
-/// 3. Static type checker for all opcodes (`types.rs`)
-/// 4. Effect capability isolation (`effects.rs`)
+/// 1. Effect capability isolation (`effects.rs`)
+/// 2. Linear ownership & borrow state machine (`linear.rs`)
+/// 3. SSA structural validation and dominance (`ssa.rs`)
+/// 4. Static type checker for all opcodes (`types.rs`)
 pub fn verify_function_with_env(
     func: &Function,
     schemas: &[Schema],
     functions: &[Function],
 ) -> Result<(), Diagnostic> {
     effects::verify_effects(func)?;
-    linear::verify_linear(func)?;
+    linear::verify_linear_with_env(func, functions)?;
     ssa::verify_ssa(func)?;
     types::verify_types_with_env(func, schemas, functions)?;
     Ok(())

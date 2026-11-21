@@ -1,5 +1,5 @@
 use crate::diagnostic::{format_instruction, format_terminator, Diagnostic};
-use knr_core::{BasicBlock, BlockId, Function, Op, RegId, Terminator};
+use knr_core::{BasicBlock, BlockId, Function, Op, RegId};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Validates SSA structural and dominance rules:
@@ -25,47 +25,16 @@ pub fn verify_ssa(func: &Function) -> Result<(), Diagnostic> {
 
     // 2. Branch targets validity
     for block in &func.blocks {
-        match &block.terminator {
-            Terminator::Br(target) => {
-                if !block_ids.contains(target) {
-                    return Err(Diagnostic::new(
-                        "InvalidBranchTarget",
-                        &func.name,
-                        get_terminator_line(block),
-                        format_terminator(&block.terminator),
-                    )
-                    .with_fix_hint(format!("Target block bb{target} does not exist in function")));
-                }
+        for (target, _) in block.terminator.targets() {
+            if !block_ids.contains(&target) {
+                return Err(Diagnostic::new(
+                    "InvalidBranchTarget",
+                    &func.name,
+                    get_terminator_line(block),
+                    format_terminator(&block.terminator),
+                )
+                .with_fix_hint(format!("Target block bb{target} does not exist in function")));
             }
-            Terminator::BrIf {
-                then_blk,
-                else_blk,
-                ..
-            } => {
-                if !block_ids.contains(then_blk) {
-                    return Err(Diagnostic::new(
-                        "InvalidBranchTarget",
-                        &func.name,
-                        get_terminator_line(block),
-                        format_terminator(&block.terminator),
-                    )
-                    .with_fix_hint(format!(
-                        "Target block bb{then_blk} does not exist in function"
-                    )));
-                }
-                if !block_ids.contains(else_blk) {
-                    return Err(Diagnostic::new(
-                        "InvalidBranchTarget",
-                        &func.name,
-                        get_terminator_line(block),
-                        format_terminator(&block.terminator),
-                    )
-                    .with_fix_hint(format!(
-                        "Target block bb{else_blk} does not exist in function"
-                    )));
-                }
-            }
-            Terminator::Ret(_) => {}
         }
     }
 
@@ -105,8 +74,39 @@ pub fn verify_ssa(func: &Function) -> Result<(), Diagnostic> {
         last_defined = Some(*reg);
     }
 
-    // Check instruction destinations
+    // Check block parameter and instruction destinations
     for block in &func.blocks {
+        for (preg, ty) in &block.params {
+            let line = block.instructions.first().map(|i| i.line).unwrap_or(1);
+            if let Some(prev_line) = defined_registers.get(preg) {
+                return Err(Diagnostic::new(
+                    "MultipleAssignment",
+                    &func.name,
+                    line,
+                    format!("bb{}(...%{preg}: {ty}...):", block.id),
+                )
+                .with_violated_register(format!("%{preg}"))
+                .with_fix_hint(format!(
+                    "Block parameter %{preg} is assigned multiple times (first at line {prev_line})"
+                )));
+            }
+            if let Some(prev) = last_defined {
+                if *preg <= prev {
+                    return Err(Diagnostic::new(
+                        "NonMonotonicRegisters",
+                        &func.name,
+                        line,
+                        format!("bb{}(...%{preg}: {ty}...):", block.id),
+                    )
+                    .with_violated_register(format!("%{preg}"))
+                    .with_fix_hint(format!(
+                        "Block parameter %{preg} must be strictly greater than previously defined register %{prev}"
+                    )));
+                }
+            }
+            defined_registers.insert(*preg, line);
+            last_defined = Some(*preg);
+        }
         for inst in &block.instructions {
             if let Some(dst) = inst.dst {
                 if let Some(prev_line) = defined_registers.get(&dst) {
@@ -156,6 +156,9 @@ fn verify_dominance(func: &Function) -> Result<(), Diagnostic> {
     let mut reg_def_block: HashMap<RegId, BlockId> = HashMap::new();
 
     for block in &func.blocks {
+        for (preg, _) in &block.params {
+            reg_def_block.insert(*preg, block.id);
+        }
         for inst in &block.instructions {
             if let Some(dst) = inst.dst {
                 reg_def_block.insert(dst, block.id);
@@ -169,24 +172,9 @@ fn verify_dominance(func: &Function) -> Result<(), Diagnostic> {
         preds.entry(id).or_default();
     }
     for block in &func.blocks {
-        match &block.terminator {
-            Terminator::Ret(_) => {}
-            Terminator::Br(target) => {
-                if block_ids.contains(target) {
-                    preds.entry(*target).or_default().push(block.id);
-                }
-            }
-            Terminator::BrIf {
-                then_blk,
-                else_blk,
-                ..
-            } => {
-                if block_ids.contains(then_blk) {
-                    preds.entry(*then_blk).or_default().push(block.id);
-                }
-                if block_ids.contains(else_blk) {
-                    preds.entry(*else_blk).or_default().push(block.id);
-                }
+        for (target, _) in block.terminator.targets() {
+            if block_ids.contains(&target) {
+                preds.entry(target).or_default().push(block.id);
             }
         }
     }
@@ -241,8 +229,8 @@ fn verify_dominance(func: &Function) -> Result<(), Diagnostic> {
 
     // Now check each instruction in each block
     for block in &func.blocks {
-        // Track registers defined so far in THIS block
-        let mut defs_in_this_block: HashSet<RegId> = HashSet::new();
+        // Track registers defined so far in THIS block (block params are defined at block entry)
+        let mut defs_in_this_block: HashSet<RegId> = block.params.iter().map(|(r, _)| *r).collect();
 
         for inst in &block.instructions {
             let used_regs = get_used_registers(&inst.op);
@@ -287,11 +275,7 @@ fn verify_dominance(func: &Function) -> Result<(), Diagnostic> {
         }
 
         // Check terminator operands
-        let term_used_regs = match &block.terminator {
-            Terminator::Ret(Some(r)) => vec![*r],
-            Terminator::BrIf { cond, .. } => vec![*cond],
-            _ => Vec::new(),
-        };
+        let term_used_regs = block.terminator.used_regs();
 
         for reg in term_used_regs {
             if param_regs.contains(&reg) {
@@ -332,8 +316,10 @@ fn get_used_registers(op: &Op) -> Vec<RegId> {
         | Op::Sub(a, b)
         | Op::Mul(a, b)
         | Op::Div(a, b)
+        | Op::Rem(a, b)
         | Op::CmpEq(a, b)
         | Op::CmpLt(a, b) => vec![*a, *b],
+        Op::IntToStr(a) | Op::StrLen(a) => vec![*a],
         Op::BufAlloc(s) => vec![*s],
         Op::BufReadU8(b, i) => vec![*b, *i],
         Op::BufWriteU8(b, i, v) => vec![*b, *i, *v],

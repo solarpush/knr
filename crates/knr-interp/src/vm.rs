@@ -124,8 +124,11 @@ impl<'a> Vm<'a> {
             Op::Sub(_, _) => "sub",
             Op::Mul(_, _) => "mul",
             Op::Div(_, _) => "div",
+            Op::Rem(_, _) => "rem",
             Op::CmpEq(_, _) => "cmp_eq",
             Op::CmpLt(_, _) => "cmp_lt",
+            Op::IntToStr(_) => "int_to_str",
+            Op::StrLen(_) => "str_len",
             Op::BufAlloc(_) => "buf_alloc",
             Op::BufReadU8(_, _) => "buf_read_u8",
             Op::BufWriteU8(_, _, _) => "buf_write_u8",
@@ -221,6 +224,55 @@ impl<'a> Vm<'a> {
                     (x, y) => Err(VmError::TypeMismatch {
                         expected: "i64 or f64".to_string(),
                         actual: format!("{}, {}", x.type_name(), y.type_name()),
+                        line,
+                    }),
+                }
+            }
+
+            Op::Rem(a_reg, b_reg) => {
+                let a = self.get_reg(*a_reg, line)?;
+                let b = self.get_reg(*b_reg, line)?;
+                match (a, b) {
+                    (Value::I64(x), Value::I64(y)) => {
+                        if y == 0 {
+                            return Err(VmError::DivisionByZero { line });
+                        }
+                        if x == i64::MIN && y == -1 {
+                            Ok(Value::I64(0))
+                        } else {
+                            Ok(Value::I64(x % y))
+                        }
+                    }
+                    (x, y) => Err(VmError::TypeMismatch {
+                        expected: "i64".to_string(),
+                        actual: format!("{}, {}", x.type_name(), y.type_name()),
+                        line,
+                    }),
+                }
+            }
+
+            Op::IntToStr(a_reg) => {
+                let a = self.get_reg(*a_reg, line)?;
+                match a {
+                    Value::I64(n) => Ok(Value::Str(n.to_string())),
+                    Value::F64(f) => Ok(Value::Str(f.to_string())),
+                    Value::Bool(b) => Ok(Value::Str(b.to_string())),
+                    Value::Str(s) => Ok(Value::Str(s)),
+                    other => Err(VmError::TypeMismatch {
+                        expected: "i64, f64, bool, or str".to_string(),
+                        actual: other.type_name().to_string(),
+                        line,
+                    }),
+                }
+            }
+
+            Op::StrLen(a_reg) => {
+                let a = self.get_reg(*a_reg, line)?;
+                match a {
+                    Value::Str(s) => Ok(Value::I64(s.len() as i64)),
+                    other => Err(VmError::TypeMismatch {
+                        expected: "str".to_string(),
+                        actual: other.type_name().to_string(),
                         line,
                     }),
                 }
@@ -751,6 +803,76 @@ impl<'a> Vm<'a> {
                         return Err(VmError::NoSuchBlock {
                             block_id: *target as usize,
                         });
+                    }
+                    current_block_id = *target;
+                }
+
+                Terminator::BrArgs { target, args } => {
+                    let arg_vals: Vec<Value> = args
+                        .iter()
+                        .map(|r| self.get_reg(*r, term_line))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if self.trace_enabled {
+                        self.trace_records.push(TraceRecord::new(
+                            self.step_count,
+                            term_line,
+                            block.id as usize,
+                            "br",
+                            None,
+                            None,
+                        ));
+                    }
+                    let target_blk = block_map.get(target).ok_or(VmError::NoSuchBlock {
+                        block_id: *target as usize,
+                    })?;
+                    for ((param_reg, _), val) in target_blk.params.iter().zip(arg_vals) {
+                        self.registers.insert(*param_reg, val);
+                    }
+                    current_block_id = *target;
+                }
+
+                Terminator::BrIfArgs {
+                    cond,
+                    then_blk,
+                    then_args,
+                    else_blk,
+                    else_args,
+                } => {
+                    let cond_val = self.get_reg(*cond, term_line)?;
+                    let cond_bool = match cond_val {
+                        Value::Bool(b) => b,
+                        other => {
+                            return Err(VmError::TypeMismatch {
+                                expected: "bool".to_string(),
+                                actual: other.type_name().to_string(),
+                                line: term_line,
+                            })
+                        }
+                    };
+                    let (target, chosen_args) = if cond_bool {
+                        (then_blk, then_args)
+                    } else {
+                        (else_blk, else_args)
+                    };
+                    let arg_vals: Vec<Value> = chosen_args
+                        .iter()
+                        .map(|r| self.get_reg(*r, term_line))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if self.trace_enabled {
+                        self.trace_records.push(TraceRecord::new(
+                            self.step_count,
+                            term_line,
+                            block.id as usize,
+                            "br_if",
+                            None,
+                            Some(serde_json::json!(cond_bool)),
+                        ));
+                    }
+                    let target_blk = block_map.get(target).ok_or(VmError::NoSuchBlock {
+                        block_id: *target as usize,
+                    })?;
+                    for ((param_reg, _), val) in target_blk.params.iter().zip(arg_vals) {
+                        self.registers.insert(*param_reg, val);
                     }
                     current_block_id = *target;
                 }

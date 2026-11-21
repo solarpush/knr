@@ -1,0 +1,13 @@
+// Error: TypeMismatch
+schema Point {
+    0: x i64,
+    1: y i64,
+}
+
+fn test_field_ty() -> Point {
+    let pt = Point {
+        x: "wrong type",
+        y: 20,
+    };
+    return pt;
+}

@@ -1,0 +1,44 @@
+// Shared HTTP data schemas and typed routes for examples/http_server.knr
+
+schema HttpRequest {
+    0: req_id i64,
+    1: method str,
+    2: path str,
+}
+
+schema HttpResponse {
+    0: req_id i64,
+    1: status i64,
+    2: body str,
+}
+
+enum Route {
+    Home,
+    UiInc,
+    UiDec,
+    UiReset,
+    UiStep1,
+    UiStep5,
+    UiStep10,
+    ApiInc,
+    Count,
+    Shutdown,
+    NotFound,
+}
+
+fn classify_route(req: &HttpRequest) -> Route {
+    let p = req.path;
+    return match p {
+        "/" => Route::Home,
+        "/ui/inc" => Route::UiInc,
+        "/ui/dec" => Route::UiDec,
+        "/ui/reset" => Route::UiReset,
+        "/ui/step1" => Route::UiStep1,
+        "/ui/step5" => Route::UiStep5,
+        "/ui/step10" => Route::UiStep10,
+        "/api/inc" => Route::ApiInc,
+        "/count" => Route::Count,
+        "/shutdown" => Route::Shutdown,
+        _ => Route::NotFound,
+    };
+}

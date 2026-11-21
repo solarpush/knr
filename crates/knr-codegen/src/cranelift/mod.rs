@@ -7,7 +7,7 @@ use cranelift::prelude::{FloatCC, FunctionBuilder, FunctionBuilderContext, IntCC
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{default_libcall_names, DataDescription, FuncId, Linkage, Module as _};
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use knr_core::{Function, Instruction as KnrInst, Module, Op, RegId, Terminator, Type};
+use knr_core::{Effect, Function, Instruction as KnrInst, Module, Op, RegId, Schema, Terminator, Type};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -17,7 +17,9 @@ fn var(reg: RegId) -> Variable {
 }
 
 /// Native code generator lowering SSA `Module` / `Function` using Cranelift.
-/// Supports both in-memory JIT execution (`compile_jit`) and native object emission (`compile_object`).
+/// Supports both in-memory JIT execution (`compile_jit`, `compile_jit_module`) and
+/// native object emission (`compile_object`) with full support for `Call`, `Struct*`,
+/// block parameters, strings, channels, and `Syscall`.
 pub struct CraneliftBackend {
     isa: Arc<dyn TargetIsa>,
     // Kept alive so JIT-compiled function memory pages remain executable
@@ -46,15 +48,11 @@ impl CraneliftBackend {
         })
     }
 
-    /// Compiles an SSA `Function` to executable machine code via Cranelift JIT.
-    /// Returns a raw function pointer to the compiled machine code.
-    pub fn compile_jit(&mut self, func: &Function) -> Result<*const u8, CodegenError> {
-        let mut jit_builder = JITBuilder::with_isa(self.isa.clone(), default_libcall_names());
-
-        // Register runtime symbols from knr-runtime
+    fn register_jit_runtime_symbols(jit_builder: &mut JITBuilder) {
         jit_builder.symbol("rt_map_new", knr_runtime::rt_map_new as *const u8);
         jit_builder.symbol("rt_map_set", knr_runtime::rt_map_set as *const u8);
         jit_builder.symbol("rt_map_get", knr_runtime::rt_map_get as *const u8);
+        jit_builder.symbol("rt_map_del", knr_runtime::rt_map_del as *const u8);
         jit_builder.symbol("rt_map_free", knr_runtime::rt_map_free as *const u8);
         jit_builder.symbol("rt_vec_new", knr_runtime::rt_vec_new as *const u8);
         jit_builder.symbol("rt_vec_push", knr_runtime::rt_vec_push as *const u8);
@@ -66,19 +64,67 @@ impl CraneliftBackend {
             knr_runtime::rt_buf_alloc_aligned as *const u8,
         );
         jit_builder.symbol("rt_buf_free", knr_runtime::rt_buf_free as *const u8);
+        jit_builder.symbol("rt_struct_new", knr_runtime::rt_struct_new as *const u8);
+        jit_builder.symbol("rt_struct_get", knr_runtime::rt_struct_get as *const u8);
+        jit_builder.symbol("rt_struct_set", knr_runtime::rt_struct_set as *const u8);
+        jit_builder.symbol("rt_struct_free", knr_runtime::rt_struct_free as *const u8);
+        jit_builder.symbol("rt_str_concat", knr_runtime::rt_str_concat as *const u8);
+        jit_builder.symbol("rt_str_eq", knr_runtime::rt_str_eq as *const u8);
+        jit_builder.symbol("rt_str_len", knr_runtime::rt_str_len as *const u8);
+        jit_builder.symbol("rt_int_to_str", knr_runtime::rt_int_to_str as *const u8);
+        jit_builder.symbol("rt_bool_to_str", knr_runtime::rt_bool_to_str as *const u8);
+        jit_builder.symbol("rt_f64_to_str", knr_runtime::rt_f64_to_str as *const u8);
+        jit_builder.symbol("rt_chan_new", knr_runtime::rt_chan_new as *const u8);
+        jit_builder.symbol("rt_chan_send", knr_runtime::rt_chan_send as *const u8);
+        jit_builder.symbol("rt_chan_recv", knr_runtime::rt_chan_recv as *const u8);
+        jit_builder.symbol("rt_syscall", knr_runtime::rt_syscall as *const u8);
+    }
 
-        let mut module = JITModule::new(jit_builder);
-        let runtime_funcs = declare_runtime_symbols(&mut module)?;
+    /// Compiles a single SSA `Function` to executable machine code via Cranelift JIT.
+    pub fn compile_jit(&mut self, func: &Function) -> Result<*const u8, CodegenError> {
+        let mut module = Module::new();
+        module.add_function(func.clone());
+        self.compile_jit_module(&module, &func.name)
+    }
 
-        let mut ctx = module.make_context();
-        let func_id = compile_function_into_module(&mut module, &mut ctx, func, &runtime_funcs)?;
+    /// Compiles an entire SSA `Module` (with structs, enums, and inter-function calls)
+    /// to executable machine code via Cranelift JIT and returns a raw pointer to `entry`.
+    pub fn compile_jit_module(
+        &mut self,
+        module: &Module,
+        entry: &str,
+    ) -> Result<*const u8, CodegenError> {
+        let mut jit_builder = JITBuilder::with_isa(self.isa.clone(), default_libcall_names());
+        Self::register_jit_runtime_symbols(&mut jit_builder);
 
-        module
+        let mut jit_mod = JITModule::new(jit_builder);
+        let runtime_funcs = declare_runtime_symbols(&mut jit_mod)?;
+        let user_funcs = declare_user_functions(&mut jit_mod, &module.functions)?;
+
+        let mut ctx = jit_mod.make_context();
+        for func in &module.functions {
+            let fid = user_funcs[&func.name];
+            compile_function_into_module(
+                &mut jit_mod,
+                &mut ctx,
+                fid,
+                func,
+                &module.schemas,
+                &runtime_funcs,
+                &user_funcs,
+            )?;
+            ctx.clear();
+        }
+
+        jit_mod
             .finalize_definitions()
             .map_err(|e| CodegenError::Cranelift(e.to_string()))?;
 
-        let code_ptr = module.get_finalized_function(func_id);
-        self.jit_module = Some(module);
+        let entry_id = *user_funcs.get(entry).ok_or_else(|| {
+            CodegenError::Cranelift(format!("Entry function '{entry}' not found in module"))
+        })?;
+        let code_ptr = jit_mod.get_finalized_function(entry_id);
+        self.jit_module = Some(jit_mod);
 
         Ok(code_ptr)
     }
@@ -89,10 +135,20 @@ impl CraneliftBackend {
             ObjectBuilder::new(self.isa.clone(), "knr_module", default_libcall_names())?;
         let mut obj_module = ObjectModule::new(obj_builder);
         let runtime_funcs = declare_runtime_symbols(&mut obj_module)?;
+        let user_funcs = declare_user_functions(&mut obj_module, &module.functions)?;
 
         let mut ctx = obj_module.make_context();
         for func in &module.functions {
-            compile_function_into_module(&mut obj_module, &mut ctx, func, &runtime_funcs)?;
+            let fid = user_funcs[&func.name];
+            compile_function_into_module(
+                &mut obj_module,
+                &mut ctx,
+                fid,
+                func,
+                &module.schemas,
+                &runtime_funcs,
+                &user_funcs,
+            )?;
             ctx.clear();
         }
 
@@ -104,95 +160,88 @@ impl CraneliftBackend {
     }
 }
 
-/// Declares external C runtime symbols in the Cranelift module.
+fn declare_user_functions<M: cranelift_module::Module>(
+    module: &mut M,
+    functions: &[Function],
+) -> Result<HashMap<String, FuncId>, CodegenError> {
+    let mut user_funcs = HashMap::with_capacity(functions.len());
+    for func in functions {
+        let mut sig = module.make_signature();
+        for (_, ty) in &func.params {
+            sig.params.push(AbiParam::new(clif_type(ty)));
+        }
+        if func.ret_ty != Type::Void {
+            sig.returns.push(AbiParam::new(clif_type(&func.ret_ty)));
+        }
+        // Export "main" as "knr_main" only? No — keep exact function names so both
+        // C entry wrappers (`ENTRY_FN`) and direct `main` exports work cleanly.
+        let id = module.declare_function(&func.name, Linkage::Export, &sig)?;
+        user_funcs.insert(func.name.clone(), id);
+    }
+    Ok(user_funcs)
+}
+
+fn decl_fn<M: cranelift_module::Module>(
+    module: &mut M,
+    funcs: &mut HashMap<&'static str, FuncId>,
+    name: &'static str,
+    params: &[types::Type],
+    returns: &[types::Type],
+) -> Result<(), CodegenError> {
+    let mut sig = module.make_signature();
+    for &p in params {
+        sig.params.push(AbiParam::new(p));
+    }
+    for &r in returns {
+        sig.returns.push(AbiParam::new(r));
+    }
+    let id = module.declare_function(name, Linkage::Import, &sig)?;
+    funcs.insert(name, id);
+    Ok(())
+}
+
+/// Declares external C-ABI runtime symbols in the Cranelift module.
 fn declare_runtime_symbols<M: cranelift_module::Module>(
     module: &mut M,
 ) -> Result<HashMap<&'static str, FuncId>, CodegenError> {
-    let mut funcs = HashMap::new();
+    let mut f = HashMap::new();
+    let i64t = types::I64;
+    let f64t = types::F64;
 
-    // rt_map_new: () -> i64
-    let mut sig = module.make_signature();
-    sig.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("rt_map_new", Linkage::Import, &sig)?;
-    funcs.insert("rt_map_new", id);
+    decl_fn(module, &mut f, "rt_map_new", &[], &[i64t])?;
+    decl_fn(module, &mut f, "rt_map_set", &[i64t, i64t, i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_map_get", &[i64t, i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_map_del", &[i64t, i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_map_free", &[i64t], &[])?;
 
-    // rt_map_set: (i64, i64, i64, i64) -> i64
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("rt_map_set", Linkage::Import, &sig)?;
-    funcs.insert("rt_map_set", id);
+    decl_fn(module, &mut f, "rt_vec_new", &[], &[i64t])?;
+    decl_fn(module, &mut f, "rt_vec_push", &[i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_vec_get", &[i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_vec_len", &[i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_vec_free", &[i64t], &[])?;
 
-    // rt_map_get: (i64, i64, i64) -> i64
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("rt_map_get", Linkage::Import, &sig)?;
-    funcs.insert("rt_map_get", id);
+    decl_fn(module, &mut f, "rt_buf_alloc_aligned", &[i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_buf_free", &[i64t, i64t, i64t], &[])?;
 
-    // rt_map_free: (i64) -> ()
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    let id = module.declare_function("rt_map_free", Linkage::Import, &sig)?;
-    funcs.insert("rt_map_free", id);
+    decl_fn(module, &mut f, "rt_struct_new", &[i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_struct_get", &[i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_struct_set", &[i64t, i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_struct_free", &[i64t], &[])?;
 
-    // rt_vec_new: () -> i64
-    let mut sig = module.make_signature();
-    sig.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("rt_vec_new", Linkage::Import, &sig)?;
-    funcs.insert("rt_vec_new", id);
+    decl_fn(module, &mut f, "rt_str_concat", &[i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_str_eq", &[i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_str_len", &[i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_int_to_str", &[i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_bool_to_str", &[i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_f64_to_str", &[f64t], &[i64t])?;
 
-    // rt_vec_push: (i64, i64) -> i64
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("rt_vec_push", Linkage::Import, &sig)?;
-    funcs.insert("rt_vec_push", id);
+    decl_fn(module, &mut f, "rt_chan_new", &[i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_chan_send", &[i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_chan_recv", &[i64t], &[i64t])?;
 
-    // rt_vec_get: (i64, i64) -> i64
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("rt_vec_get", Linkage::Import, &sig)?;
-    funcs.insert("rt_vec_get", id);
+    decl_fn(module, &mut f, "rt_syscall", &[i64t, i64t, i64t, i64t], &[i64t])?;
 
-    // rt_vec_len: (i64) -> i64
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    sig.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("rt_vec_len", Linkage::Import, &sig)?;
-    funcs.insert("rt_vec_len", id);
-
-    // rt_vec_free: (i64) -> ()
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    let id = module.declare_function("rt_vec_free", Linkage::Import, &sig)?;
-    funcs.insert("rt_vec_free", id);
-
-    // rt_buf_alloc_aligned: (i64, i64) -> i64
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.returns.push(AbiParam::new(types::I64));
-    let id = module.declare_function("rt_buf_alloc_aligned", Linkage::Import, &sig)?;
-    funcs.insert("rt_buf_alloc_aligned", id);
-
-    // rt_buf_free: (i64, i64, i64) -> ()
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    let id = module.declare_function("rt_buf_free", Linkage::Import, &sig)?;
-    funcs.insert("rt_buf_free", id);
-
-    Ok(funcs)
+    Ok(f)
 }
 
 /// Translates a knr SSA Type to a Cranelift IR Type.
@@ -201,8 +250,9 @@ fn clif_type(ty: &Type) -> types::Type {
         Type::I64 | Type::Bool => types::I64,
         Type::F64 => types::F64,
         Type::Void => types::I64,
-        // Linear types (Buf, Str, Vec, Map, Chan, Struct) mapped to 64-bit pointers
-        Type::Buf | Type::Str | Type::Vec(_) | Type::Map(_, _) | Type::Chan(_) | Type::Struct(_) => types::I64,
+        Type::Buf | Type::Str | Type::Vec(_) | Type::Map(_, _) | Type::Chan(_) | Type::Struct(_) => {
+            types::I64
+        }
     }
 }
 
@@ -210,9 +260,12 @@ fn clif_type(ty: &Type) -> types::Type {
 fn compile_function_into_module<M: cranelift_module::Module>(
     module: &mut M,
     ctx: &mut Context,
+    func_id: FuncId,
     func: &Function,
+    schemas: &[Schema],
     runtime_funcs: &HashMap<&'static str, FuncId>,
-) -> Result<FuncId, CodegenError> {
+    user_funcs: &HashMap<String, FuncId>,
+) -> Result<(), CodegenError> {
     let mut sig = module.make_signature();
     for (_, ty) in &func.params {
         sig.params.push(AbiParam::new(clif_type(ty)));
@@ -220,8 +273,6 @@ fn compile_function_into_module<M: cranelift_module::Module>(
     if func.ret_ty != Type::Void {
         sig.returns.push(AbiParam::new(clif_type(&func.ret_ty)));
     }
-
-    let func_id = module.declare_function(&func.name, Linkage::Export, &sig)?;
 
     ctx.func.signature = sig;
     ctx.func.name = UserFuncName::user(0, func_id.as_u32());
@@ -243,18 +294,29 @@ fn compile_function_into_module<M: cranelift_module::Module>(
         builder.ins().return_(&[]);
         builder.finalize();
         module.define_function(func_id, ctx)?;
-        return Ok(func_id);
+        return Ok(());
     }
 
     let entry_block = block_map[&func.blocks[0].id];
     builder.append_block_params_for_function_params(entry_block);
 
-    // Record types for all registers
+    // Append Cranelift block parameters for every block's SSA parameters
+    for b in &func.blocks {
+        let clif_blk = block_map[&b.id];
+        for (_, ty) in &b.params {
+            builder.append_block_param(clif_blk, clif_type(ty));
+        }
+    }
+
+    // Record types for all registers (function params, block params, instructions)
     let mut reg_types: HashMap<RegId, Type> = HashMap::new();
     for (reg, ty) in &func.params {
         reg_types.insert(*reg, ty.clone());
     }
     for b in &func.blocks {
+        for (reg, ty) in &b.params {
+            reg_types.insert(*reg, ty.clone());
+        }
         for inst in &b.instructions {
             if let Some(dst) = inst.dst {
                 reg_types.insert(dst, inst.ty.clone());
@@ -276,13 +338,21 @@ fn compile_function_into_module<M: cranelift_module::Module>(
         builder.def_var(v, entry_params[i]);
     }
 
-    // Static string counter for data segments
     let mut str_counter = 0usize;
 
     // Translate all basic blocks
-    for b in &func.blocks {
+    for (block_idx, b) in func.blocks.iter().enumerate() {
         let clif_block = block_map[&b.id];
         builder.switch_to_block(clif_block);
+
+        // Bind SSA block parameter registers to the Cranelift block params
+        if !b.params.is_empty() {
+            let offset = if block_idx == 0 { func.params.len() } else { 0 };
+            let blk_params = builder.block_params(clif_block).to_vec();
+            for (i, (preg, _)) in b.params.iter().enumerate() {
+                builder.def_var(var(*preg), blk_params[offset + i]);
+            }
+        }
 
         for inst in &b.instructions {
             emit_instruction(
@@ -291,7 +361,9 @@ fn compile_function_into_module<M: cranelift_module::Module>(
                 &func.name,
                 inst,
                 &reg_types,
+                schemas,
                 runtime_funcs,
+                user_funcs,
                 &mut str_counter,
             )?;
         }
@@ -304,16 +376,38 @@ fn compile_function_into_module<M: cranelift_module::Module>(
 
     module.define_function(func_id, ctx)?;
 
-    Ok(func_id)
+    Ok(())
 }
 
+fn emit_c_str_data<M: cranelift_module::Module>(
+    module: &mut M,
+    builder: &mut FunctionBuilder,
+    func_name: &str,
+    s: &str,
+    str_counter: &mut usize,
+) -> Result<cranelift::codegen::ir::Value, CodegenError> {
+    let data_name = format!("{}_str_{}", func_name, *str_counter);
+    *str_counter += 1;
+    let mut data_desc = DataDescription::new();
+    let mut bytes = s.as_bytes().to_vec();
+    bytes.push(0);
+    data_desc.define(bytes.into_boxed_slice());
+    let data_id = module.declare_data(&data_name, Linkage::Local, false, false)?;
+    module.define_data(data_id, &data_desc)?;
+    let local_data = module.declare_data_in_func(data_id, builder.func);
+    Ok(builder.ins().symbol_value(types::I64, local_data))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn emit_instruction<M: cranelift_module::Module>(
     module: &mut M,
     builder: &mut FunctionBuilder,
     func_name: &str,
     inst: &KnrInst,
     reg_types: &HashMap<RegId, Type>,
+    schemas: &[Schema],
     runtime_funcs: &HashMap<&'static str, FuncId>,
+    user_funcs: &HashMap<String, FuncId>,
     str_counter: &mut usize,
 ) -> Result<(), CodegenError> {
     let dst_var = inst.dst.map(var);
@@ -338,18 +432,7 @@ fn emit_instruction<M: cranelift_module::Module>(
             }
         }
         Op::ConstStr(s) => {
-            let data_name = format!("{}_str_{}", func_name, *str_counter);
-            *str_counter += 1;
-            let mut data_desc = DataDescription::new();
-            let mut bytes = s.as_bytes().to_vec();
-            bytes.push(0);
-            data_desc.define(bytes.into_boxed_slice());
-            let data_id =
-                module.declare_data(&data_name, Linkage::Local, false, false)?;
-            module.define_data(data_id, &data_desc)?;
-
-            let local_data = module.declare_data_in_func(data_id, builder.func);
-            let res = builder.ins().symbol_value(types::I64, local_data);
+            let res = emit_c_str_data(module, builder, func_name, s, str_counter)?;
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
@@ -359,6 +442,11 @@ fn emit_instruction<M: cranelift_module::Module>(
             let vb = builder.use_var(var(*b));
             let res = if inst.ty == Type::F64 {
                 builder.ins().fadd(va, vb)
+            } else if inst.ty == Type::Str {
+                let callee =
+                    module.declare_func_in_func(runtime_funcs["rt_str_concat"], builder.func);
+                let call = builder.ins().call(callee, &[va, vb]);
+                builder.inst_results(call)[0]
             } else {
                 builder.ins().iadd(va, vb)
             };
@@ -402,16 +490,31 @@ fn emit_instruction<M: cranelift_module::Module>(
                 builder.def_var(dst, res);
             }
         }
+        Op::Rem(a, b) => {
+            let va = builder.use_var(var(*a));
+            let vb = builder.use_var(var(*b));
+            let res = builder.ins().srem(va, vb);
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
         Op::CmpEq(a, b) => {
             let va = builder.use_var(var(*a));
             let vb = builder.use_var(var(*b));
             let ty_a = reg_types.get(a).unwrap_or(&Type::I64);
-            let cmp = if *ty_a == Type::F64 {
-                builder.ins().fcmp(FloatCC::Equal, va, vb)
+            let res = if *ty_a == Type::Str {
+                let callee =
+                    module.declare_func_in_func(runtime_funcs["rt_str_eq"], builder.func);
+                let call = builder.ins().call(callee, &[va, vb]);
+                builder.inst_results(call)[0]
             } else {
-                builder.ins().icmp(IntCC::Equal, va, vb)
+                let cmp = if *ty_a == Type::F64 {
+                    builder.ins().fcmp(FloatCC::Equal, va, vb)
+                } else {
+                    builder.ins().icmp(IntCC::Equal, va, vb)
+                };
+                builder.ins().uextend(types::I64, cmp)
             };
-            let res = builder.ins().uextend(types::I64, cmp);
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
@@ -426,6 +529,43 @@ fn emit_instruction<M: cranelift_module::Module>(
                 builder.ins().icmp(IntCC::SignedLessThan, va, vb)
             };
             let res = builder.ins().uextend(types::I64, cmp);
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::IntToStr(a) => {
+            let va = builder.use_var(var(*a));
+            let ty_a = reg_types.get(a).unwrap_or(&Type::I64);
+            let res = match ty_a {
+                Type::Str => va,
+                Type::Bool => {
+                    let callee =
+                        module.declare_func_in_func(runtime_funcs["rt_bool_to_str"], builder.func);
+                    let call = builder.ins().call(callee, &[va]);
+                    builder.inst_results(call)[0]
+                }
+                Type::F64 => {
+                    let callee =
+                        module.declare_func_in_func(runtime_funcs["rt_f64_to_str"], builder.func);
+                    let call = builder.ins().call(callee, &[va]);
+                    builder.inst_results(call)[0]
+                }
+                _ => {
+                    let callee =
+                        module.declare_func_in_func(runtime_funcs["rt_int_to_str"], builder.func);
+                    let call = builder.ins().call(callee, &[va]);
+                    builder.inst_results(call)[0]
+                }
+            };
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::StrLen(a) => {
+            let va = builder.use_var(var(*a));
+            let callee = module.declare_func_in_func(runtime_funcs["rt_str_len"], builder.func);
+            let call = builder.ins().call(callee, &[va]);
+            let res = builder.inst_results(call)[0];
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
@@ -460,7 +600,6 @@ fn emit_instruction<M: cranelift_module::Module>(
             let addr = builder.ins().iadd(vb, vi);
             let byte = builder.ins().ireduce(types::I8, vv);
             builder.ins().store(MemFlags::trusted(), byte, addr, 0);
-            // Returns consumed buffer
             if let Some(dst) = dst_var {
                 builder.def_var(dst, vb);
             }
@@ -484,7 +623,10 @@ fn emit_instruction<M: cranelift_module::Module>(
         }
         Op::VecPush(v, val) => {
             let vv = builder.use_var(var(*v));
-            let v_val = builder.use_var(var(*val));
+            let mut v_val = builder.use_var(var(*val));
+            if reg_types.get(val) == Some(&Type::F64) {
+                v_val = builder.ins().bitcast(types::I64, MemFlags::new(), v_val);
+            }
             let local_callee =
                 module.declare_func_in_func(runtime_funcs["rt_vec_push"], builder.func);
             let call = builder.ins().call(local_callee, &[vv, v_val]);
@@ -499,7 +641,10 @@ fn emit_instruction<M: cranelift_module::Module>(
             let local_callee =
                 module.declare_func_in_func(runtime_funcs["rt_vec_get"], builder.func);
             let call = builder.ins().call(local_callee, &[vv, vi]);
-            let res = builder.inst_results(call)[0];
+            let mut res = builder.inst_results(call)[0];
+            if inst.ty == Type::F64 {
+                res = builder.ins().bitcast(types::F64, MemFlags::new(), res);
+            }
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
@@ -527,7 +672,10 @@ fn emit_instruction<M: cranelift_module::Module>(
             let vm = builder.use_var(var(*m));
             let vk = builder.use_var(var(*k));
             let v_len = builder.ins().iconst(types::I64, 0);
-            let vv = builder.use_var(var(*v));
+            let mut vv = builder.use_var(var(*v));
+            if reg_types.get(v) == Some(&Type::F64) {
+                vv = builder.ins().bitcast(types::I64, MemFlags::new(), vv);
+            }
             let local_callee =
                 module.declare_func_in_func(runtime_funcs["rt_map_set"], builder.func);
             let call = builder.ins().call(local_callee, &[vm, vk, v_len, vv]);
@@ -543,32 +691,56 @@ fn emit_instruction<M: cranelift_module::Module>(
             let local_callee =
                 module.declare_func_in_func(runtime_funcs["rt_map_get"], builder.func);
             let call = builder.ins().call(local_callee, &[vm, vk, v_len]);
+            let mut res = builder.inst_results(call)[0];
+            if inst.ty == Type::F64 {
+                res = builder.ins().bitcast(types::F64, MemFlags::new(), res);
+            }
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::MapDel(m, k) => {
+            let vm = builder.use_var(var(*m));
+            let vk = builder.use_var(var(*k));
+            let v_len = builder.ins().iconst(types::I64, 0);
+            let local_callee =
+                module.declare_func_in_func(runtime_funcs["rt_map_del"], builder.func);
+            let call = builder.ins().call(local_callee, &[vm, vk, v_len]);
             let res = builder.inst_results(call)[0];
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
         }
-        Op::MapDel(m, _k) => {
-            // map_del returns consumed map
-            let vm = builder.use_var(var(*m));
-            if let Some(dst) = dst_var {
-                builder.def_var(dst, vm);
-            }
-        }
-        Op::ChanNew(_, _) => {
-            let res = builder.ins().iconst(types::I64, 1);
+        Op::ChanNew(_, cap) => {
+            let vc = builder.use_var(var(*cap));
+            let callee = module.declare_func_in_func(runtime_funcs["rt_chan_new"], builder.func);
+            let call = builder.ins().call(callee, &[vc]);
+            let res = builder.inst_results(call)[0];
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
         }
-        Op::ChanSend(_, _) => {
-            let res = builder.ins().iconst(types::I64, 1);
+        Op::ChanSend(c, val) => {
+            let vc = builder.use_var(var(*c));
+            let mut vv = builder.use_var(var(*val));
+            if reg_types.get(val) == Some(&Type::F64) {
+                vv = builder.ins().bitcast(types::I64, MemFlags::new(), vv);
+            }
+            let callee = module.declare_func_in_func(runtime_funcs["rt_chan_send"], builder.func);
+            let call = builder.ins().call(callee, &[vc, vv]);
+            let res = builder.inst_results(call)[0];
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
         }
-        Op::ChanRecv(_) => {
-            let res = builder.ins().iconst(types::I64, 0);
+        Op::ChanRecv(c) => {
+            let vc = builder.use_var(var(*c));
+            let callee = module.declare_func_in_func(runtime_funcs["rt_chan_recv"], builder.func);
+            let call = builder.ins().call(callee, &[vc]);
+            let mut res = builder.inst_results(call)[0];
+            if inst.ty == Type::F64 {
+                res = builder.ins().bitcast(types::F64, MemFlags::new(), res);
+            }
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
@@ -579,11 +751,47 @@ fn emit_instruction<M: cranelift_module::Module>(
                 builder.def_var(dst, res);
             }
         }
-        Op::Syscall(_, _, _) => {
-            let res = match inst.ty {
-                Type::F64 => builder.ins().f64const(0.0),
-                _ => builder.ins().iconst(types::I64, 0),
+        Op::Syscall(eff, op_name, payload) => {
+            let eff_tag = match eff {
+                Effect::Net => 0i64,
+                Effect::Ui => 1i64,
+                Effect::Hw => 2i64,
+                Effect::Async => 3i64,
             };
+            let v_eff = builder.ins().iconst(types::I64, eff_tag);
+            let v_op = emit_c_str_data(module, builder, func_name, op_name, str_counter)?;
+            let mut v_payload = builder.use_var(var(*payload));
+            let p_ty = reg_types.get(payload).cloned().unwrap_or(Type::I64);
+            if p_ty == Type::F64 {
+                v_payload = builder.ins().bitcast(types::I64, MemFlags::new(), v_payload);
+            }
+            let payload_kind: i64 = match &p_ty {
+                Type::Str => 1,
+                Type::Bool => 4,
+                Type::Struct(sname) => {
+                    if let Some(sc) = schemas.iter().find(|s| &s.name == sname) {
+                        if sname == "UiNode" || sc.fields.len() >= 11 {
+                            5
+                        } else if sc.get_field(2).is_some_and(|f| f.ty == Type::I64) {
+                            3
+                        } else {
+                            2
+                        }
+                    } else if sname == "UiNode" {
+                        5
+                    } else {
+                        2
+                    }
+                }
+                _ => 0,
+            };
+            let v_kind = builder.ins().iconst(types::I64, payload_kind);
+            let callee = module.declare_func_in_func(runtime_funcs["rt_syscall"], builder.func);
+            let call = builder.ins().call(callee, &[v_eff, v_op, v_payload, v_kind]);
+            let mut res = builder.inst_results(call)[0];
+            if inst.ty == Type::F64 {
+                res = builder.ins().bitcast(types::F64, MemFlags::new(), res);
+            }
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
@@ -601,20 +809,85 @@ fn emit_instruction<M: cranelift_module::Module>(
                         module.declare_func_in_func(runtime_funcs["rt_map_free"], builder.func);
                     builder.ins().call(local_callee, &[vr]);
                 }
-                _ => {
+                Some(Type::Struct(_)) => {
+                    let local_callee =
+                        module.declare_func_in_func(runtime_funcs["rt_struct_free"], builder.func);
+                    builder.ins().call(local_callee, &[vr]);
+                }
+                Some(Type::Buf) => {
                     let v_size = builder.ins().iconst(types::I64, 0);
                     let v_align = builder.ins().iconst(types::I64, 64);
                     let local_callee =
                         module.declare_func_in_func(runtime_funcs["rt_buf_free"], builder.func);
                     builder.ins().call(local_callee, &[vr, v_size, v_align]);
                 }
+                _ => {}
             }
         }
-        Op::StructNew(_) | Op::StructGet(_, _) | Op::StructSet(_, _, _) => {
-            return Err(CodegenError::Cranelift(format!("Unsupported struct opcode: {:?}", inst.op)));
+        Op::StructNew(name) => {
+            let field_count = schemas
+                .iter()
+                .find(|s| s.name == *name)
+                .map(|sc| {
+                    sc.fields
+                        .iter()
+                        .map(|f| f.index as i64 + 1)
+                        .max()
+                        .unwrap_or(sc.fields.len() as i64)
+                })
+                .unwrap_or(8)
+                .max(1);
+            let v_count = builder.ins().iconst(types::I64, field_count);
+            let callee =
+                module.declare_func_in_func(runtime_funcs["rt_struct_new"], builder.func);
+            let call = builder.ins().call(callee, &[v_count]);
+            let res = builder.inst_results(call)[0];
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
         }
-        Op::Call(fn_name, _) => {
-            return Err(CodegenError::Cranelift(format!("Unsupported opcode: call {fn_name}")));
+        Op::StructGet(s, field_idx) => {
+            let vs = builder.use_var(var(*s));
+            let v_idx = builder.ins().iconst(types::I64, *field_idx as i64);
+            let callee =
+                module.declare_func_in_func(runtime_funcs["rt_struct_get"], builder.func);
+            let call = builder.ins().call(callee, &[vs, v_idx]);
+            let mut res = builder.inst_results(call)[0];
+            if inst.ty == Type::F64 {
+                res = builder.ins().bitcast(types::F64, MemFlags::new(), res);
+            }
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::StructSet(s, field_idx, val) => {
+            let vs = builder.use_var(var(*s));
+            let v_idx = builder.ins().iconst(types::I64, *field_idx as i64);
+            let mut vv = builder.use_var(var(*val));
+            if reg_types.get(val) == Some(&Type::F64) {
+                vv = builder.ins().bitcast(types::I64, MemFlags::new(), vv);
+            }
+            let callee =
+                module.declare_func_in_func(runtime_funcs["rt_struct_set"], builder.func);
+            let call = builder.ins().call(callee, &[vs, v_idx, vv]);
+            let res = builder.inst_results(call)[0];
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::Call(fn_name, args) => {
+            let &target_id = user_funcs.get(fn_name).ok_or_else(|| {
+                CodegenError::Cranelift(format!("Unknown function in call: {fn_name}"))
+            })?;
+            let local_callee = module.declare_func_in_func(target_id, builder.func);
+            let arg_vals: Vec<_> = args.iter().map(|r| builder.use_var(var(*r))).collect();
+            let call = builder.ins().call(local_callee, &arg_vals);
+            if let Some(dst) = dst_var {
+                let results = builder.inst_results(call);
+                if !results.is_empty() {
+                    builder.def_var(dst, results[0]);
+                }
+            }
         }
     }
 
@@ -647,6 +920,29 @@ fn emit_terminator(
             builder
                 .ins()
                 .brif(bool_c, block_map[then_blk], &[], block_map[else_blk], &[]);
+        }
+        Terminator::BrArgs { target, args } => {
+            let arg_vals: Vec<_> = args.iter().map(|r| builder.use_var(var(*r))).collect();
+            builder.ins().jump(block_map[target], &arg_vals);
+        }
+        Terminator::BrIfArgs {
+            cond,
+            then_blk,
+            then_args,
+            else_blk,
+            else_args,
+        } => {
+            let vc = builder.use_var(var(*cond));
+            let bool_c = builder.ins().icmp_imm(IntCC::NotEqual, vc, 0);
+            let t_vals: Vec<_> = then_args.iter().map(|r| builder.use_var(var(*r))).collect();
+            let e_vals: Vec<_> = else_args.iter().map(|r| builder.use_var(var(*r))).collect();
+            builder.ins().brif(
+                bool_c,
+                block_map[then_blk],
+                &t_vals,
+                block_map[else_blk],
+                &e_vals,
+            );
         }
     }
 }

@@ -3,9 +3,16 @@ name = "knr-runtime"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+crate-type = ["rlib", "staticlib"]
+
 [dependencies]
 knr-core = { path = "../knr-core" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tiny-skia = "0.11.4"
+ab_glyph = "0.2.32"
+winit = "0.30.12"
+softbuffer = "0.4.8"

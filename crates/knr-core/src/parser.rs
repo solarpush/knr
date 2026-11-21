@@ -20,17 +20,18 @@ pub(crate) fn parse_import_directive(line: &str, line_num: usize) -> Result<Stri
     }
     let mut rest_str = rest;
     let path = parse_quoted_string(&mut rest_str, line_num)?;
-    if !rest_str.trim().is_empty() {
+    let rest_trimmed = rest_str.trim().trim_end_matches(';').trim();
+    if !rest_trimmed.is_empty() {
         return Err(ParseError::InvalidSyntax {
             line: line_num,
             msg: format!("Unexpected tokens after import statement: '{}'", rest_str.trim()),
         });
     }
-    if !(path.ends_with(".ssa.schema") || path.ends_with(".ssa")) {
+    if !(path.ends_with(".ssa.schema") || path.ends_with(".ssa") || path.ends_with(".knr")) {
         return Err(ParseError::InvalidSyntax {
             line: line_num,
             msg: format!(
-                "Imported file '{}' must have extension '.ssa' or '.ssa.schema'",
+                "Imported file '{}' must have extension '.ssa', '.ssa.schema', or '.knr'",
                 path
             ),
         });
@@ -443,6 +444,8 @@ fn parse_function_from_lines_with_env(
     let rest = after_paren_open[paren_close + 1..].trim();
 
     let mut params = Vec::new();
+    let mut param_borrows = Vec::new();
+    let mut has_any_borrow = false;
     let mut reg_types: HashMap<RegId, Type> = HashMap::new();
 
     if !params_part.is_empty() {
@@ -457,11 +460,18 @@ fn parse_function_from_lines_with_env(
                 msg: format!("Expected '%<reg>: <Type>' in param, got '{}'", p),
             })?;
             let reg_str = p[..colon].trim();
-            let ty_str = p[colon + 1..].trim();
+            let raw_ty_str = p[colon + 1..].trim();
+            let (is_borrowed, ty_str) = if let Some(stripped) = raw_ty_str.strip_prefix('&') {
+                has_any_borrow = true;
+                (true, stripped.trim())
+            } else {
+                (false, raw_ty_str)
+            };
             let reg = parse_reg(reg_str, header_line_num)?;
             let ty = parse_full_type(ty_str, header_line_num)?;
             reg_types.insert(reg, ty.clone());
             params.push((reg, ty));
+            param_borrows.push(is_borrowed);
         }
     }
 
@@ -527,6 +537,9 @@ fn parse_function_from_lines_with_env(
 
     let mut func = Function::new(name, ret_ty);
     func.params = params;
+    if has_any_borrow {
+        func.param_borrows = param_borrows;
+    }
     func.effects = effects;
 
     // Parse basic blocks until closing brace '}'
@@ -556,13 +569,47 @@ fn parse_function_from_lines_with_env(
             return Ok((func, idx));
         }
 
-        // Check if label "bb<digits>:"
+        // Check if label "bb<digits>:" or "bb<digits>(%r: T, ...):"
         if trimmed.starts_with("bb") && trimmed.ends_with(':') {
-            let label = &trimmed[2..trimmed.len() - 1];
-            let blk_id: u32 = label.parse().map_err(|_| ParseError::InvalidBlockLabel {
-                line: line_num,
-                token: trimmed.to_string(),
-            })?;
+            let inner = &trimmed[2..trimmed.len() - 1];
+            let (blk_id, blk_params) = if let Some(paren_open) = inner.find('(') {
+                if !inner.ends_with(')') {
+                    return Err(ParseError::InvalidBlockLabel {
+                        line: line_num,
+                        token: trimmed.to_string(),
+                    });
+                }
+                let id_str = inner[..paren_open].trim();
+                let blk_id: u32 = id_str.parse().map_err(|_| ParseError::InvalidBlockLabel {
+                    line: line_num,
+                    token: trimmed.to_string(),
+                })?;
+                let params_str = inner[paren_open + 1..inner.len() - 1].trim();
+                let mut bparams = Vec::new();
+                if !params_str.is_empty() {
+                    for p in split_top_level_comma(params_str) {
+                        let p = p.trim();
+                        if p.is_empty() {
+                            continue;
+                        }
+                        let colon = p.find(':').ok_or_else(|| ParseError::InvalidSyntax {
+                            line: line_num,
+                            msg: format!("Expected '%<reg>: <Type>' in block param, got '{p}'"),
+                        })?;
+                        let reg = parse_reg(p[..colon].trim(), line_num)?;
+                        let ty = parse_full_type(p[colon + 1..].trim(), line_num)?;
+                        reg_types.insert(reg, ty.clone());
+                        bparams.push((reg, ty));
+                    }
+                }
+                (blk_id, bparams)
+            } else {
+                let blk_id: u32 = inner.parse().map_err(|_| ParseError::InvalidBlockLabel {
+                    line: line_num,
+                    token: trimmed.to_string(),
+                })?;
+                (blk_id, Vec::new())
+            };
 
             if let Some(b) = current_block.take() {
                 if !block_has_terminator {
@@ -577,6 +624,7 @@ fn parse_function_from_lines_with_env(
             // Create new block with temporary dummy terminator (replaced when terminator line is parsed)
             current_block = Some(BasicBlock {
                 id: blk_id,
+                params: blk_params,
                 instructions: Vec::new(),
                 terminator: Terminator::Ret(None),
             });
@@ -645,8 +693,67 @@ fn parse_function_from_lines_with_env(
     })
 }
 
+fn split_terminator_items(s: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut start = None;
+    let mut depth = 0usize;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => {
+                if start.is_none() {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(st) = start.take() {
+                    items.push(&s[st..i]);
+                }
+            }
+            _ => {
+                if start.is_none() {
+                    start = Some(i);
+                }
+            }
+        }
+    }
+    if let Some(st) = start {
+        items.push(&s[st..]);
+    }
+    items
+}
+
+fn parse_block_target_with_args(s: &str, line: usize) -> Result<(BlockId, Vec<RegId>), ParseError> {
+    let s = s.trim();
+    if let Some(paren_open) = s.find('(') {
+        if !s.ends_with(')') {
+            return Err(ParseError::InvalidBlockLabel {
+                line,
+                token: s.to_string(),
+            });
+        }
+        let target = parse_block_target(&s[..paren_open], line)?;
+        let args_str = s[paren_open + 1..s.len() - 1].trim();
+        let mut args = Vec::new();
+        if !args_str.is_empty() {
+            for part in args_str.split(',') {
+                let p = part.trim();
+                if !p.is_empty() {
+                    args.push(parse_reg(p, line)?);
+                }
+            }
+        }
+        Ok((target, args))
+    } else {
+        Ok((parse_block_target(s, line)?, Vec::new()))
+    }
+}
+
 fn parse_terminator(s: &str, line: usize) -> Result<Terminator, ParseError> {
-    let tokens = tokenize_whitespace(s);
+    let tokens = split_terminator_items(s);
     if tokens.is_empty() {
         return Err(ParseError::InvalidSyntax {
             line,
@@ -670,8 +777,12 @@ fn parse_terminator(s: &str, line: usize) -> Result<Terminator, ParseError> {
         }
         "br" => {
             if tokens.len() == 2 {
-                let target = parse_block_target(tokens[1], line)?;
-                Ok(Terminator::Br(target))
+                let (target, args) = parse_block_target_with_args(tokens[1], line)?;
+                if args.is_empty() {
+                    Ok(Terminator::Br(target))
+                } else {
+                    Ok(Terminator::BrArgs { target, args })
+                }
             } else {
                 Err(ParseError::InvalidSyntax {
                     line,
@@ -682,13 +793,23 @@ fn parse_terminator(s: &str, line: usize) -> Result<Terminator, ParseError> {
         "br_if" => {
             if tokens.len() == 4 {
                 let cond = parse_reg(tokens[1], line)?;
-                let then_blk = parse_block_target(tokens[2], line)?;
-                let else_blk = parse_block_target(tokens[3], line)?;
-                Ok(Terminator::BrIf {
-                    cond,
-                    then_blk,
-                    else_blk,
-                })
+                let (then_blk, then_args) = parse_block_target_with_args(tokens[2], line)?;
+                let (else_blk, else_args) = parse_block_target_with_args(tokens[3], line)?;
+                if then_args.is_empty() && else_args.is_empty() {
+                    Ok(Terminator::BrIf {
+                        cond,
+                        then_blk,
+                        else_blk,
+                    })
+                } else {
+                    Ok(Terminator::BrIfArgs {
+                        cond,
+                        then_blk,
+                        then_args,
+                        else_blk,
+                        else_args,
+                    })
+                }
             } else {
                 Err(ParseError::InvalidSyntax {
                     line,
@@ -761,6 +882,19 @@ fn parse_op(
             let (r1, r2) = parse_two_regs(rest, line)?;
             let ty = reg_types.get(&r1).cloned().unwrap_or(Type::I64);
             Ok((Op::Div(r1, r2), ty))
+        }
+        "rem" => {
+            let (r1, r2) = parse_two_regs(rest, line)?;
+            let ty = reg_types.get(&r1).cloned().unwrap_or(Type::I64);
+            Ok((Op::Rem(r1, r2), ty))
+        }
+        "int_to_str" => {
+            let r = parse_one_reg(rest, line)?;
+            Ok((Op::IntToStr(r), Type::Str))
+        }
+        "str_len" => {
+            let r = parse_one_reg(rest, line)?;
+            Ok((Op::StrLen(r), Type::I64))
         }
         "cmp_eq" => {
             let (r1, r2) = parse_two_regs(rest, line)?;

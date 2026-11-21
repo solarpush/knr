@@ -1,4 +1,4 @@
-use knr_core::{Instruction, Op, Terminator};
+use knr_core::{Instruction, Terminator};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -18,6 +18,12 @@ pub struct Diagnostic {
     pub alive_registers: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix_hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<(usize, usize)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_variable: Option<String>,
 }
 
 impl Diagnostic {
@@ -37,6 +43,9 @@ impl Diagnostic {
             consumed_at_line: None,
             alive_registers: None,
             fix_hint: None,
+            column: None,
+            span: None,
+            source_variable: None,
         }
     }
 
@@ -58,6 +67,40 @@ impl Diagnostic {
     pub fn with_fix_hint(mut self, hint: impl Into<String>) -> Self {
         self.fix_hint = Some(hint.into());
         self
+    }
+
+    pub fn with_column(mut self, col: usize) -> Self {
+        self.column = Some(col);
+        self
+    }
+
+    pub fn with_span(mut self, start: usize, end: usize) -> Self {
+        self.span = Some((start, end));
+        self
+    }
+
+    pub fn with_source_variable(mut self, var: impl Into<String>) -> Self {
+        self.source_variable = Some(var.into());
+        self
+    }
+
+    pub fn from_lower_error(err: knr_core::lower::LowerError) -> Self {
+        let line = err.line();
+        let var_name = err.variable_name();
+        Self {
+            status: "error".to_string(),
+            error_kind: err.kind_str().to_string(),
+            function: "<program>".to_string(),
+            line,
+            instruction: "".to_string(),
+            violated_register: None,
+            consumed_at_line: None,
+            alive_registers: None,
+            fix_hint: Some(err.message()),
+            column: None,
+            span: None,
+            source_variable: var_name,
+        }
     }
 
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -88,94 +131,9 @@ impl fmt::Display for Diagnostic {
 impl std::error::Error for Diagnostic {}
 
 pub fn format_instruction(inst: &Instruction) -> String {
-    let op_str = format_op(&inst.op);
-    match inst.dst {
-        Some(dst) => format!("%{dst} = {op_str}"),
-        None => op_str,
-    }
+    knr_core::format_instruction(inst)
 }
 
 pub fn format_terminator(term: &Terminator) -> String {
-    match term {
-        Terminator::Ret(Some(reg)) => format!("ret %{reg}"),
-        Terminator::Ret(None) => "ret".to_string(),
-        Terminator::Br(blk) => format!("br bb{blk}"),
-        Terminator::BrIf {
-            cond,
-            then_blk,
-            else_blk,
-        } => format!("br_if %{cond} bb{then_blk} bb{else_blk}"),
-    }
-}
-
-fn format_op(op: &Op) -> String {
-    match op {
-        Op::ConstI64(v) => format!("const_i64 {v}"),
-        Op::ConstF64(v) => {
-            let s = v.to_string();
-            if !s.contains('.') && !s.contains('e') && !s.contains('E') && v.is_finite() {
-                format!("const_f64 {s}.0")
-            } else {
-                format!("const_f64 {s}")
-            }
-        }
-        Op::ConstBool(v) => format!("const_bool {v}"),
-        Op::ConstStr(s) => format!("const_str \"{}\"", escape_str(s)),
-        Op::Add(a, b) => format!("add %{a} %{b}"),
-        Op::Sub(a, b) => format!("sub %{a} %{b}"),
-        Op::Mul(a, b) => format!("mul %{a} %{b}"),
-        Op::Div(a, b) => format!("div %{a} %{b}"),
-        Op::CmpEq(a, b) => format!("cmp_eq %{a} %{b}"),
-        Op::CmpLt(a, b) => format!("cmp_lt %{a} %{b}"),
-        Op::BufAlloc(s) => format!("buf_alloc %{s}"),
-        Op::BufReadU8(b, i) => format!("buf_read_u8 %{b} %{i}"),
-        Op::BufWriteU8(b, i, v) => format!("buf_write_u8 %{b} %{i} %{v}"),
-        Op::BufSlice(b, s, l) => format!("buf_slice %{b} %{s} %{l}"),
-        Op::VecNew(t) => format!("vec_new {t}"),
-        Op::VecPush(v, item) => format!("vec_push %{v} %{item}"),
-        Op::VecGet(v, i) => format!("vec_get %{v} %{i}"),
-        Op::VecLen(v) => format!("vec_len %{v}"),
-        Op::MapNew(k, v) => format!("map_new {k} {v}"),
-        Op::MapSet(m, k, v) => format!("map_set %{m} %{k} %{v}"),
-        Op::MapGet(m, k) => format!("map_get %{m} %{k}"),
-        Op::MapDel(m, k) => format!("map_del %{m} %{k}"),
-        Op::ChanNew(t, cap) => format!("chan_new {t} %{cap}"),
-        Op::ChanSend(c, val) => format!("chan_send %{c} %{val}"),
-        Op::ChanRecv(c) => format!("chan_recv %{c}"),
-        Op::Spawn(fn_name, arg) => format!("spawn \"{}\" %{arg}", escape_str(fn_name)),
-        Op::Syscall(eff, op_name, payload) => {
-            format!("syscall {eff} \"{}\" %{payload}", escape_str(op_name))
-        }
-        Op::Free(r) => format!("free %{r}"),
-        Op::StructNew(name) => format!("struct_new {name}"),
-        Op::StructGet(s, idx) => format!("struct_get %{s} {idx}"),
-        Op::StructSet(s, idx, val) => format!("struct_set %{s} {idx} %{val}"),
-        Op::Call(fn_name, args) => {
-            if args.is_empty() {
-                format!("call {fn_name}")
-            } else {
-                let args_str = args
-                    .iter()
-                    .map(|r| format!("%{r}"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                format!("call {fn_name} {args_str}")
-            }
-        }
-    }
-}
-
-fn escape_str(s: &str) -> String {
-    let mut out = String::new();
-    for ch in s.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            c => out.push(c),
-        }
-    }
-    out
+    knr_core::format_terminator(term)
 }

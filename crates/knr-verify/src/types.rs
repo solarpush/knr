@@ -20,6 +20,8 @@ pub fn verify_types_with_env(
     functions: &[Function],
 ) -> Result<(), Diagnostic> {
     let mut reg_types: HashMap<RegId, Type> = HashMap::new();
+    let block_map: HashMap<knr_core::BlockId, &BasicBlock> =
+        func.blocks.iter().map(|b| (b.id, b)).collect();
 
     // Register function parameter types
     for (reg, ty) in &func.params {
@@ -30,6 +32,18 @@ pub fn verify_types_with_env(
         reg_types.insert(*reg, ty.clone());
     }
     check_type_schemas(&func.ret_ty, func, 1, &format!("fn {} -> {}", func.name, func.ret_ty), schemas)?;
+
+    // Pre-register all block parameter types
+    for block in &func.blocks {
+        let b_line = block.instructions.first().map(|i| i.line).unwrap_or(1);
+        for (preg, ty) in &block.params {
+            if let Err(mut diag) = check_type_schemas(ty, func, b_line, &format!("%{preg}: {ty}"), schemas) {
+                diag = diag.with_violated_register(format!("%{preg}"));
+                return Err(diag);
+            }
+            reg_types.insert(*preg, ty.clone());
+        }
+    }
 
     for block in &func.blocks {
         for inst in &block.instructions {
@@ -94,7 +108,7 @@ pub fn verify_types_with_env(
                         )));
                 }
             }
-            Terminator::BrIf { cond, .. } => {
+            Terminator::BrIf { cond, then_blk, else_blk } => {
                 let ty = get_reg_ty(func, *cond, term_line, &term_str, &reg_types)?;
                 if *ty != Type::Bool {
                     return Err(Diagnostic::new("TypeMismatch", &func.name, term_line, term_str)
@@ -103,11 +117,68 @@ pub fn verify_types_with_env(
                             "Branch condition register %{cond} must be bool, found {ty}"
                         )));
                 }
+                check_branch_edge_types(func, term_line, &term_str, &block_map, &reg_types, *then_blk, &[])?;
+                check_branch_edge_types(func, term_line, &term_str, &block_map, &reg_types, *else_blk, &[])?;
             }
-            Terminator::Br(_) => {}
+            Terminator::Br(target) => {
+                check_branch_edge_types(func, term_line, &term_str, &block_map, &reg_types, *target, &[])?;
+            }
+            Terminator::BrArgs { target, args } => {
+                check_branch_edge_types(func, term_line, &term_str, &block_map, &reg_types, *target, args)?;
+            }
+            Terminator::BrIfArgs {
+                cond,
+                then_blk,
+                then_args,
+                else_blk,
+                else_args,
+            } => {
+                let ty = get_reg_ty(func, *cond, term_line, &term_str, &reg_types)?;
+                if *ty != Type::Bool {
+                    return Err(Diagnostic::new("TypeMismatch", &func.name, term_line, term_str)
+                        .with_violated_register(format!("%{cond}"))
+                        .with_fix_hint(format!(
+                            "Branch condition register %{cond} must be bool, found {ty}"
+                        )));
+                }
+                check_branch_edge_types(func, term_line, &term_str, &block_map, &reg_types, *then_blk, then_args)?;
+                check_branch_edge_types(func, term_line, &term_str, &block_map, &reg_types, *else_blk, else_args)?;
+            }
         }
     }
 
+    Ok(())
+}
+
+fn check_branch_edge_types(
+    func: &Function,
+    line: usize,
+    term_str: &str,
+    block_map: &HashMap<knr_core::BlockId, &BasicBlock>,
+    reg_types: &HashMap<RegId, Type>,
+    target: knr_core::BlockId,
+    args: &[RegId],
+) -> Result<(), Diagnostic> {
+    if let Some(target_blk) = block_map.get(&target) {
+        if args.len() != target_blk.params.len() {
+            return Err(Diagnostic::new("TypeMismatch", &func.name, line, term_str)
+                .with_fix_hint(format!(
+                    "Block bb{target} expects {} parameters, but branch passes {} arguments",
+                    target_blk.params.len(),
+                    args.len()
+                )));
+        }
+        for (&arg, (param_reg, expected_ty)) in args.iter().zip(target_blk.params.iter()) {
+            let actual_ty = get_reg_ty(func, arg, line, term_str, reg_types)?;
+            if actual_ty != expected_ty {
+                return Err(Diagnostic::new("TypeMismatch", &func.name, line, term_str)
+                    .with_violated_register(format!("%{arg}"))
+                    .with_fix_hint(format!(
+                        "Branch argument %{arg} has type {actual_ty}, but bb{target} parameter %{param_reg} expects {expected_ty}"
+                    )));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -156,7 +227,36 @@ fn check_op_types(
                 return Err(type_err(func, line, inst_str, "const_str destination must be str", None));
             }
         }
-        Op::Add(a, b) | Op::Sub(a, b) | Op::Mul(a, b) | Op::Div(a, b) => {
+        Op::Add(a, b) => {
+            let ty_a = get_reg_ty(func, *a, line, inst_str, reg_types)?;
+            let ty_b = get_reg_ty(func, *b, line, inst_str, reg_types)?;
+            if ty_a != ty_b {
+                return Err(Diagnostic::new("TypeMismatch", &func.name, line, inst_str)
+                    .with_violated_register(format!("%{b}"))
+                    .with_fix_hint(format!(
+                        "Operand types must match: %{a} is {ty_a}, but %{b} is {ty_b}"
+                    )));
+            }
+            if *ty_a != Type::I64 && *ty_a != Type::F64 && *ty_a != Type::Str {
+                return Err(type_err(
+                    func,
+                    line,
+                    inst_str,
+                    &format!("Add operation not supported for type {ty_a}"),
+                    Some(*a),
+                ));
+            }
+            if inst.ty != *ty_a {
+                return Err(type_err(
+                    func,
+                    line,
+                    inst_str,
+                    &format!("Instruction type {} does not match operand type {ty_a}", inst.ty),
+                    None,
+                ));
+            }
+        }
+        Op::Sub(a, b) | Op::Mul(a, b) | Op::Div(a, b) => {
             let ty_a = get_reg_ty(func, *a, line, inst_str, reg_types)?;
             let ty_b = get_reg_ty(func, *b, line, inst_str, reg_types)?;
             if ty_a != ty_b {
@@ -183,6 +283,52 @@ fn check_op_types(
                     &format!("Instruction type {} does not match operand type {ty_a}", inst.ty),
                     None,
                 ));
+            }
+        }
+        Op::Rem(a, b) => {
+            let ty_a = get_reg_ty(func, *a, line, inst_str, reg_types)?;
+            let ty_b = get_reg_ty(func, *b, line, inst_str, reg_types)?;
+            if *ty_a != Type::I64 || *ty_b != Type::I64 {
+                return Err(type_err(
+                    func,
+                    line,
+                    inst_str,
+                    &format!("rem requires i64 operands, found {ty_a} and {ty_b}"),
+                    Some(*a),
+                ));
+            }
+            if inst.ty != Type::I64 {
+                return Err(type_err(func, line, inst_str, "rem must return i64", None));
+            }
+        }
+        Op::IntToStr(a) => {
+            let ty_a = get_reg_ty(func, *a, line, inst_str, reg_types)?;
+            if !matches!(ty_a, Type::I64 | Type::F64 | Type::Bool | Type::Str) {
+                return Err(type_err(
+                    func,
+                    line,
+                    inst_str,
+                    &format!("int_to_str requires i64, f64, bool, or str, found {ty_a}"),
+                    Some(*a),
+                ));
+            }
+            if inst.ty != Type::Str {
+                return Err(type_err(func, line, inst_str, "int_to_str must return str", None));
+            }
+        }
+        Op::StrLen(a) => {
+            let ty_a = get_reg_ty(func, *a, line, inst_str, reg_types)?;
+            if *ty_a != Type::Str {
+                return Err(type_err(
+                    func,
+                    line,
+                    inst_str,
+                    &format!("str_len requires str, found {ty_a}"),
+                    Some(*a),
+                ));
+            }
+            if inst.ty != Type::I64 {
+                return Err(type_err(func, line, inst_str, "str_len must return i64", None));
             }
         }
         Op::CmpEq(a, b) => {

@@ -60,7 +60,14 @@ fn format_function_into(func: &Function, out: &mut String) {
     let params_str = func
         .params
         .iter()
-        .map(|(reg, ty)| format!("%{reg}: {ty}"))
+        .enumerate()
+        .map(|(i, (reg, ty))| {
+            if func.is_param_borrowed(i) {
+                format!("%{reg}: &{ty}")
+            } else {
+                format!("%{reg}: {ty}")
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -90,7 +97,17 @@ fn format_function_into(func: &Function, out: &mut String) {
     ));
 
     for block in &func.blocks {
-        out.push_str(&format!("bb{}:\n", block.id));
+        if block.params.is_empty() {
+            out.push_str(&format!("bb{}:\n", block.id));
+        } else {
+            let bp = block
+                .params
+                .iter()
+                .map(|(reg, ty)| format!("%{reg}: {ty}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("bb{}({bp}):\n", block.id));
+        }
         for inst in &block.instructions {
             out.push_str(&format!("    {}\n", format_instruction(inst)));
         }
@@ -100,7 +117,7 @@ fn format_function_into(func: &Function, out: &mut String) {
     out.push_str("}\n");
 }
 
-fn format_instruction(inst: &Instruction) -> String {
+pub fn format_instruction(inst: &Instruction) -> String {
     let op_str = format_op(&inst.op);
     match inst.dst {
         Some(dst) => format!("%{dst} = {op_str}"),
@@ -125,8 +142,11 @@ fn format_op(op: &Op) -> String {
         Op::Sub(a, b) => format!("sub %{a} %{b}"),
         Op::Mul(a, b) => format!("mul %{a} %{b}"),
         Op::Div(a, b) => format!("div %{a} %{b}"),
+        Op::Rem(a, b) => format!("rem %{a} %{b}"),
         Op::CmpEq(a, b) => format!("cmp_eq %{a} %{b}"),
         Op::CmpLt(a, b) => format!("cmp_lt %{a} %{b}"),
+        Op::IntToStr(a) => format!("int_to_str %{a}"),
+        Op::StrLen(a) => format!("str_len %{a}"),
         Op::BufAlloc(s) => format!("buf_alloc %{s}"),
         Op::BufReadU8(b, i) => format!("buf_read_u8 %{b} %{i}"),
         Op::BufWriteU8(b, i, v) => format!("buf_write_u8 %{b} %{i} %{v}"),
@@ -165,7 +185,7 @@ fn format_op(op: &Op) -> String {
     }
 }
 
-fn format_terminator(term: &Terminator) -> String {
+pub fn format_terminator(term: &Terminator) -> String {
     match term {
         Terminator::Ret(Some(r)) => format!("ret %{r}"),
         Terminator::Ret(None) => "ret".to_string(),
@@ -176,6 +196,47 @@ fn format_terminator(term: &Terminator) -> String {
             else_blk,
         } => {
             format!("br_if %{cond} bb{then_blk} bb{else_blk}")
+        }
+        Terminator::BrArgs { target, args } => {
+            if args.is_empty() {
+                format!("br bb{target}")
+            } else {
+                let a = args
+                    .iter()
+                    .map(|r| format!("%{r}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("br bb{target}({a})")
+            }
+        }
+        Terminator::BrIfArgs {
+            cond,
+            then_blk,
+            then_args,
+            else_blk,
+            else_args,
+        } => {
+            let t_str = if then_args.is_empty() {
+                format!("bb{then_blk}")
+            } else {
+                let a = then_args
+                    .iter()
+                    .map(|r| format!("%{r}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("bb{then_blk}({a})")
+            };
+            let e_str = if else_args.is_empty() {
+                format!("bb{else_blk}")
+            } else {
+                let a = else_args
+                    .iter()
+                    .map(|r| format!("%{r}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("bb{else_blk}({a})")
+            };
+            format!("br_if %{cond} {t_str} {e_str}")
         }
     }
 }

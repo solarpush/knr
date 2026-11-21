@@ -1,0 +1,21 @@
+// Valid 06: Nested linear composition (tree)
+schema LeafNode {
+    0: tag str,
+    1: text str,
+}
+
+schema CardNode {
+    0: title str,
+    1: children vec[struct[LeafNode]],
+}
+
+fn build_tree() -> CardNode {
+    let card = CardNode {
+        title: "Overview",
+        children: [
+            LeafNode { tag: "h1", text: "Dashboard" },
+            LeafNode { tag: "p", text: "Status OK" },
+        ],
+    };
+    return card;
+}

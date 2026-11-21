@@ -1,0 +1,9 @@
+// Error: LinearLeak
+schema LinearBuffer {
+    0: data buf,
+}
+
+fn leak() -> i64 {
+    let b = LinearBuffer { data: buf_alloc(64) };
+    return 0;
+}

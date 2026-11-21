@@ -6,6 +6,84 @@ use knr_verify::Diagnostic;
 use crate::error::CliError;
 
 pub fn execute(file: &Path, json: bool, graph: bool) -> Result<(), CliError> {
+    if file.to_string_lossy().ends_with(".knr") {
+        let src = match std::fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => {
+                let err = ParseError::FileNotFound {
+                    line: 1,
+                    path: file.to_string_lossy().to_string(),
+                };
+                let (error_kind, line, fix_hint) = parse_error_details(&err);
+                let diag = Diagnostic::new(error_kind, "<file>", line, e.to_string())
+                    .with_fix_hint(fix_hint);
+                if json {
+                    let json_output = serde_json::to_string_pretty(&vec![diag])
+                        .map_err(|e| CliError::Other(e.to_string()))?;
+                    println!("{json_output}");
+                } else {
+                    eprintln!("{diag}");
+                }
+                return Err(CliError::Parse(err));
+            }
+        };
+        let _prog = match knr_core::syntax::parse_knr(&src) {
+            Ok(p) => p,
+            Err(err) => {
+                let (error_kind, line, fix_hint) = parse_error_details(&err);
+                let mut diag = Diagnostic::new(error_kind, "<parse>", line, err.to_string())
+                    .with_fix_hint(fix_hint);
+                if let Some(col) = extract_column_from_parse_error(&err) {
+                    diag = diag.with_column(col);
+                }
+                if json {
+                    let json_output = serde_json::to_string_pretty(&vec![diag])
+                        .map_err(|e| CliError::Other(e.to_string()))?;
+                    println!("{json_output}");
+                } else {
+                    eprintln!("{diag}");
+                }
+                return Err(CliError::Parse(err));
+            }
+        };
+        return match knr_verify::verify_program_from_file(file) {
+            Ok(_) => {
+                if graph {
+                    let project_graph = knr_core::explore_path(file).map_err(|err| {
+                        eprintln!("{err}");
+                        CliError::Parse(err)
+                    })?;
+                    let filter = ExploreFilter::default();
+                    let output = if json {
+                        project_graph.format_json(&filter)
+                    } else {
+                        project_graph.format_ai(&filter)
+                    };
+                    if output.ends_with('\n') {
+                        print!("{output}");
+                    } else {
+                        println!("{output}");
+                    }
+                } else if json {
+                    println!("[]");
+                }
+                Ok(())
+            }
+            Err(diagnostics) => {
+                if json {
+                    let json_output = serde_json::to_string_pretty(&diagnostics)
+                        .map_err(|e| CliError::Other(e.to_string()))?;
+                    println!("{json_output}");
+                } else {
+                    for diag in &diagnostics {
+                        eprintln!("{diag}");
+                    }
+                }
+                Err(CliError::Verify(diagnostics.len()))
+            }
+        };
+    }
+
     let module = match knr_core::load_module_from_path(file) {
         Ok(m) => m,
         Err(err) => {
@@ -154,4 +232,15 @@ fn parse_error_details(err: &ParseError) -> (&'static str, usize, String) {
             format!("Verify file '{path}' permissions and accessibility: {msg}"),
         ),
     }
+}
+
+fn extract_column_from_parse_error(err: &ParseError) -> Option<usize> {
+    if let ParseError::InvalidSyntax { msg, .. } = err {
+        if let Some(rest) = msg.strip_prefix("col ") {
+            if let Some(colon_pos) = rest.find(':') {
+                return rest[..colon_pos].trim().parse::<usize>().ok();
+            }
+        }
+    }
+    None
 }

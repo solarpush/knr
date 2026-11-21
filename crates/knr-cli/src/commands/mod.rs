@@ -1,8 +1,12 @@
 pub mod asm;
 pub mod build;
 pub mod check;
+pub mod dev;
 pub mod disasm;
 pub mod explore;
+pub mod init;
+pub mod new;
 pub mod run;
 pub mod skill;
+pub mod test;
 pub mod update;

@@ -254,11 +254,11 @@ pub fn explore_path(path: &Path) -> Result<ProjectGraph, ParseError> {
 
 fn explore_file(canonical: &Path, root_hint: &Path) -> Result<ProjectGraph, ParseError> {
     let file_str = canonical.to_string_lossy();
-    if !(file_str.ends_with(".ssa.schema") || file_str.ends_with(".ssa")) {
+    if !(file_str.ends_with(".ssa.schema") || file_str.ends_with(".ssa") || file_str.ends_with(".knr")) {
         return Err(ParseError::InvalidSyntax {
             line: 1,
             msg: format!(
-                "File '{}' has invalid extension; expected '.ssa' or '.ssa.schema'",
+                "File '{}' has invalid extension; expected '.ssa', '.ssa.schema', or '.knr'",
                 root_hint.display()
             ),
         });
@@ -315,15 +315,16 @@ impl<'a> FileExplorerState<'a> {
         }
 
         let file_str = canonical.to_string_lossy();
+        let is_knr = file_str.ends_with(".knr");
         let role = if file_str.ends_with(".ssa.schema") {
             FileRole::Schema
-        } else if file_str.ends_with(".ssa") {
+        } else if file_str.ends_with(".ssa") || is_knr {
             FileRole::Code
         } else {
             return Err(ParseError::InvalidSyntax {
                 line: import_line,
                 msg: format!(
-                    "File '{}' has invalid extension; expected '.ssa' or '.ssa.schema'",
+                    "File '{}' has invalid extension; expected '.ssa', '.ssa.schema', or '.knr'",
                     canonical.display()
                 ),
             });
@@ -338,24 +339,33 @@ impl<'a> FileExplorerState<'a> {
 
         // Scan imports
         let base_dir = canonical.parent().unwrap_or(Path::new("."));
-        let mut seen_decl = false;
         let mut file_imports = Vec::new();
-        for (i, line) in content.lines().enumerate() {
-            let stripped = strip_comment(line);
-            let trimmed = stripped.trim();
-            if trimmed.is_empty() {
-                continue;
+        let parsed_knr_prog = if is_knr {
+            let prog = crate::syntax::parse_knr(&content)?;
+            for imp in &prog.imports {
+                file_imports.push((imp.path.clone(), imp.span.line));
             }
-            if trimmed.starts_with("import ") || trimmed == "import" {
-                if seen_decl {
-                    return Err(ParseError::ImportAfterDeclaration { line: i + 1 });
+            Some(prog)
+        } else {
+            let mut seen_decl = false;
+            for (i, line) in content.lines().enumerate() {
+                let stripped = strip_comment(line);
+                let trimmed = stripped.trim();
+                if trimmed.is_empty() {
+                    continue;
                 }
-                let imp_path = parse_import_directive(trimmed, i + 1)?;
-                file_imports.push((imp_path, i + 1));
-            } else if trimmed.starts_with("schema ") || trimmed.starts_with("fn ") {
-                seen_decl = true;
+                if trimmed.starts_with("import ") || trimmed == "import" {
+                    if seen_decl {
+                        return Err(ParseError::ImportAfterDeclaration { line: i + 1 });
+                    }
+                    let imp_path = parse_import_directive(trimmed, i + 1)?;
+                    file_imports.push((imp_path, i + 1));
+                } else if trimmed.starts_with("schema ") || trimmed.starts_with("fn ") {
+                    seen_decl = true;
+                }
             }
-        }
+            None
+        };
 
         let mut resolved_import_paths = Vec::new();
 
@@ -400,22 +410,69 @@ impl<'a> FileExplorerState<'a> {
             }
         }
 
-        let parsed_module = parse_ssa_with_role_and_env(
-            &content,
-            role,
-            &accumulated_schemas,
-            &accumulated_functions,
-        )?;
+        let (file_schemas, file_functions, schema_lines, fn_lines) = if let Some(prog) = parsed_knr_prog {
+            let (lowered_module, _) = crate::lower::lower_program_with_env_and_source_map(
+                &prog,
+                &accumulated_schemas,
+                &accumulated_functions,
+                Some(base_dir.to_path_buf()),
+            ).map_err(|err| ParseError::InvalidSyntax {
+                line: err.line(),
+                msg: err.to_string(),
+            })?;
 
-        let (schema_lines, fn_lines) = prescan_decl_lines(&content);
+            let mut schema_lines = HashMap::new();
+            let mut fn_lines = HashMap::new();
+            let mut declared_schemas = Vec::new();
+            let mut declared_fn_names = HashSet::new();
+
+            for decl in &prog.declarations {
+                match decl {
+                    crate::syntax::ast::Declaration::Struct(s) => {
+                        schema_lines.insert(s.name.name.clone(), s.name.span.line);
+                        if let Some(schema) = lowered_module.schemas.iter().find(|sch| sch.name == s.name.name) {
+                            declared_schemas.push(schema.clone());
+                        }
+                    }
+                    crate::syntax::ast::Declaration::Enum(e) => {
+                        schema_lines.insert(e.name.name.clone(), e.name.span.line);
+                        if let Some(schema) = lowered_module.schemas.iter().find(|sch| sch.name == e.name.name) {
+                            declared_schemas.push(schema.clone());
+                        }
+                    }
+                    crate::syntax::ast::Declaration::Function(f) => {
+                        fn_lines.insert(f.name.name.clone(), f.name.span.line);
+                        declared_fn_names.insert(f.name.name.clone());
+                    }
+                }
+            }
+
+            let declared_functions: Vec<Function> = lowered_module
+                .functions
+                .into_iter()
+                .filter(|f| declared_fn_names.contains(&f.name))
+                .collect();
+
+            (declared_schemas, declared_functions, schema_lines, fn_lines)
+        } else {
+            let parsed_module = parse_ssa_with_role_and_env(
+                &content,
+                role,
+                &accumulated_schemas,
+                &accumulated_functions,
+            )?;
+            let (schema_lines, fn_lines) = prescan_decl_lines(&content);
+            (parsed_module.schemas, parsed_module.functions, schema_lines, fn_lines)
+        };
+
         let display_path = clean_display_path(canonical, self.root_hint);
 
         let info = RawFileInfo {
             display_path,
             role,
             imports: resolved_import_paths,
-            schemas: parsed_module.schemas,
-            functions: parsed_module.functions,
+            schemas: file_schemas,
+            functions: file_functions,
             schema_lines,
             fn_lines,
         };

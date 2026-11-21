@@ -4,14 +4,20 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegState {
-    Alive { ty: Type, line: usize, owned: bool },
+    Alive { ty: Type, line: usize, owned: bool, borrowed: bool },
     Moved { ty: Type, consumed_at_line: usize },
 }
 
-/// Validates linear ownership rules:
-/// 1. Use-after-move: No register in `Moved` state can be read or consumed.
-/// 2. Linear leak: Linear resources (Buf, Vec, Map, Chan) must be consumed or returned at `ret`.
+/// Validates linear ownership rules without external callee signatures.
 pub fn verify_linear(func: &Function) -> Result<(), Diagnostic> {
+    verify_linear_with_env(func, &[])
+}
+
+/// Validates linear ownership & second-class borrow rules:
+/// 1. Use-after-move: No register in `Moved` state can be read or consumed.
+/// 2. Borrow escape: Borrowed (`&T`) parameters can be read or re-borrowed, never moved/freed/returned.
+/// 3. Linear leak: Owned linear resources (Buf, Vec, Map, Chan, Struct) must be consumed or returned at `ret`.
+pub fn verify_linear_with_env(func: &Function, functions: &[Function]) -> Result<(), Diagnostic> {
     if func.blocks.is_empty() {
         return Ok(());
     }
@@ -20,13 +26,16 @@ pub fn verify_linear(func: &Function) -> Result<(), Diagnostic> {
         func.blocks.iter().map(|b| (b.id, b)).collect();
 
     // Identify block-local registers: registers defined in block B at instruction index `i_def`
-    // that are never params and whose uses across the entire function all occur in block B after `i_def`.
+    // that are never params/block-params and whose uses across the entire function all occur in block B after `i_def`.
     // Once such a register is in `Moved` state at the end of block B, it can never be read before
     // being redefined on loop re-entry and cannot leak, avoiding 2^N state explosion on server loops.
     let param_regs: HashSet<RegId> = func.params.iter().map(|(r, _)| *r).collect();
     let mut def_loc: HashMap<RegId, (BlockId, usize)> = HashMap::new();
     let mut multi_defs: HashSet<RegId> = HashSet::new();
     for b in &func.blocks {
+        for (preg, _) in &b.params {
+            multi_defs.insert(*preg);
+        }
         for (idx, inst) in b.instructions.iter().enumerate() {
             if let Some(dst) = inst.dst {
                 if def_loc.insert(dst, (b.id, idx)).is_some() || param_regs.contains(&dst) {
@@ -47,11 +56,11 @@ pub fn verify_linear(func: &Function) -> Result<(), Diagnostic> {
                 }
             }
         }
-        if let Terminator::Ret(Some(r)) | Terminator::BrIf { cond: r, .. } = &b.terminator {
-            match def_loc.get(r) {
+        for r in b.terminator.used_regs() {
+            match def_loc.get(&r) {
                 Some(&(def_blk, _)) if def_blk == b.id => {}
                 _ => {
-                    non_local_regs.insert(*r);
+                    non_local_regs.insert(r);
                 }
             }
         }
@@ -59,12 +68,14 @@ pub fn verify_linear(func: &Function) -> Result<(), Diagnostic> {
 
     // Initial state for entry block (bb0)
     let mut initial_state: BTreeMap<RegId, RegState> = BTreeMap::new();
-    for (reg, ty) in &func.params {
+    for (idx, (reg, ty)) in func.params.iter().enumerate() {
         if ty.is_linear() {
+            let borrowed = func.is_param_borrowed(idx);
             initial_state.insert(*reg, RegState::Alive {
                 ty: ty.clone(),
                 line: 1,
                 owned: false,
+                borrowed,
             });
         }
     }
@@ -93,7 +104,7 @@ pub fn verify_linear(func: &Function) -> Result<(), Diagnostic> {
 
         // Process instructions in this block
         for inst in &block.instructions {
-            check_and_update_instruction(func, inst, &mut state)?;
+            check_and_update_instruction(func, functions, inst, &mut state)?;
         }
 
         // Prune block-local registers that are already Moved at block exit
@@ -103,24 +114,43 @@ pub fn verify_linear(func: &Function) -> Result<(), Diagnostic> {
             });
         }
 
+        let term_line = get_terminator_line(block);
+
         // Process terminator
         match &block.terminator {
             Terminator::Ret(ret_val) => {
-                // Check if the returned register itself was used after move
+                // Check if the returned register itself was used after move or is borrowed
                 if let Some(ret_reg) = ret_val {
-                    if let Some(RegState::Moved { consumed_at_line, .. }) = state.get(ret_reg) {
-                        return Err(Diagnostic::new(
-                            "UseAfterMove",
-                            &func.name,
-                            get_terminator_line(block),
-                            format_terminator(&block.terminator),
-                        )
-                        .with_violated_register(format!("%{ret_reg}"))
-                        .with_consumed_at(*consumed_at_line)
-                        .with_alive_registers(collect_alive_regs(&state))
-                        .with_fix_hint(format!(
-                            "Register %{ret_reg} was already moved at line {consumed_at_line}"
-                        )));
+                    match state.get(ret_reg) {
+                        Some(RegState::Moved { consumed_at_line, .. }) => {
+                            return Err(Diagnostic::new(
+                                "UseAfterMove",
+                                &func.name,
+                                term_line,
+                                format_terminator(&block.terminator),
+                            )
+                            .with_violated_register(format!("%{ret_reg}"))
+                            .with_consumed_at(*consumed_at_line)
+                            .with_alive_registers(collect_alive_regs(&state))
+                            .with_fix_hint(format!(
+                                "Register %{ret_reg} was already moved at line {consumed_at_line}"
+                            )));
+                        }
+                        Some(RegState::Alive { borrowed: true, .. }) => {
+                            return Err(Diagnostic::new(
+                                "BorrowEscape",
+                                &func.name,
+                                term_line,
+                                format_terminator(&block.terminator),
+                            )
+                            .with_violated_register(format!("%{ret_reg}"))
+                            .with_alive_registers(collect_alive_regs(&state))
+                            .with_fix_hint(format!(
+                                "Borrowed parameter %{ret_reg} cannot be returned from function '{}'",
+                                func.name
+                            )));
+                        }
+                        _ => {}
                     }
                 }
 
@@ -131,7 +161,7 @@ pub fn verify_linear(func: &Function) -> Result<(), Diagnostic> {
                             return Err(Diagnostic::new(
                                 "LinearLeak",
                                 &func.name,
-                                get_terminator_line(block),
+                                term_line,
                                 format_terminator(&block.terminator),
                             )
                             .with_violated_register(format!("%{reg}"))
@@ -151,22 +181,47 @@ pub fn verify_linear(func: &Function) -> Result<(), Diagnostic> {
                 then_blk,
                 else_blk,
             } => {
-                if let Some(RegState::Moved { consumed_at_line, .. }) = state.get(cond) {
-                    return Err(Diagnostic::new(
-                        "UseAfterMove",
-                        &func.name,
-                        get_terminator_line(block),
-                        format_terminator(&block.terminator),
-                    )
-                    .with_violated_register(format!("%{cond}"))
-                    .with_consumed_at(*consumed_at_line)
-                    .with_alive_registers(collect_alive_regs(&state))
-                    .with_fix_hint(format!(
-                        "Register %{cond} was already moved at line {consumed_at_line}"
-                    )));
-                }
+                check_cond_not_moved(func, block, *cond, term_line, &state)?;
                 worklist.push_back((*then_blk, state.clone()));
                 worklist.push_back((*else_blk, state));
+            }
+            Terminator::BrArgs { target, args } => {
+                let next_state = transfer_edge_args(
+                    func,
+                    block,
+                    term_line,
+                    &state,
+                    block_map.get(target).copied(),
+                    args,
+                )?;
+                worklist.push_back((*target, next_state));
+            }
+            Terminator::BrIfArgs {
+                cond,
+                then_blk,
+                then_args,
+                else_blk,
+                else_args,
+            } => {
+                check_cond_not_moved(func, block, *cond, term_line, &state)?;
+                let then_state = transfer_edge_args(
+                    func,
+                    block,
+                    term_line,
+                    &state,
+                    block_map.get(then_blk).copied(),
+                    then_args,
+                )?;
+                let else_state = transfer_edge_args(
+                    func,
+                    block,
+                    term_line,
+                    &state,
+                    block_map.get(else_blk).copied(),
+                    else_args,
+                )?;
+                worklist.push_back((*then_blk, then_state));
+                worklist.push_back((*else_blk, else_state));
             }
         }
     }
@@ -174,8 +229,125 @@ pub fn verify_linear(func: &Function) -> Result<(), Diagnostic> {
     Ok(())
 }
 
+fn check_cond_not_moved(
+    func: &Function,
+    block: &BasicBlock,
+    cond: RegId,
+    term_line: usize,
+    state: &BTreeMap<RegId, RegState>,
+) -> Result<(), Diagnostic> {
+    if let Some(RegState::Moved { consumed_at_line, .. }) = state.get(&cond) {
+        return Err(Diagnostic::new(
+            "UseAfterMove",
+            &func.name,
+            term_line,
+            format_terminator(&block.terminator),
+        )
+        .with_violated_register(format!("%{cond}"))
+        .with_consumed_at(*consumed_at_line)
+        .with_alive_registers(collect_alive_regs(state))
+        .with_fix_hint(format!(
+            "Register %{cond} was already moved at line {consumed_at_line}"
+        )));
+    }
+    Ok(())
+}
+
+fn transfer_edge_args(
+    func: &Function,
+    block: &BasicBlock,
+    term_line: usize,
+    base_state: &BTreeMap<RegId, RegState>,
+    target_blk: Option<&BasicBlock>,
+    args: &[RegId],
+) -> Result<BTreeMap<RegId, RegState>, Diagnostic> {
+    let mut edge_state = base_state.clone();
+    let mut seen_linear = HashSet::new();
+    let mut pending_bindings: Vec<(RegId, RegState)> = Vec::new();
+
+    for &arg in args {
+        if let Some(RegState::Moved { consumed_at_line, .. }) = edge_state.get(&arg) {
+            return Err(Diagnostic::new(
+                "UseAfterMove",
+                &func.name,
+                term_line,
+                format_terminator(&block.terminator),
+            )
+            .with_violated_register(format!("%{arg}"))
+            .with_consumed_at(*consumed_at_line)
+            .with_alive_registers(collect_alive_regs(&edge_state))
+            .with_fix_hint(format!(
+                "Branch argument %{arg} was already moved at line {consumed_at_line}"
+            )));
+        }
+    }
+
+    if let Some(target) = target_blk {
+        for (&arg, (param_reg, param_ty)) in args.iter().zip(target.params.iter()) {
+            if param_ty.is_linear() {
+                if let Some(RegState::Alive { borrowed: true, .. }) = edge_state.get(&arg) {
+                    return Err(Diagnostic::new(
+                        "BorrowEscape",
+                        &func.name,
+                        term_line,
+                        format_terminator(&block.terminator),
+                    )
+                    .with_violated_register(format!("%{arg}"))
+                    .with_alive_registers(collect_alive_regs(&edge_state))
+                    .with_fix_hint(format!(
+                        "Borrowed register %{arg} cannot be moved into block parameter %{param_reg}"
+                    )));
+                }
+                if !seen_linear.insert(arg) {
+                    return Err(Diagnostic::new(
+                        "UseAfterMove",
+                        &func.name,
+                        term_line,
+                        format_terminator(&block.terminator),
+                    )
+                    .with_violated_register(format!("%{arg}"))
+                    .with_consumed_at(term_line)
+                    .with_alive_registers(collect_alive_regs(&edge_state))
+                    .with_fix_hint(format!(
+                        "Linear register %{arg} is passed multiple times as branch argument"
+                    )));
+                }
+                let owned = match edge_state.get(&arg) {
+                    Some(RegState::Alive { owned, .. }) => *owned,
+                    _ => true,
+                };
+                if arg != *param_reg {
+                    edge_state.insert(
+                        arg,
+                        RegState::Moved {
+                            ty: param_ty.clone(),
+                            consumed_at_line: term_line,
+                        },
+                    );
+                }
+                pending_bindings.push((
+                    *param_reg,
+                    RegState::Alive {
+                        ty: param_ty.clone(),
+                        line: term_line,
+                        owned,
+                        borrowed: false,
+                    },
+                ));
+            }
+        }
+    }
+
+    for (param_reg, st) in pending_bindings {
+        edge_state.insert(param_reg, st);
+    }
+
+    Ok(edge_state)
+}
+
 fn check_and_update_instruction(
     func: &Function,
+    functions: &[Function],
     inst: &Instruction,
     state: &mut BTreeMap<RegId, RegState>,
 ) -> Result<(), Diagnostic> {
@@ -198,10 +370,23 @@ fn check_and_update_instruction(
         }
     }
 
-    // 2. Mark consumed registers as Moved
-    let consumed_regs = get_consumed_registers(&inst.op, state);
+    // 2. Mark consumed registers as Moved (and reject moving borrowed parameters!)
+    let consumed_regs = get_consumed_registers(func, functions, &inst.op, state);
     let mut moved_in_this_op = std::collections::HashSet::new();
     for reg in consumed_regs {
+        if let Some(RegState::Alive { borrowed: true, .. }) = state.get(&reg) {
+            return Err(Diagnostic::new(
+                "BorrowEscape",
+                &func.name,
+                inst.line,
+                format_instruction(inst),
+            )
+            .with_violated_register(format!("%{reg}"))
+            .with_alive_registers(collect_alive_regs(state))
+            .with_fix_hint(format!(
+                "Borrowed parameter %{reg} is read-only and cannot be moved or consumed"
+            )));
+        }
         if !moved_in_this_op.insert(reg) {
             return Err(Diagnostic::new(
                 "UseAfterMove",
@@ -231,18 +416,27 @@ fn check_and_update_instruction(
         if inst.ty.is_linear() {
             let owned = !matches!(
                 inst.op,
-                Op::MapGet(_, _) | Op::VecGet(_, _) | Op::ConstStr(_) | Op::StructGet(_, _)
+                Op::MapGet(_, _)
+                    | Op::VecGet(_, _)
+                    | Op::ConstStr(_)
+                    | Op::StructGet(_, _)
+                    | Op::IntToStr(_)
             );
             state.insert(dst, RegState::Alive {
                 ty: inst.ty.clone(),
                 line: inst.line,
                 owned,
+                borrowed: false,
             });
         }
     } else if is_leakable_linear_type(&inst.ty) {
         let owned = !matches!(
             inst.op,
-            Op::MapGet(_, _) | Op::VecGet(_, _) | Op::ConstStr(_) | Op::StructGet(_, _)
+            Op::MapGet(_, _)
+                | Op::VecGet(_, _)
+                | Op::ConstStr(_)
+                | Op::StructGet(_, _)
+                | Op::IntToStr(_)
         );
         if owned {
             return Err(Diagnostic::new(
@@ -269,8 +463,10 @@ fn get_used_registers(op: &Op) -> Vec<RegId> {
         | Op::Sub(a, b)
         | Op::Mul(a, b)
         | Op::Div(a, b)
+        | Op::Rem(a, b)
         | Op::CmpEq(a, b)
         | Op::CmpLt(a, b) => vec![*a, *b],
+        Op::IntToStr(a) | Op::StrLen(a) => vec![*a],
         Op::BufAlloc(s) => vec![*s],
         Op::BufReadU8(b, i) => vec![*b, *i],
         Op::BufWriteU8(b, i, v) => vec![*b, *i, *v],
@@ -297,7 +493,12 @@ fn get_used_registers(op: &Op) -> Vec<RegId> {
 }
 
 /// Identifies which registers are consumed (ownership transferred) by an opcode.
-fn get_consumed_registers(op: &Op, state: &BTreeMap<RegId, RegState>) -> Vec<RegId> {
+fn get_consumed_registers(
+    func: &Function,
+    functions: &[Function],
+    op: &Op,
+    state: &BTreeMap<RegId, RegState>,
+) -> Vec<RegId> {
     match op {
         Op::BufWriteU8(b, _, _) => vec![*b],
         Op::VecPush(v, item) => {
@@ -340,11 +541,19 @@ fn get_consumed_registers(op: &Op, state: &BTreeMap<RegId, RegState>) -> Vec<Reg
             }
             res
         }
-        Op::Call(_, args) => args
-            .iter()
-            .filter(|r| is_reg_linear(r, state))
-            .copied()
-            .collect(),
+        Op::Call(fn_name, args) => {
+            let callee = functions
+                .iter()
+                .find(|f| &f.name == fn_name)
+                .or_else(|| if &func.name == fn_name { Some(func) } else { None });
+            args.iter()
+                .enumerate()
+                .filter(|(i, r)| {
+                    is_reg_linear(r, state) && !callee.is_some_and(|c| c.is_param_borrowed(*i))
+                })
+                .map(|(_, r)| *r)
+                .collect()
+        }
         _ => Vec::new(),
     }
 }

@@ -1,0 +1,9 @@
+// Valid 07: Effect capabilities
+fn notify(msg: str) -> void effects(Ui) {
+    return;
+}
+
+fn sync_all() -> void effects(Ui, Net) {
+    notify("syncing");
+    return;
+}

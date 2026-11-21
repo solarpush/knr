@@ -1,0 +1,4 @@
+// Error: ParseError
+fn broken() -> i64 {
+    let x = 10;
+    return x;

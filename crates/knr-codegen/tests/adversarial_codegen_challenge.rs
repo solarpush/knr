@@ -9,10 +9,12 @@ fn make_ret_const_i64_func(name: &str, val: i64) -> Function {
     Function {
         name: name.to_string(),
         params: vec![],
+        param_borrows: vec![],
         ret_ty: Type::I64,
         effects: vec![],
         blocks: vec![BasicBlock {
             id: 0,
+            params: vec![],
             instructions: vec![Instruction {
                 dst: Some(0),
                 ty: Type::I64,
@@ -28,10 +30,12 @@ fn make_str_func(name: &str, s: &str) -> Function {
     Function {
         name: name.to_string(),
         params: vec![],
+        param_borrows: vec![],
         ret_ty: Type::Str,
         effects: vec![],
         blocks: vec![BasicBlock {
             id: 0,
+            params: vec![],
             instructions: vec![Instruction {
                 dst: Some(0),
                 ty: Type::Str,
@@ -44,34 +48,16 @@ fn make_str_func(name: &str, s: &str) -> Function {
 }
 
 fn make_countdown_loop_func() -> Function {
-    // fn loop_countdown(n: i64) -> i64
-    // bb0:
-    //   %1 = const_i64 0
-    //   %2 = const_i64 1
-    //   br bb1
-    // bb1:
-    //   %3 = cmp_eq %0, %1
-    //   br_if %3, bb3, bb2
-    // bb2:
-    //   %4 = sub %0, %2
-    //   %0 = ... in SSA we pass registers, but let's do a diamond or linear loop
-    // Let's create standard diamond branch:
-    // fn max(a: i64, b: i64) -> i64
-    // bb0:
-    //   %2 = cmp_lt %0, %1
-    //   br_if %2, bb1, bb2
-    // bb1:
-    //   ret %1
-    // bb2:
-    //   ret %0
     Function {
         name: "max_val".to_string(),
         params: vec![(0, Type::I64), (1, Type::I64)],
+        param_borrows: vec![],
         ret_ty: Type::I64,
         effects: vec![],
         blocks: vec![
             BasicBlock {
                 id: 0,
+                params: vec![],
                 instructions: vec![Instruction {
                     dst: Some(2),
                     ty: Type::Bool,
@@ -86,11 +72,13 @@ fn make_countdown_loop_func() -> Function {
             },
             BasicBlock {
                 id: 1,
+                params: vec![],
                 instructions: vec![],
                 terminator: Terminator::Ret(Some(1)),
             },
             BasicBlock {
                 id: 2,
+                params: vec![],
                 instructions: vec![],
                 terminator: Terminator::Ret(Some(0)),
             },
@@ -190,10 +178,12 @@ fn test_wasm_single_block_loop_converted_to_return_defect() {
     let func = Function {
         name: "infinite_self_loop".to_string(),
         params: vec![],
+        param_borrows: vec![],
         ret_ty: Type::Void,
         effects: vec![],
         blocks: vec![BasicBlock {
             id: 0,
+            params: vec![],
             instructions: vec![],
             terminator: Terminator::Br(0),
         }],
@@ -231,10 +221,12 @@ fn test_cranelift_jit_i64_arithmetic_exhaustive() {
     let func = Function {
         name: "math_combo".to_string(),
         params: vec![(0, Type::I64), (1, Type::I64)],
+        param_borrows: vec![],
         ret_ty: Type::I64,
         effects: vec![],
         blocks: vec![BasicBlock {
             id: 0,
+            params: vec![],
             instructions: vec![
                 Instruction {
                     dst: Some(2),
@@ -298,10 +290,12 @@ fn test_cranelift_jit_f64_math() {
     let func = Function {
         name: "f64_math".to_string(),
         params: vec![(0, Type::F64), (1, Type::F64)],
+        param_borrows: vec![],
         ret_ty: Type::F64,
         effects: vec![],
         blocks: vec![BasicBlock {
             id: 0,
+            params: vec![],
             instructions: vec![
                 Instruction {
                     dst: Some(2),
@@ -342,10 +336,12 @@ fn test_cranelift_jit_buffer_write_read() {
     let func = Function {
         name: "test_buf".to_string(),
         params: vec![],
+        param_borrows: vec![],
         ret_ty: Type::I64,
         effects: vec![],
         blocks: vec![BasicBlock {
             id: 0,
+            params: vec![],
             instructions: vec![
                 Instruction {
                     dst: Some(0),

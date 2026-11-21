@@ -8,9 +8,15 @@ use crate::parser::{
     parse_import_directive, parse_ssa_with_role_and_env, strip_comment, FileRole,
 };
 
-/// Loads an SSA compilation unit from disk, recursively resolving imports,
-/// enforcing file topology rules, deduplicating diamond imports, and detecting cycles.
+/// Loads a `.knr`, `.ssa`, or `.ssa.schema` compilation unit from disk, recursively resolving
+/// imports, enforcing file topology rules, deduplicating diamond imports, and detecting cycles.
 pub fn load_module_from_path(path: &Path) -> Result<Module, ParseError> {
+    if path.to_string_lossy().ends_with(".knr") {
+        return crate::lower::lower_program_from_file(path).map_err(|e| ParseError::InvalidSyntax {
+            line: e.line(),
+            msg: e.to_string(),
+        });
+    }
     let mut loader = LoaderState::new();
     loader.load_file(path, 1)?;
     Ok(loader.into_module())

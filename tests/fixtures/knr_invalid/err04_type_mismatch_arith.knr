@@ -1,0 +1,7 @@
+// Error: TypeMismatch
+fn test_arith() -> i64 {
+    let a = 10;
+    let b = true;
+    let c = a + b;
+    return c;
+}
