@@ -92,8 +92,11 @@ jobs:
         shell: bash
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
         run: |
-          cargo build --release --target "${{ matrix.target }}" -p knr-runtime -p knr-cli --bin knr
+          cargo build --release --target "${{ matrix.target }}" -p knr-runtime --lib
+          cargo build --release --target "${{ matrix.target }}" -p knr-cli --bin knr
 
       - name: Package archive & SHA256 checksum
         shell: bash
