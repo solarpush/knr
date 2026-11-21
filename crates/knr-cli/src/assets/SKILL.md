@@ -41,10 +41,12 @@ Use the `knr` binary directly from `$PATH` (never invoke `cargo run` or `/tmp/..
 4. **Execute or Compile (VM == Native Cranelift == WebAssembly == Web)**:
    ```bash
    knr run <entry.knr>                              # Reference VM (default gas: 1,000,000)
-   knr run <app.knr> --gui                          # Real native desktop window (Wayland/X11/macOS/Windows)
+   knr run <app.knr> --gui                          # Real native GPU desktop window (wgpu + CPU fallback)
+   knr dev <app.knr> --gui                          # Live hot-reloading GUI + WGSL shaders window
+   knr lsp                                          # Built-in JSON-RPC 2.0 Language Server (stdio)
    knr build <server.knr> --target native -o server # Standalone native ELF linked with Rust knr-runtime
    knr build <app.knr> --target wasm -o app.wasm    # Standalone zero-import WebAssembly binary
-   knr build <app.knr> --target web -o dist/        # SSR index.html + zero-import app.wasm + generic host
+   knr build <app.knr> --target web -o dist/        # SSR index.html + zero-import app.wasm + WebGPU/WebGL2
    knr asm <file.ssa> -o out.knrbin                 # Compact binary IR codec (1:1 bijection)
    knr disasm out.knrbin -o roundtrip.ssa
    ```
@@ -55,7 +57,7 @@ Use the `knr` binary directly from `$PATH` (never invoke `cargo run` or `/tmp/..
 
 `.knr` lowers cleanly to canonical verified linear SSA (`.ssa` / `.knrbin`):
 
-- **Multi-file imports**: `import "./ui.knr";` or `import "./http_types.knr";` (cycle-safe, diamond-deduplicated; also imports `.ssa` and `.ssa.schema`).
+- **Multi-file & Built-in Stdlib Imports**: `import "std/ui";`, `import "std/anim";`, `import "std/math";` (built directly into `knr-core`, zero relative paths needed!), plus relative `import "./helper.knr";` (cycle-safe, diamond-deduplicated; also imports `.ssa` and `.ssa.schema`).
 - **Typed Schemas & Tagged Unions (`enum`)**:
   ```knr
   schema State { 0: count i64, 1: status str }
@@ -78,7 +80,7 @@ Use the `knr` binary directly from `$PATH` (never invoke `cargo run` or `/tmp/..
     let ui = view(&state); // `state` stays Alive in caller!
     ```
   - Borrowed `&T` parameters cannot escape (returned, moved, or stored in structs/vecs) -> rejected statically as `BorrowEscape` with zero lifetime annotations!
-- **Strings & Builtins**: `"a" + "b"`, `s1 == s2`, `to_str(n)`, `str_len(s)`, `vec_new()`, `vec_push(v, x)`, `vec_len(v)`, `v[i]`, `map_new()`, `map_set(m, k, v)`, `map_get(m, k)`, `buf_alloc(n)`, `chan_new(cap)`.
+- **Strings, Math & Builtins**: `"a" + "b"`, `s1 == s2`, `to_str(n)`, `str_len(s)`, `vec_new()`, `vec_push(v, x)`, `vec_len(v)`, `v[i]`, `map_new()`, `map_set(m, k, v)`, `map_get(m, k)`, `buf_alloc(n)`, `chan_new(cap)`, plus GPU/CPU-parity math (`sin`, `cos`, `tan`, `sqrt`, `abs`, `floor`, `ceil`, `fract`, `pow`, `atan2`, `min`, `max`, `clamp`, `lerp`, `mix`, `smoothstep`, `to_f64`, `to_i64`), typed `#hex` color literals (`#38bdf8` -> `Color` or `str`), and linear struct spread (`Style { bg: #111827, ..style_card() }`).
 - **Explicit Effects & Syscalls**:
   ```knr
   fn main() -> i64 effects(Net) {
@@ -91,27 +93,20 @@ Use the `knr` binary directly from `$PATH` (never invoke `cargo run` or `/tmp/..
 
 ---
 
-## 3. Typed Declarative MVU UI (Native Desktop + Web/WASM)
+## 3. Unconstrained GPU UI, 60/120 FPS Animations & `.knr` GPU Shaders (`shader fn`)
 
-Write ONE `.knr` app using the MVU pattern (`init` / `update` / `view`) and the typed `UiNode` schema (`examples/ui.knr`):
+Write ONE `.knr` app using `examples/std_ui.knr` (`Widget` + 40-field `Style` + `Vec2` + `Color`, or legacy `examples/ui.knr` `UiNode`) with optional `tick(state, dt, elapsed)`, `on_slider(state, action, val)`, `on_input(state, action, text)`, and pure `shader fn` kernels (see `examples/shader_studio.knr`):
 ```knr
-import "./ui.knr";
+import "./std_ui.knr";
 
-schema State { 0: count i64 }
-fn init() -> State { return State { count: 0 }; }
-fn update(state: State, action: str) -> State {
-    let next = if action == "inc" { state.count + 1 } else { state.count };
-    return State { count: next };
-}
-fn view(state: &State) -> UiNode {
-    let kids: vec[UiNode] = vec_new();
-    kids = vec_push(kids, ui_text("Count: " + to_str(state.count), 32, "#38bdf8"));
-    kids = vec_push(kids, ui_button("+1", "inc", "#0284c7", "#ffffff"));
-    return ui_col(24, 16, "#0b1120", kids);
+shader fn aurora(uv: Vec2, time: f64, speed: f64) -> Color {
+    let wave = 0.5 + 0.5 * sin(uv.x * 6.0 + time * speed);
+    return Color { r: 0.1, g: wave, b: 0.9, a: 1.0 };
 }
 ```
-- **Desktop**: `knr run app.knr --gui` opens a real anti-aliased window (`winit` + `softbuffer` + `tiny-skia` + `ab_glyph` + Flexbox layout + mouse hover/clicks), with automatic headless fallback when `KNR_HEADLESS=1` or no display server is present.
-- **Web/WASM**: `knr build app.knr --target web -o dist/` emits SSR `index.html` + standalone zero-import `app.wasm` + a generic ~90-line JS bridge reading `UiNode` directly from WASM linear memory.
+- **Desktop GPU (`wgpu 23`)**: `knr run app.knr --gui` runs an analytical SDF quad + Dual Kawase `backdrop_blur` + GPU `GlyphAtlas` + custom WGSL shader pipeline at 60/120 FPS (automatic `softbuffer` + `tiny-skia` CPU and `KNR_HEADLESS=1` fallbacks).
+- **Web (`WASM + WebGPU / WebGL2`)**: `knr build app.knr --target web -o dist/` emits SSR `index.html`, zero-import `app.wasm`, key-reconciled DOM host, and `naga`-validated WGSL + `#version 300 es` WebGL2 fallback shaders.
+- **Static GPU Purity**: `knr check` rejects effects (`ShaderEffectForbidden`), heap allocations (`ShaderImpureOp`), and recursion (`ShaderRecursionForbidden`) inside `shader fn`, and validates generated WGSL + GLSL via `naga`.
 
 ---
 

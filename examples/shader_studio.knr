@@ -1,0 +1,327 @@
+// ============================================================================
+// knr GPU Shader Studio — 100% Pure `.knr` (Zero HTML / Zero CSS / Zero GLSL!)
+// ============================================================================
+// Run natively on GPU (wgpu Vulkan/Metal/DX12, auto CPU fallback):
+//   knr run examples/shader_studio.knr --gui
+// Export to standalone WebAssembly + WebGPU / WebGL2 browser app:
+//   knr build examples/shader_studio.knr --target web -o dist_shader/
+// Run built-in deterministic unit tests:
+//   knr test examples/shader_studio.knr
+
+import "./std_ui.knr";
+
+// ============================================================================
+// 1. REAL GPU SHADERS WRITTEN DIRECTLY IN `.knr`
+//    Statically verified GPU-pure (`knr-verify`) and compiled via `naga` to:
+//    - WGSL (Desktop `wgpu` + Browser WebGPU)
+//    - GLSL ES 3.00 (Universal Browser WebGL2 fallback)
+// ============================================================================
+
+fn palette_cos(t: f64, phase: f64) -> f64 {
+    return 0.5 + 0.5 * cos(6.2831853 * (t + phase));
+}
+
+shader fn aurora_waves(uv: Vec2, time: f64, speed: f64, intensity: f64, zoom: f64) -> Color {
+    let t = time * (0.25 + speed * 2.2);
+    let z = 0.6 + zoom * 2.4;
+    let x = (uv.x - 0.5) * z;
+    let y = (uv.y - 0.5) * z;
+
+    let w1 = sin(x * 4.2 + t * 1.15 + sin(y * 3.1 - t * 0.7));
+    let w2 = cos((x * 2.7 - y * 3.6) - t * 0.9 + cos(x * 5.0 + t * 0.5) * 0.45);
+    let w3 = sin((x + y) * 3.8 + t * 1.6);
+
+    let ribbon = smoothstep(0.15, 0.95, 0.5 + 0.5 * (w1 * 0.45 + w2 * 0.35 + w3 * 0.20));
+    let glow = ribbon * (0.35 + intensity * 0.95);
+
+    let r = clamp(0.04 + glow * palette_cos(ribbon * 0.6 + t * 0.08, 0.62) * 0.65, 0.0, 1.0);
+    let g = clamp(0.08 + glow * palette_cos(ribbon * 0.6 + t * 0.08, 0.12) * 0.95, 0.0, 1.0);
+    let b = clamp(0.16 + glow * palette_cos(ribbon * 0.6 + t * 0.08, 0.92) * 1.05, 0.0, 1.0);
+
+    return Color { r: r, g: g, b: b, a: 1.0 };
+}
+
+shader fn plasma_orbit(uv: Vec2, time: f64, speed: f64, intensity: f64, zoom: f64) -> Color {
+    let t = time * (0.3 + speed * 2.4);
+    let z = 1.2 + zoom * 3.2;
+    let dx = (uv.x - 0.5) * z;
+    let dy = (uv.y - 0.5) * z;
+    let dist = sqrt(dx * dx + dy * dy);
+    let angle = atan2(dy, dx);
+
+    let rings = sin(dist * 7.0 - t * 2.8 + sin(angle * 4.0 + t));
+    let spiral = cos(angle * 5.0 + dist * 4.0 - t * 1.9);
+    let field = (0.5 + 0.5 * (rings * 0.55 + spiral * 0.45)) * (0.35 + intensity * 0.95);
+    let core = 0.22 / (dist + 0.18);
+
+    let r = clamp(field * 0.85 + core * 0.45, 0.0, 1.0);
+    let g = clamp(field * 0.38 + core * 0.62, 0.0, 1.0);
+    let b = clamp(0.20 + field * 0.95 + core * 0.85, 0.0, 1.0);
+
+    return Color { r: r, g: g, b: b, a: 1.0 };
+}
+
+// ============================================================================
+// 2. MVU APPLICATION STATE, 60/120 FPS TICK, AND INTERACTIVE EVENT HANDLERS
+// ============================================================================
+
+schema State {
+    0: shader_idx i64,
+    1: speed f64,
+    2: intensity f64,
+    3: zoom f64,
+    4: paused bool,
+    5: elapsed f64,
+    6: pulse f64,
+    7: banner str,
+}
+
+fn init() -> State {
+    return State {
+        shader_idx: 0,
+        speed: 0.48,
+        intensity: 0.78,
+        zoom: 0.42,
+        paused: false,
+        elapsed: 0.0,
+        pulse: 0.5,
+        banner: "knr GPU Shader Studio",
+    };
+}
+
+fn tick(s: State, dt: f64, _wall_elapsed: f64) -> State {
+    let next_elapsed = if s.paused { s.elapsed } else { s.elapsed + dt };
+    let next_pulse = 0.5 + 0.5 * sin(next_elapsed * 2.4);
+    return State {
+        elapsed: next_elapsed,
+        pulse: next_pulse,
+        ..s
+    };
+}
+
+fn update(s: State, action: str) -> State {
+    if action == "shader_aurora" {
+        return State { shader_idx: 0, ..s };
+    }
+    if action == "shader_plasma" {
+        return State { shader_idx: 1, ..s };
+    }
+    if action == "toggle_pause" {
+        let next_paused = if s.paused { false } else { true };
+        return State { paused: next_paused, ..s };
+    }
+    if action == "preset_calm" {
+        return State { speed: 0.22, intensity: 0.62, zoom: 0.30, ..s };
+    }
+    if action == "preset_hyper" {
+        return State { speed: 0.88, intensity: 0.96, zoom: 0.75, ..s };
+    }
+    if action == "reset" {
+        return init();
+    }
+    return s;
+}
+
+fn on_slider(s: State, action: str, val: f64) -> State {
+    let v = clamp(val, 0.0, 1.0);
+    if action == "slider_speed" {
+        return State { speed: v, ..s };
+    }
+    if action == "slider_intensity" {
+        return State { intensity: v, ..s };
+    }
+    if action == "slider_zoom" {
+        return State { zoom: v, ..s };
+    }
+    return s;
+}
+
+fn on_input(s: State, action: str, text: str) -> State {
+    if action == "input_banner" {
+        return State { banner: text, ..s };
+    }
+    return s;
+}
+
+// ============================================================================
+// 3. UNCONSTRAINED TYPED DECLARATIVE VIEW (Glassmorphism + Gradients + Grid)
+// ============================================================================
+
+fn view(s: &State) -> Widget {
+    let active_shader = if s.shader_idx == 0 { "aurora_waves" } else { "plasma_orbit" };
+    let active_label = if s.shader_idx == 0 { "Aurora Waves (WGSL + GLSL)" } else { "Plasma Orbit (WGSL + GLSL)" };
+    let speed_pct = to_i64(s.speed * 100.0);
+    let intensity_pct = to_i64(s.intensity * 100.0);
+    let zoom_pct = to_i64(s.zoom * 100.0);
+
+    // Header bar
+    let badge = w_badge(
+        "badge_live",
+        "100% .knr · wgpu + WebGPU/WebGL2 · Zero HTML/CSS/GLSL",
+        #0f172aee,
+        #38bdf8,
+    );
+    let title = w_text("hero_title", s.banner, 30.0, #f8fafc);
+    let subtitle = w_text(
+        "hero_sub",
+        "Active GPU Kernel: " + active_label + "  |  Speed " + to_str(speed_pct) + "%  ·  Glow " + to_str(intensity_pct) + "%  ·  Zoom " + to_str(zoom_pct) + "%",
+        14.0,
+        #94a3b8,
+    );
+
+    let header_items: vec[Widget] = vec_new();
+    header_items = vec_push(header_items, badge);
+    header_items = vec_push(header_items, title);
+    header_items = vec_push(header_items, subtitle);
+    let header = w_col("header", style_gap(style_default(), 8.0), header_items);
+
+    // Live GPU Shader Viewport
+    let uniforms: vec[f64] = vec_new();
+    uniforms = vec_push(uniforms, s.speed);
+    uniforms = vec_push(uniforms, s.intensity);
+    uniforms = vec_push(uniforms, s.zoom);
+
+    let shader_view = w_shader(
+        "gpu_viewport",
+        active_shader,
+        uniforms,
+        Style {
+            h: 280.0,
+            border: #38bdf866,
+            border_w: 1.5,
+            r_tl: 16.0,
+            r_tr: 16.0,
+            r_br: 16.0,
+            r_bl: 16.0,
+            shadow_x: 0.0,
+            shadow_y: 10.0,
+            shadow_blur: 28.0,
+            shadow_color: #38bdf844,
+            ..style_default()
+        },
+    );
+
+    // Left Control Card: Shader Switcher + Presets + Banner TextInput
+    let aurora_bg = if s.shader_idx == 0 { "linear(135, #0284c7, #6366f1)" } else { "#1e293b" };
+    let plasma_bg = if s.shader_idx == 1 { "linear(135, #ec4899, #8b5cf6)" } else { "#1e293b" };
+
+    let switcher_row_items: vec[Widget] = vec_new();
+    switcher_row_items = vec_push(
+        switcher_row_items,
+        w_button("btn_aurora", "Aurora Waves", "shader_aurora", style_button(aurora_bg, #ffffff)),
+    );
+    switcher_row_items = vec_push(
+        switcher_row_items,
+        w_button("btn_plasma", "Plasma Orbit", "shader_plasma", style_button(plasma_bg, #ffffff)),
+    );
+    let switcher_row = w_row("row_switch", style_gap(style_default(), 10.0), switcher_row_items);
+
+    let preset_items: vec[Widget] = vec_new();
+    preset_items = vec_push(
+        preset_items,
+        w_button("btn_calm", "Calm Drift", "preset_calm", style_button(#1e293b, #e2e8f0)),
+    );
+    preset_items = vec_push(
+        preset_items,
+        w_button("btn_hyper", "Hyperdrive", "preset_hyper", style_button("linear(135, #0ea5e9, #14b8a6)", #04101c)),
+    );
+    preset_items = vec_push(
+        preset_items,
+        w_button("btn_reset", "Reset", "reset", style_button(#334155, #f8fafc)),
+    );
+    let preset_row = w_row("row_presets", style_gap(style_default(), 10.0), preset_items);
+
+    let input_style = Style {
+        bg: #0f172a,
+        color: #f8fafc,
+        border: #334155,
+        border_w: 1.0,
+        r_tl: 10.0,
+        r_tr: 10.0,
+        r_br: 10.0,
+        r_bl: 10.0,
+        pad_t: 10.0,
+        pad_r: 12.0,
+        pad_b: 10.0,
+        pad_l: 12.0,
+        font_size: 14.0,
+        ..style_default()
+    };
+    let banner_input = w_input("in_banner", s.banner, "input_banner", input_style);
+    let pause_toggle = w_toggle("tog_pause", "Freeze Simulation Clock", "toggle_pause", s.paused, style_default());
+
+    let left_items: vec[Widget] = vec_new();
+    left_items = vec_push(left_items, w_text("lbl_kernel", "Shader Kernel & Presets", 17.0, #e2e8f0));
+    left_items = vec_push(left_items, switcher_row);
+    left_items = vec_push(left_items, preset_row);
+    left_items = vec_push(left_items, w_text("lbl_title_in", "Studio Banner (Live Input)", 13.0, #94a3b8));
+    left_items = vec_push(left_items, banner_input);
+    left_items = vec_push(left_items, pause_toggle);
+    let left_card = w_card("card_left", style_card(), left_items);
+
+    // Right Control Card: Live GPU Uniform Sliders
+    let right_items: vec[Widget] = vec_new();
+    right_items = vec_push(right_items, w_text("lbl_uniforms", "Live GPU Uniforms", 17.0, #e2e8f0));
+    right_items = vec_push(right_items, w_text("lbl_spd", "Wave Speed (" + to_str(speed_pct) + "%)", 13.0, #94a3b8));
+    right_items = vec_push(right_items, w_slider("sl_spd", "slider_speed", s.speed, style_default()));
+    right_items = vec_push(right_items, w_text("lbl_int", "Glow Intensity (" + to_str(intensity_pct) + "%)", 13.0, #94a3b8));
+    right_items = vec_push(right_items, w_slider("sl_int", "slider_intensity", s.intensity, style_default()));
+    right_items = vec_push(right_items, w_text("lbl_zm", "Spatial Zoom (" + to_str(zoom_pct) + "%)", 13.0, #94a3b8));
+    right_items = vec_push(right_items, w_slider("sl_zm", "slider_zoom", s.zoom, style_default()));
+    let right_card = w_card("card_right", style_card(), right_items);
+
+    // Responsive 2-column CSS Grid
+    let grid_items: vec[Widget] = vec_new();
+    grid_items = vec_push(grid_items, left_card);
+    grid_items = vec_push(grid_items, right_card);
+    let controls_grid = w_grid("grid_controls", 2, style_gap(style_default(), 18.0), grid_items);
+
+    // Root vertical layout
+    let root_items: vec[Widget] = vec_new();
+    root_items = vec_push(root_items, header);
+    root_items = vec_push(root_items, shader_view);
+    root_items = vec_push(root_items, controls_grid);
+
+    return w_col(
+        "studio_root",
+        Style {
+            bg: "radial(#172554, #090d16)",
+            pad_t: 26.0,
+            pad_r: 28.0,
+            pad_b: 26.0,
+            pad_l: 28.0,
+            gap_x: 18.0,
+            gap_y: 18.0,
+            ..style_default()
+        },
+        root_items,
+    );
+}
+
+// ============================================================================
+// 4. BUILT-IN DETERMINISTIC UNIT TESTS (`knr test examples/shader_studio.knr`)
+// ============================================================================
+
+fn test_init_and_tick() -> bool {
+    let s0 = init();
+    let s1 = tick(s0, 0.016, 0.016);
+    let s2 = tick(s1, 0.500, 0.516);
+    return s2.elapsed > 0.5 && s2.pulse >= 0.0 && s2.pulse <= 1.0;
+}
+
+fn test_update_and_slider() -> bool {
+    let s = init();
+    s = update(s, "shader_plasma");
+    s = on_slider(s, "slider_speed", 0.9);
+    s = on_input(s, "input_banner", "Custom Title");
+    let v = view(&s);
+    return s.shader_idx == 1 && s.speed > 0.85 && s.banner == "Custom Title" && v.kind == "col";
+}
+
+fn test_shader_cpu_parity() -> bool {
+    let uv = Vec2 { x: 0.5, y: 0.5 };
+    let c1 = aurora_waves(uv, 1.25, 0.5, 0.8, 0.5);
+    let uv2 = Vec2 { x: 0.25, y: 0.75 };
+    let c2 = plasma_orbit(uv2, 2.0, 0.6, 0.9, 0.4);
+    return c1.a == 1.0 && c1.g >= 0.0 && c1.g <= 1.0 && c2.a == 1.0 && c2.b >= 0.0 && c2.b <= 1.0;
+}

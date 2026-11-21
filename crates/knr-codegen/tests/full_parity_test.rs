@@ -327,3 +327,91 @@ fn test_multifile_knr_import_resolution_and_parity() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_parity_math_intrinsics_hex_colors_and_struct_spread() {
+    let src = r##"
+        schema Color {
+            0: r f64,
+            1: g f64,
+            2: b f64,
+            3: a f64,
+        }
+
+        schema StyleBox {
+            0: w f64,
+            1: h f64,
+            2: bg str,
+            3: radius f64,
+        }
+
+        fn base_box() -> StyleBox {
+            return StyleBox {
+                w: 100.0,
+                h: 50.0,
+                bg: #0f172a,
+                radius: 8.0,
+            };
+        }
+
+        fn main() -> i64 {
+            // Math intrinsics (pure zero-import WASM + Cranelift + VM parity!)
+            let s = sin(1.0);
+            let c = cos(1.0);
+            let pyth = s * s + c * c; // ~1.0
+            let t = tan(0.5); // ~0.5463
+            let sq = sqrt(16.0); // 4.0
+            let ab = abs(-7.5); // 7.5
+            let fl = floor(3.9); // 3.0
+            let cl = ceil(3.1); // 4.0
+            let fr = fract(3.25); // 0.25
+            let pw = pow(2.0, 5.0); // 32.0
+            let at = atan2(1.0, 1.0); // pi/4 ~0.7854
+            let mn = min(9.0, 4.0); // 4.0
+            let mx = max(9.0, 4.0); // 9.0
+            let cm = clamp(15.0, 0.0, 10.0); // 10.0
+            let lr = lerp(10.0, 20.0, 0.25); // 12.5
+            let sm = smoothstep(0.0, 1.0, 0.5); // 0.5
+
+            // Hex color literal -> typed Color struct & str literal
+            let sky: Color = #38bdf8;
+            let box1 = StyleBox { w: 240.0, bg: #38bdf8, ..base_box() };
+            let bg_ok = if box1.bg == "#38bdf8" { 100.0 } else { 0.0 };
+
+            // Combine into deterministic scaled integer to check exact cross-backend parity
+            let sum = pyth * 100.0
+                + t * 100.0
+                + sq
+                + ab
+                + fl
+                + cl
+                + fr * 100.0
+                + pw
+                + at * 100.0
+                + mn
+                + mx
+                + cm
+                + lr
+                + sm * 100.0
+                + sky.b * 100.0
+                + box1.w
+                + box1.h
+                + box1.radius
+                + bg_ok;
+            return to_i64(floor(sum));
+        }
+    "##;
+    // Expected breakdown:
+    // pyth*100 = 100.0
+    // tan(0.5)*100 = 54.6302
+    // sq(4) + ab(7.5) + fl(3) + cl(4) = 18.5
+    // fr*100 = 25.0
+    // pw = 32.0
+    // atan2(1,1)*100 = 78.5398
+    // mn(4) + mx(9) + cm(10) + lr(12.5) = 35.5
+    // sm*100 = 50.0
+    // sky.b*100 = (248/255)*100 = 97.2549
+    // box1.w(240) + box1.h(50) + box1.radius(8) + bg_ok(100) = 398.0
+    // Total = 100 + 54.6302 + 18.5 + 25 + 32 + 78.5398 + 35.5 + 50 + 97.2549 + 398 = 889.4249 -> floor = 889
+    assert_full_triple_parity_i64(src, "main", 889);
+}

@@ -317,9 +317,23 @@ fn get_used_registers(op: &Op) -> Vec<RegId> {
         | Op::Mul(a, b)
         | Op::Div(a, b)
         | Op::Rem(a, b)
+        | Op::Pow(a, b)
+        | Op::Atan2(a, b)
+        | Op::Min(a, b)
+        | Op::Max(a, b)
         | Op::CmpEq(a, b)
         | Op::CmpLt(a, b) => vec![*a, *b],
-        Op::IntToStr(a) | Op::StrLen(a) => vec![*a],
+        Op::IntToStr(a)
+        | Op::StrLen(a)
+        | Op::Sin(a)
+        | Op::Cos(a)
+        | Op::Tan(a)
+        | Op::Sqrt(a)
+        | Op::Abs(a)
+        | Op::Floor(a)
+        | Op::Ceil(a)
+        | Op::IntToFloat(a)
+        | Op::FloatToInt(a) => vec![*a],
         Op::BufAlloc(s) => vec![*s],
         Op::BufReadU8(b, i) => vec![*b, *i],
         Op::BufWriteU8(b, i, v) => vec![*b, *i, *v],

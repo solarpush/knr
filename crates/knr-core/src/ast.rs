@@ -134,6 +134,20 @@ pub enum Op {
     CmpLt(RegId, RegId),
     IntToStr(RegId),
     StrLen(RegId),
+    // Math & numeric conversion intrinsics (VM == Cranelift == WASM == WGSL)
+    Sin(RegId),
+    Cos(RegId),
+    Tan(RegId),
+    Sqrt(RegId),
+    Abs(RegId),
+    Floor(RegId),
+    Ceil(RegId),
+    Pow(RegId, RegId),
+    Atan2(RegId, RegId),
+    Min(RegId, RegId),
+    Max(RegId, RegId),
+    IntToFloat(RegId),
+    FloatToInt(RegId),
     BufAlloc(RegId),
     BufReadU8(RegId, RegId),
     BufWriteU8(RegId, RegId, RegId),
@@ -287,6 +301,10 @@ pub struct Function {
     /// at call sites (not consumed by the caller) and cannot escape inside the callee.
     #[serde(default)]
     pub param_borrows: Vec<bool>,
+    /// Marks whether this function is a GPU shader (`shader fn ...`), statically verified
+    /// for GPU purity and compilable to WGSL / WebGL2 GLSL via `knr-codegen::wgsl`.
+    #[serde(default)]
+    pub is_shader: bool,
     pub ret_ty: Type,
     pub effects: Vec<Effect>,
     pub blocks: Vec<BasicBlock>,
@@ -298,6 +316,7 @@ impl Function {
             name: name.into(),
             params: Vec::new(),
             param_borrows: Vec::new(),
+            is_shader: false,
             ret_ty,
             effects: Vec::new(),
             blocks: Vec::new(),

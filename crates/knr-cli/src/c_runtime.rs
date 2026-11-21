@@ -22,6 +22,13 @@ pub const KNR_RT_C: &str = r#"/* knr fallback runtime C library for native build
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
+
+double rt_sin(double x) { return sin(x); }
+double rt_cos(double x) { return cos(x); }
+double rt_tan(double x) { return tan(x); }
+double rt_pow(double a, double b) { return pow(a, b); }
+double rt_atan2(double y, double x) { return atan2(y, x); }
 
 /* --- Struct Implementation --- */
 typedef struct {

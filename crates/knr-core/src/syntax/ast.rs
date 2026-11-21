@@ -117,6 +117,8 @@ pub struct FunctionDef {
     pub params: Vec<ParamDef>,
     pub ret_ty: TypeExpr,
     pub effects: Vec<Ident>,
+    #[serde(default)]
+    pub is_shader: bool,
     pub body: Block,
     pub span: Span,
 }
@@ -194,6 +196,7 @@ pub enum ExprKind {
     Float(f64),
     Bool(bool),
     Str(String),
+    ColorHex(String),
 
     // Identifier / Variable
     Variable(Ident),
@@ -202,6 +205,7 @@ pub enum ExprKind {
     StructLit {
         name: Ident,
         fields: Vec<FieldInit>,
+        spread: Option<Box<Expr>>,
     },
     EnumLit {
         enum_name: Ident,

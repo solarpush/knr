@@ -68,6 +68,7 @@ pub struct DevArgs {
     pub gas: u64,
     pub trace: bool,
     pub clear: bool,
+    pub gui: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +117,7 @@ pub enum CliCommand {
     Skill(SkillArgs),
     Dev(DevArgs),
     Test(TestArgs),
+    Lsp,
     Init(InitArgs),
     New(NewArgs),
     Help,
@@ -141,7 +143,8 @@ SUBCOMMANDS:
     update    Check for updates and self-update from GitHub Releases
     explore   Explore project structure, call graphs, schemas, and dependencies
     skill     Output or install the official AI Agent SKILL.md and VDOM helper for knr
-    dev       Watch project files and automatically re-verify/re-run on changes
+    dev       Watch project files and automatically re-verify/re-run (or --gui hot-reload) on changes
+    lsp       Run the built-in Language Server Protocol (LSP) server over stdio
     init      Initialize a knr project in an existing directory
     new       Create a new knr project or workspace directory
 
@@ -184,6 +187,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliCommand,
         "explore" => parse_explore(&args[2..]),
         "skill" | "skills" => parse_skill(&args[2..]),
         "dev" => parse_dev(&args[2..]),
+        "lsp" => parse_lsp(&args[2..]),
         "init" => parse_init(&args[2..]),
         "new" => parse_new(&args[2..]),
         cmd => Err(CliError::Args(format!(
@@ -814,6 +818,26 @@ OPTIONS:
     }))
 }
 
+fn parse_lsp(args: &[String]) -> Result<CliCommand, CliError> {
+    if let Some(arg) = args.first() {
+        if arg == "--help" || arg == "-h" {
+            println!(
+                "knr lsp - Run the built-in Language Server Protocol (JSON-RPC 2.0 over stdio)
+
+USAGE:
+    knr lsp [OPTIONS]
+
+OPTIONS:
+    -h, --help    Print help information"
+            );
+            return Ok(CliCommand::Help);
+        } else {
+            return Err(CliError::Args(format!("Unknown option for 'lsp': {arg}")));
+        }
+    }
+    Ok(CliCommand::Lsp)
+}
+
 fn parse_dev(args: &[String]) -> Result<CliCommand, CliError> {
     let mut path: Option<PathBuf> = None;
     let mut debounce_ms: u64 = 150;
@@ -822,6 +846,7 @@ fn parse_dev(args: &[String]) -> Result<CliCommand, CliError> {
     let mut trace = false;
     let mut once = false;
     let mut clear = true;
+    let mut gui = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -837,6 +862,7 @@ ARGS:
     [PATH]    Path to project directory, knr.toml manifest, or source file (default: .)
 
 OPTIONS:
+    -g, --gui            Launch live hot-reloading GUI + GPU shader window
     --debounce <MS>      Debounce quiet period in milliseconds (default: 150)
     --poll <MS>          Polling interval in milliseconds (default: 200)
     --gas <N|unlimited>  Maximum execution steps limit (default: 1000000)
@@ -846,6 +872,8 @@ OPTIONS:
     -h, --help           Print help information"
             );
             return Ok(CliCommand::Help);
+        } else if arg == "--gui" || arg == "-g" {
+            gui = true;
         } else if arg == "--trace" {
             trace = true;
         } else if arg == "--once" || arg == "--test-once" {
@@ -904,6 +932,7 @@ OPTIONS:
         gas,
         trace,
         clear,
+        gui,
     }))
 }
 

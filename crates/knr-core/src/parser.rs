@@ -79,8 +79,9 @@ fn prescan_fn_signatures(lines: &[&str], existing_funcs: &[Function]) -> HashMap
     }
     for (idx, line) in lines.iter().enumerate() {
         let stripped = strip_comment(line).trim();
-        if stripped.starts_with("fn ") {
-            if let Some((name, ret_ty)) = prescan_fn_header(stripped, idx + 1) {
+        let fn_hdr = stripped.strip_prefix("shader ").unwrap_or(stripped);
+        if fn_hdr.starts_with("fn ") {
+            if let Some((name, ret_ty)) = prescan_fn_header(fn_hdr, idx + 1) {
                 sigs.insert(name, ret_ty);
             }
         }
@@ -167,7 +168,7 @@ pub fn parse_ssa_with_role_and_env(
             all_schemas.push(schema.clone());
             module.add_schema(schema);
             idx = next_idx;
-        } else if trimmed.starts_with("fn ") {
+        } else if trimmed.starts_with("fn ") || trimmed.starts_with("shader fn ") {
             seen_declaration = true;
             if role == FileRole::Schema {
                 return Err(ParseError::InvalidConstructInSchemaFile {
@@ -421,14 +422,19 @@ fn parse_function_from_lines_with_env(
     idx += 1;
 
     // Syntax: fn <name>(<params>) -> <ret_ty> [effects(<effects>)] {
-    if !header_line.starts_with("fn ") {
+    let (is_shader, fn_header) = if let Some(rest) = header_line.strip_prefix("shader ") {
+        (true, rest.trim())
+    } else {
+        (false, header_line)
+    };
+    if !fn_header.starts_with("fn ") {
         return Err(ParseError::InvalidSyntax {
             line: header_line_num,
             msg: format!("Expected 'fn <name>...', got '{}'", header_line),
         });
     }
 
-    let without_fn = &header_line[3..].trim();
+    let without_fn = &fn_header[3..].trim();
     let paren_open = without_fn.find('(').ok_or_else(|| ParseError::InvalidSyntax {
         line: header_line_num,
         msg: "Missing '(' in function declaration".into(),
@@ -540,6 +546,7 @@ fn parse_function_from_lines_with_env(
     if has_any_borrow {
         func.param_borrows = param_borrows;
     }
+    func.is_shader = is_shader;
     func.effects = effects;
 
     // Parse basic blocks until closing brace '}'
@@ -896,6 +903,31 @@ fn parse_op(
             let r = parse_one_reg(rest, line)?;
             Ok((Op::StrLen(r), Type::I64))
         }
+        "sin" => Ok((Op::Sin(parse_one_reg(rest, line)?), Type::F64)),
+        "cos" => Ok((Op::Cos(parse_one_reg(rest, line)?), Type::F64)),
+        "tan" => Ok((Op::Tan(parse_one_reg(rest, line)?), Type::F64)),
+        "sqrt" => Ok((Op::Sqrt(parse_one_reg(rest, line)?), Type::F64)),
+        "abs" => Ok((Op::Abs(parse_one_reg(rest, line)?), Type::F64)),
+        "floor" => Ok((Op::Floor(parse_one_reg(rest, line)?), Type::F64)),
+        "ceil" => Ok((Op::Ceil(parse_one_reg(rest, line)?), Type::F64)),
+        "pow" => {
+            let (r1, r2) = parse_two_regs(rest, line)?;
+            Ok((Op::Pow(r1, r2), Type::F64))
+        }
+        "atan2" => {
+            let (r1, r2) = parse_two_regs(rest, line)?;
+            Ok((Op::Atan2(r1, r2), Type::F64))
+        }
+        "min" => {
+            let (r1, r2) = parse_two_regs(rest, line)?;
+            Ok((Op::Min(r1, r2), Type::F64))
+        }
+        "max" => {
+            let (r1, r2) = parse_two_regs(rest, line)?;
+            Ok((Op::Max(r1, r2), Type::F64))
+        }
+        "i64_to_f64" => Ok((Op::IntToFloat(parse_one_reg(rest, line)?), Type::F64)),
+        "f64_to_i64" => Ok((Op::FloatToInt(parse_one_reg(rest, line)?), Type::I64)),
         "cmp_eq" => {
             let (r1, r2) = parse_two_regs(rest, line)?;
             Ok((Op::CmpEq(r1, r2), Type::Bool))

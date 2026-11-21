@@ -754,9 +754,12 @@ pub(crate) fn collect_assigned_vars_in_expr(
                 collect_assigned_vars_in_expr(a, shadowed, out);
             }
         }
-        ExprKind::StructLit { fields, .. } => {
+        ExprKind::StructLit { fields, spread, .. } => {
             for f in fields {
                 collect_assigned_vars_in_expr(&f.value, shadowed, out);
+            }
+            if let Some(sp) = spread {
+                collect_assigned_vars_in_expr(sp, shadowed, out);
             }
         }
         ExprKind::Syscall { payload, .. } => collect_assigned_vars_in_expr(payload, shadowed, out),
@@ -769,6 +772,7 @@ pub(crate) fn collect_assigned_vars_in_expr(
         | ExprKind::Float(_)
         | ExprKind::Bool(_)
         | ExprKind::Str(_)
+        | ExprKind::ColorHex(_)
         | ExprKind::Variable(_) => {}
     }
 }

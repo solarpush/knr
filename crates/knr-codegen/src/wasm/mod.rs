@@ -26,6 +26,11 @@ struct BuiltinIndices {
     vec_push: Option<u32>,
     vec_get: Option<u32>,
     vec_len: Option<u32>,
+    math_sin: Option<u32>,
+    math_cos: Option<u32>,
+    math_tan: Option<u32>,
+    math_pow: Option<u32>,
+    math_atan2: Option<u32>,
 }
 
 impl WasmBackend {
@@ -132,6 +137,21 @@ impl WasmBackend {
             // 8: __knr_vec_len(vec: i64) -> i64
             builtins.vec_len = Some(base + 8);
             func_type_indices.push(register_type(&[ValType::I64], &[ValType::I64]));
+            // 9: __knr_sin(x: f64) -> f64
+            builtins.math_sin = Some(base + 9);
+            func_type_indices.push(register_type(&[ValType::F64], &[ValType::F64]));
+            // 10: __knr_cos(x: f64) -> f64
+            builtins.math_cos = Some(base + 10);
+            func_type_indices.push(register_type(&[ValType::F64], &[ValType::F64]));
+            // 11: __knr_tan(x: f64) -> f64
+            builtins.math_tan = Some(base + 11);
+            func_type_indices.push(register_type(&[ValType::F64], &[ValType::F64]));
+            // 12: __knr_pow(a: f64, b: f64) -> f64
+            builtins.math_pow = Some(base + 12);
+            func_type_indices.push(register_type(&[ValType::F64, ValType::F64], &[ValType::F64]));
+            // 13: __knr_atan2(y: f64, x: f64) -> f64
+            builtins.math_atan2 = Some(base + 13);
+            func_type_indices.push(register_type(&[ValType::F64, ValType::F64], &[ValType::F64]));
         }
 
         // 1. Type Section
@@ -221,6 +241,14 @@ impl WasmBackend {
             code.function(&Self::emit_builtin_vec_push(builtins.alloc.unwrap()));
             code.function(&Self::emit_builtin_vec_get());
             code.function(&Self::emit_builtin_vec_len());
+            code.function(&Self::emit_builtin_sin());
+            code.function(&Self::emit_builtin_cos(builtins.math_sin.unwrap()));
+            code.function(&Self::emit_builtin_tan(
+                builtins.math_sin.unwrap(),
+                builtins.math_cos.unwrap(),
+            ));
+            code.function(&Self::emit_builtin_pow());
+            code.function(&Self::emit_builtin_atan2());
         }
         wasm.section(&code);
 
@@ -273,7 +301,12 @@ impl WasmBackend {
                         | Op::VecNew(_)
                         | Op::VecPush(_, _)
                         | Op::VecGet(_, _)
-                        | Op::VecLen(_) => return true,
+                        | Op::VecLen(_)
+                        | Op::Sin(_)
+                        | Op::Cos(_)
+                        | Op::Tan(_)
+                        | Op::Pow(_, _)
+                        | Op::Atan2(_, _) => return true,
                         Op::Add(_, _) if inst.ty == Type::Str => return true,
                         Op::CmpEq(a, _) if reg_types.get(a) == Some(&Type::Str) => return true,
                         _ => {}
@@ -979,6 +1012,413 @@ impl WasmBackend {
         f
     }
 
+    /// Pure-WASM `__knr_sin(x: f64) -> f64` (zero external imports, ~1e-11 precision).
+    fn emit_builtin_sin() -> WasmFunction {
+        // params: 0 = x(f64); locals: 1 = r(f64), 2 = x2(f64)
+        let mut f = WasmFunction::new([(2, ValType::F64)]);
+        let two_pi = std::f64::consts::TAU;
+        let pi = std::f64::consts::PI;
+        let half_pi = std::f64::consts::FRAC_PI_2;
+
+        // r = x - 2*PI * floor((x + PI) / (2*PI)) -> [-PI, PI]
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::F64Const(two_pi));
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::F64Const(pi));
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Const(two_pi));
+        f.instruction(&Instruction::F64Div);
+        f.instruction(&Instruction::F64Floor);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Sub);
+        f.instruction(&Instruction::LocalSet(1));
+
+        // Fold into [-PI/2, PI/2]
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::F64Const(half_pi));
+        f.instruction(&Instruction::F64Gt);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::F64Const(pi));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::F64Sub);
+        f.instruction(&Instruction::LocalSet(1));
+        f.instruction(&Instruction::Else);
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::F64Const(-half_pi));
+        f.instruction(&Instruction::F64Lt);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::F64Const(-pi));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::F64Sub);
+        f.instruction(&Instruction::LocalSet(1));
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::End);
+
+        // x2 = r * r
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::LocalSet(2));
+
+        // Horner polynomial: r * (1 + x2*(-1/6 + x2*(1/120 + x2*(-1/5040 + x2*(1/362880 - x2/39916800)))))
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::F64Const(1.0));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Const(-1.0 / 6.0));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Const(1.0 / 120.0));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Const(-1.0 / 5040.0));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Const(1.0 / 362880.0));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Const(-1.0 / 39916800.0));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// Pure-WASM `__knr_cos(x: f64) -> f64` = `__knr_sin(x + PI/2)`
+    fn emit_builtin_cos(sin_idx: u32) -> WasmFunction {
+        let mut f = WasmFunction::new([]);
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::F64Const(std::f64::consts::FRAC_PI_2));
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::Call(sin_idx));
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// Pure-WASM `__knr_tan(x: f64) -> f64` = `__knr_sin(x) / __knr_cos(x)`
+    fn emit_builtin_tan(sin_idx: u32, cos_idx: u32) -> WasmFunction {
+        let mut f = WasmFunction::new([]);
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::Call(sin_idx));
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::Call(cos_idx));
+        f.instruction(&Instruction::F64Div);
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// Pure-WASM `__knr_pow(base: f64, exp: f64) -> f64` (zero external imports).
+    fn emit_builtin_pow() -> WasmFunction {
+        // params: 0=base(f64), 1=exp(f64)
+        // locals: 2=m(f64), 3=k(f64), 4=t(f64), 5=t2(f64), 6=y(f64), 7=r(f64), 8=er(f64); 9=n(i32)
+        let mut f = WasmFunction::new([(7, ValType::F64), (1, ValType::I32)]);
+        let ln2 = std::f64::consts::LN_2;
+
+        // if exp == 0.0 -> return 1.0
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::F64Const(0.0));
+        f.instruction(&Instruction::F64Eq);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::F64Const(1.0));
+        f.instruction(&Instruction::Return);
+        f.instruction(&Instruction::End);
+
+        // if base <= 0.0 -> return 0.0
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::F64Const(0.0));
+        f.instruction(&Instruction::F64Le);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::F64Const(0.0));
+        f.instruction(&Instruction::Return);
+        f.instruction(&Instruction::End);
+
+        // Reduce m into [0.7071, 1.4142]
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::LocalSet(2));
+        f.instruction(&Instruction::F64Const(0.0));
+        f.instruction(&Instruction::LocalSet(3));
+
+        f.instruction(&Instruction::Block(BlockType::Empty));
+        f.instruction(&Instruction::Loop(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Const(std::f64::consts::SQRT_2));
+        f.instruction(&Instruction::F64Le);
+        f.instruction(&Instruction::BrIf(1));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Const(0.5));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::LocalSet(2));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::F64Const(1.0));
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::LocalSet(3));
+        f.instruction(&Instruction::Br(0));
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::End);
+
+        f.instruction(&Instruction::Block(BlockType::Empty));
+        f.instruction(&Instruction::Loop(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Const(std::f64::consts::FRAC_1_SQRT_2));
+        f.instruction(&Instruction::F64Ge);
+        f.instruction(&Instruction::BrIf(1));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Const(2.0));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::LocalSet(2));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::F64Const(1.0));
+        f.instruction(&Instruction::F64Sub);
+        f.instruction(&Instruction::LocalSet(3));
+        f.instruction(&Instruction::Br(0));
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::End);
+
+        // t = (m - 1) / (m + 1); t2 = t * t
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Const(1.0));
+        f.instruction(&Instruction::F64Sub);
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Const(1.0));
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Div);
+        f.instruction(&Instruction::LocalTee(4));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::LocalSet(5));
+
+        // y = exp * (2*t*(1 + t2*(1/3 + t2*(1/5 + t2*(1/7 + t2*(1/9 + t2/11))))) + k*ln2)
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::F64Const(2.0));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Const(1.0));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::F64Const(1.0 / 3.0));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::F64Const(1.0 / 5.0));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::F64Const(1.0 / 7.0));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::F64Const(1.0 / 9.0));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::F64Const(1.0 / 11.0));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::F64Const(ln2));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::LocalSet(6));
+
+        // exp(y): n = floor(y/ln2 + 0.5), r = y - n*ln2
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::F64Const(ln2));
+        f.instruction(&Instruction::F64Div);
+        f.instruction(&Instruction::F64Const(0.5));
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Floor);
+        f.instruction(&Instruction::LocalTee(3));
+        f.instruction(&Instruction::I32TruncSatF64S);
+        f.instruction(&Instruction::LocalSet(9));
+
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::F64Const(ln2));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Sub);
+        f.instruction(&Instruction::LocalSet(7));
+
+        // er = 1 + r*(1 + r*(1/2 + r*(1/6 + r*(1/24 + r*(1/120 + r*(1/720 + r/5040))))))
+        f.instruction(&Instruction::F64Const(1.0));
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::F64Const(1.0));
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::F64Const(0.5));
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::F64Const(1.0 / 6.0));
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::F64Const(1.0 / 24.0));
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::F64Const(1.0 / 120.0));
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::F64Const(1.0 / 720.0));
+        f.instruction(&Instruction::LocalGet(7));
+        f.instruction(&Instruction::F64Const(1.0 / 5040.0));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::LocalSet(8));
+
+        // Scale er by 2^n
+        f.instruction(&Instruction::Block(BlockType::Empty));
+        f.instruction(&Instruction::Loop(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(9));
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::I32LeS);
+        f.instruction(&Instruction::BrIf(1));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::F64Const(2.0));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::LocalSet(8));
+        f.instruction(&Instruction::LocalGet(9));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::I32Sub);
+        f.instruction(&Instruction::LocalSet(9));
+        f.instruction(&Instruction::Br(0));
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::End);
+
+        f.instruction(&Instruction::Block(BlockType::Empty));
+        f.instruction(&Instruction::Loop(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(9));
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::I32GeS);
+        f.instruction(&Instruction::BrIf(1));
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::F64Const(0.5));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::LocalSet(8));
+        f.instruction(&Instruction::LocalGet(9));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::I32Add);
+        f.instruction(&Instruction::LocalSet(9));
+        f.instruction(&Instruction::Br(0));
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::End);
+
+        f.instruction(&Instruction::LocalGet(8));
+        f.instruction(&Instruction::End);
+        f
+    }
+
+    /// Pure-WASM `__knr_atan2(y: f64, x: f64) -> f64` (zero external imports).
+    fn emit_builtin_atan2() -> WasmFunction {
+        // params: 0=y(f64), 1=x(f64)
+        // locals: 2=ax(f64), 3=ay(f64), 4=z(f64), 5=z2(f64), 6=a(f64)
+        let mut f = WasmFunction::new([(5, ValType::F64)]);
+        let pi = std::f64::consts::PI;
+        let half_pi = std::f64::consts::FRAC_PI_2;
+
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::F64Abs);
+        f.instruction(&Instruction::LocalSet(2));
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::F64Abs);
+        f.instruction(&Instruction::LocalSet(3));
+
+        // If ax == 0 && ay == 0 -> 0.0
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Const(0.0));
+        f.instruction(&Instruction::F64Eq);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::F64Const(0.0));
+        f.instruction(&Instruction::Return);
+        f.instruction(&Instruction::End);
+
+        // z = min(ax, ay) / max(ax, ay)
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::F64Min);
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::F64Max);
+        f.instruction(&Instruction::F64Div);
+        f.instruction(&Instruction::LocalTee(4));
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::LocalSet(5));
+
+        // Minimax atan(z) on [0, 1]
+        f.instruction(&Instruction::LocalGet(4));
+        f.instruction(&Instruction::F64Const(0.9999993329));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::F64Const(-0.3332985605));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::F64Const(0.1994653599));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::F64Const(-0.1308779333));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::F64Const(0.0680899895));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::F64Const(-0.0176071186));
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::F64Add);
+        f.instruction(&Instruction::F64Mul);
+        f.instruction(&Instruction::LocalSet(6));
+
+        // if ay > ax: a = PI/2 - a
+        f.instruction(&Instruction::LocalGet(3));
+        f.instruction(&Instruction::LocalGet(2));
+        f.instruction(&Instruction::F64Gt);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::F64Const(half_pi));
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::F64Sub);
+        f.instruction(&Instruction::LocalSet(6));
+        f.instruction(&Instruction::End);
+
+        // if x < 0: a = PI - a
+        f.instruction(&Instruction::LocalGet(1));
+        f.instruction(&Instruction::F64Const(0.0));
+        f.instruction(&Instruction::F64Lt);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::F64Const(pi));
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::F64Sub);
+        f.instruction(&Instruction::LocalSet(6));
+        f.instruction(&Instruction::End);
+
+        // if y < 0: a = -a
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::F64Const(0.0));
+        f.instruction(&Instruction::F64Lt);
+        f.instruction(&Instruction::If(BlockType::Empty));
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::F64Neg);
+        f.instruction(&Instruction::LocalSet(6));
+        f.instruction(&Instruction::End);
+
+        f.instruction(&Instruction::LocalGet(6));
+        f.instruction(&Instruction::End);
+        f
+    }
+
     // ========================================================================
     // Function Compilation
     // ========================================================================
@@ -1424,6 +1864,101 @@ impl WasmBackend {
             Op::StrLen(a) => {
                 wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
                 wasm_fn.instruction(&Instruction::Call(builtins.str_len.unwrap()));
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::Sin(a) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::Call(builtins.math_sin.unwrap()));
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::Cos(a) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::Call(builtins.math_cos.unwrap()));
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::Tan(a) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::Call(builtins.math_tan.unwrap()));
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::Sqrt(a) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::F64Sqrt);
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::Abs(a) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::F64Abs);
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::Floor(a) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::F64Floor);
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::Ceil(a) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::F64Ceil);
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::Pow(a, b) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                wasm_fn.instruction(&Instruction::Call(builtins.math_pow.unwrap()));
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::Atan2(y, x) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[y]));
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[x]));
+                wasm_fn.instruction(&Instruction::Call(builtins.math_atan2.unwrap()));
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::Min(a, b) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                wasm_fn.instruction(&Instruction::F64Min);
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::Max(a, b) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                wasm_fn.instruction(&Instruction::F64Max);
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::IntToFloat(a) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::F64ConvertI64S);
+                if let Some(dst) = dst_loc {
+                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                }
+            }
+            Op::FloatToInt(a) => {
+                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                wasm_fn.instruction(&Instruction::I64TruncSatF64S);
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }

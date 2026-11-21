@@ -95,6 +95,7 @@ fn test_adv_cli_args_parsing_unit_matrix() {
         gas: 1_000_000,
         trace: false,
         clear: false,
+        gui: false,
     }));
 
     // Init args: --template, --name, --workspace, --force

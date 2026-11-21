@@ -135,9 +135,83 @@ fn lower_program_recursive(
         );
     }
 
-    // 2. Recursively resolve import directives (.ssa.schema, .ssa, .knr)
+    // 2. Recursively resolve import directives (built-in std/*, .ssa.schema, .ssa, .knr)
     for import_decl in &prog.imports {
         module.add_import(&import_decl.path);
+
+        if let Some(builtin_src) = crate::syntax::stdlib::resolve_builtin_std(&import_decl.path) {
+            let canonical_key = import_decl
+                .path
+                .strip_suffix(".knr")
+                .unwrap_or(&import_decl.path);
+            let canon = PathBuf::from(format!("<builtin:{canonical_key}>"));
+
+            if active_stack.contains(&canon) {
+                return Err(LowerError::InvalidConstruct {
+                    line: import_decl.span.line,
+                    msg: format!("Circular import detected involving '{}'", import_decl.path),
+                });
+            }
+            if !visited.insert(canon.clone()) {
+                continue;
+            }
+
+            let dep_prog =
+                crate::syntax::parse_knr(builtin_src).map_err(|e| LowerError::InvalidConstruct {
+                    line: import_decl.span.line,
+                    msg: format!("Error parsing built-in '{}': {e}", import_decl.path),
+                })?;
+
+            // Collect enum metadata from built-in declarations as well
+            for decl in &dep_prog.declarations {
+                if let Declaration::Enum(ref enum_def) = decl {
+                    let (schema, meta) = convert_enum_def(enum_def)?;
+                    if schemas_map.insert(schema.name.clone(), schema.clone()).is_none() {
+                        module.add_schema(schema);
+                    }
+                    enums_map.insert(meta.name.clone(), meta);
+                }
+            }
+
+            active_stack.push(canon);
+            let cur_schemas: Vec<Schema> = module.schemas.clone();
+            let cur_funcs: Vec<Function> = module.functions.clone();
+            let (dep_mod, dep_sm) = lower_program_recursive(
+                &dep_prog,
+                &cur_schemas,
+                &cur_funcs,
+                None,
+                visited,
+                active_stack,
+            )?;
+            active_stack.pop();
+
+            for s in dep_mod.schemas {
+                if schemas_map.insert(s.name.clone(), s.clone()).is_none() {
+                    module.add_schema(s);
+                }
+            }
+            for f in dep_mod.functions {
+                fn_sigs.insert(
+                    f.name.clone(),
+                    FnSig {
+                        param_types: f.params.iter().map(|(_, ty)| ty.clone()).collect(),
+                        param_borrows: (0..f.params.len())
+                            .map(|i| f.is_param_borrowed(i))
+                            .collect(),
+                        ret_ty: f.ret_ty.clone(),
+                        effects: f.effects.clone(),
+                    },
+                );
+                if existing_fn_names.insert(f.name.clone()) {
+                    module.add_function(f);
+                }
+            }
+            overall_source_map.reg_to_var.extend(dep_sm.reg_to_var);
+            overall_source_map.reg_to_span.extend(dep_sm.reg_to_span);
+            continue;
+        }
+
         let resolved_path = resolve_import_path(&import_decl.path, base_dir);
         if let Some(target_path) = resolved_path {
             let canon = target_path
@@ -417,6 +491,7 @@ fn lower_function_def(
 
     let mut func = Function::new(&fn_def.name.name, ret_ty.clone());
     func.effects = effects.clone();
+    func.is_shader = fn_def.is_shader;
 
     let mut ctx = FnLoweringContext::new(
         fn_def.name.name.clone(),

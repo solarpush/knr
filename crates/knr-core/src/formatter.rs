@@ -91,8 +91,9 @@ fn format_function_into(func: &Function, out: &mut String) {
         )
     };
 
+    let prefix = if func.is_shader { "shader fn" } else { "fn" };
     out.push_str(&format!(
-        "fn {}({}) -> {}{} {{\n",
+        "{prefix} {}({}) -> {}{} {{\n",
         func.name, params_str, func.ret_ty, effects_str
     ));
 
@@ -147,6 +148,19 @@ fn format_op(op: &Op) -> String {
         Op::CmpLt(a, b) => format!("cmp_lt %{a} %{b}"),
         Op::IntToStr(a) => format!("int_to_str %{a}"),
         Op::StrLen(a) => format!("str_len %{a}"),
+        Op::Sin(a) => format!("sin %{a}"),
+        Op::Cos(a) => format!("cos %{a}"),
+        Op::Tan(a) => format!("tan %{a}"),
+        Op::Sqrt(a) => format!("sqrt %{a}"),
+        Op::Abs(a) => format!("abs %{a}"),
+        Op::Floor(a) => format!("floor %{a}"),
+        Op::Ceil(a) => format!("ceil %{a}"),
+        Op::Pow(a, b) => format!("pow %{a} %{b}"),
+        Op::Atan2(a, b) => format!("atan2 %{a} %{b}"),
+        Op::Min(a, b) => format!("min %{a} %{b}"),
+        Op::Max(a, b) => format!("max %{a} %{b}"),
+        Op::IntToFloat(a) => format!("i64_to_f64 %{a}"),
+        Op::FloatToInt(a) => format!("f64_to_i64 %{a}"),
         Op::BufAlloc(s) => format!("buf_alloc %{s}"),
         Op::BufReadU8(b, i) => format!("buf_read_u8 %{b} %{i}"),
         Op::BufWriteU8(b, i, v) => format!("buf_write_u8 %{b} %{i} %{v}"),

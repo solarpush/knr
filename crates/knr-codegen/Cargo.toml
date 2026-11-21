@@ -13,6 +13,7 @@ cranelift-object = { workspace = true }
 cranelift-jit = "0.112"
 cranelift-native = "0.112"
 wasm-encoder = { workspace = true }
+naga = { version = "23.1.0", features = ["wgsl-in", "glsl-out"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

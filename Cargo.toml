@@ -19,3 +19,28 @@ cranelift-object = "0.112"
 wasm-encoder = "0.217"
 tokio = { version = "1.40", features = ["full"] }
 proptest = "1.5"
+
+# Keep debug builds lean AND responsive (fast VM + CPU renderer, tiny target/ without DWARF bloat)
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# Optimize pure-Rust CPU rasterizers even in dev builds so CPU fallback stays 60fps-smooth
+[profile.dev.package.tiny-skia]
+opt-level = 3
+debug = false
+
+[profile.dev.package.ab_glyph]
+opt-level = 3
+debug = false
+
+[profile.dev.package.ab_glyph_rasterizer]
+opt-level = 3
+debug = false
+
+[profile.dev.package.image]
+opt-level = 3
+debug = false

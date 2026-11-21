@@ -64,6 +64,32 @@ impl<'a> Lexer<'a> {
             return self.lex_string(start_pos, start_line, start_col);
         }
 
+        // Hex color literals: #RGB, #RRGGBB, #RRGGBBAA
+        if ch == '#' {
+            self.advance();
+            let mut hex = String::from("#");
+            while let Some((_, c)) = self.peek() {
+                if c.is_ascii_hexdigit() {
+                    hex.push(c);
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            let len = hex.len() - 1;
+            if len != 3 && len != 6 && len != 8 {
+                return Err(ParseError::InvalidSyntax {
+                    line: start_line,
+                    msg: format!("col {start_col}: invalid hex color literal '{hex}' (expected #RGB, #RRGGBB, or #RRGGBBAA)"),
+                });
+            }
+            let end_pos = self.current_byte_offset();
+            return Ok(Token::new(
+                TokenKind::HexColor(hex),
+                Span::new(start_pos, end_pos, start_line, start_col),
+            ));
+        }
+
         // Two-character operators or single characters
         self.advance();
         let kind = match ch {
@@ -83,7 +109,14 @@ impl<'a> Lexer<'a> {
                 }
             }
             ',' => TokenKind::Comma,
-            '.' => TokenKind::Dot,
+            '.' => {
+                if let Some((_, '.')) = self.peek() {
+                    self.advance();
+                    TokenKind::DotDot
+                } else {
+                    TokenKind::Dot
+                }
+            }
             '+' => TokenKind::Plus,
             '*' => TokenKind::Star,
             '/' => TokenKind::Slash,
@@ -236,6 +269,7 @@ impl<'a> Lexer<'a> {
 
         let kind = match name.as_str() {
             "fn" => TokenKind::Fn,
+            "shader" => TokenKind::Shader,
             "struct" => TokenKind::Struct,
             "schema" => TokenKind::Schema,
             "enum" => TokenKind::Enum,

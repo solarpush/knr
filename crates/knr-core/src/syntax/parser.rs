@@ -61,7 +61,7 @@ impl Parser {
                 declarations.push(Declaration::Struct(self.parse_struct_def()?));
             } else if self.check(&TokenKind::Enum) {
                 declarations.push(Declaration::Enum(self.parse_enum_def()?));
-            } else if self.check(&TokenKind::Fn) {
+            } else if self.check(&TokenKind::Fn) || self.check(&TokenKind::Shader) {
                 declarations.push(Declaration::Function(self.parse_function_def()?));
             } else {
                 let tok = self.peek();
@@ -201,7 +201,13 @@ impl Parser {
     }
 
     fn parse_function_def(&mut self) -> Result<FunctionDef, ParseError> {
-        let start_tok = self.expect(&TokenKind::Fn)?;
+        let (is_shader, start_span) = if self.check(&TokenKind::Shader) {
+            let s = self.advance().span;
+            self.expect(&TokenKind::Fn)?;
+            (true, s)
+        } else {
+            (false, self.expect(&TokenKind::Fn)?.span)
+        };
         let name = self.parse_ident()?;
 
         self.expect(&TokenKind::LParen)?;
@@ -267,8 +273,9 @@ impl Parser {
             params,
             ret_ty,
             effects,
+            is_shader,
             body,
-            span: Span::merge(start_tok.span, end_span),
+            span: Span::merge(start_span, end_span),
         })
     }
 
@@ -624,6 +631,14 @@ impl Parser {
                     span: tok.span,
                 })
             }
+            TokenKind::HexColor(ref hex) => {
+                let h = hex.clone();
+                self.advance();
+                Ok(Expr {
+                    kind: ExprKind::ColorHex(h),
+                    span: tok.span,
+                })
+            }
             TokenKind::True => {
                 self.advance();
                 Ok(Expr {
@@ -740,7 +755,17 @@ impl Parser {
         self.expect(&TokenKind::LBrace)?;
 
         let mut fields = Vec::new();
+        let mut spread: Option<Box<Expr>> = None;
         while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            if self.check(&TokenKind::DotDot) {
+                self.advance();
+                let base_expr = self.parse_expr(Precedence::Lowest, true)?;
+                spread = Some(Box::new(base_expr));
+                if self.check(&TokenKind::Comma) {
+                    self.advance();
+                }
+                break;
+            }
             let f_name = self.parse_ident()?;
             self.expect(&TokenKind::Colon)?;
             let f_val = self.parse_expr(Precedence::Lowest, true)?;
@@ -759,7 +784,11 @@ impl Parser {
 
         let end_tok = self.expect(&TokenKind::RBrace)?;
         Ok(Expr {
-            kind: ExprKind::StructLit { name, fields },
+            kind: ExprKind::StructLit {
+                name,
+                fields,
+                spread,
+            },
             span: Span::merge(start_span, end_tok.span),
         })
     }

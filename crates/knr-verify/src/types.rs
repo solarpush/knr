@@ -331,6 +331,67 @@ fn check_op_types(
                 return Err(type_err(func, line, inst_str, "str_len must return i64", None));
             }
         }
+        Op::Sin(a) | Op::Cos(a) | Op::Tan(a) | Op::Sqrt(a) | Op::Abs(a) | Op::Floor(a) | Op::Ceil(a) => {
+            let ty_a = get_reg_ty(func, *a, line, inst_str, reg_types)?;
+            if *ty_a != Type::F64 {
+                return Err(type_err(
+                    func,
+                    line,
+                    inst_str,
+                    &format!("Math unary op requires f64, found {ty_a}"),
+                    Some(*a),
+                ));
+            }
+            if inst.ty != Type::F64 {
+                return Err(type_err(func, line, inst_str, "Math unary op must return f64", None));
+            }
+        }
+        Op::Pow(a, b) | Op::Atan2(a, b) | Op::Min(a, b) | Op::Max(a, b) => {
+            let ty_a = get_reg_ty(func, *a, line, inst_str, reg_types)?;
+            let ty_b = get_reg_ty(func, *b, line, inst_str, reg_types)?;
+            if *ty_a != Type::F64 || *ty_b != Type::F64 {
+                return Err(type_err(
+                    func,
+                    line,
+                    inst_str,
+                    &format!("Math binary op requires (f64, f64), found ({ty_a}, {ty_b})"),
+                    Some(*a),
+                ));
+            }
+            if inst.ty != Type::F64 {
+                return Err(type_err(func, line, inst_str, "Math binary op must return f64", None));
+            }
+        }
+        Op::IntToFloat(a) => {
+            let ty_a = get_reg_ty(func, *a, line, inst_str, reg_types)?;
+            if *ty_a != Type::I64 {
+                return Err(type_err(
+                    func,
+                    line,
+                    inst_str,
+                    &format!("i64_to_f64 requires i64, found {ty_a}"),
+                    Some(*a),
+                ));
+            }
+            if inst.ty != Type::F64 {
+                return Err(type_err(func, line, inst_str, "i64_to_f64 must return f64", None));
+            }
+        }
+        Op::FloatToInt(a) => {
+            let ty_a = get_reg_ty(func, *a, line, inst_str, reg_types)?;
+            if *ty_a != Type::F64 {
+                return Err(type_err(
+                    func,
+                    line,
+                    inst_str,
+                    &format!("f64_to_i64 requires f64, found {ty_a}"),
+                    Some(*a),
+                ));
+            }
+            if inst.ty != Type::I64 {
+                return Err(type_err(func, line, inst_str, "f64_to_i64 must return i64", None));
+            }
+        }
         Op::CmpEq(a, b) => {
             let ty_a = get_reg_ty(func, *a, line, inst_str, reg_types)?;
             let ty_b = get_reg_ty(func, *b, line, inst_str, reg_types)?;

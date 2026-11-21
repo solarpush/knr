@@ -37,17 +37,33 @@ pub fn execute(file: &Path, gas: u64, trace: bool, gui: bool) -> Result<(), CliE
         module
     };
 
-    // If --gui is requested and the module is a typed MVU app (`init` + `update` + `view`),
-    // launch the real cross-platform interactive desktop UI (winit + softbuffer + tiny-skia + ab_glyph)!
-    if gui
-        && module.get_function("init").is_some()
-        && module.get_function("update").is_some()
-        && module.get_function("view").is_some()
-    {
+    // If --gui is requested and the module is a typed MVU / Animated Shader app (`init` + `view`,
+    // with optional `update`, `tick`, `on_slider`, `on_input`, and `shader fn`),
+    // launch the hardware-accelerated GPU (`wgpu 23`) desktop runtime with automatic CPU fallback!
+    if gui && module.get_function("init").is_some() && module.get_function("view").is_some() {
         use knr_runtime::gui::{
-            launch_interactive_ui, UiNode, WindowBackend, WindowConfig,
+            launch_ui_app, UiEvent, UiNode, WindowBackend, WindowConfig,
         };
         use std::cell::RefCell;
+        use std::collections::HashMap;
+
+        // Precompile all `shader fn` declarations in the module to validated WGSL
+        let compiled_shaders = knr_codegen::WgslBackend::new()
+            .compile_all_shaders(&module)
+            .map_err(|err| {
+                eprintln!("{err}");
+                CliError::Codegen(err)
+            })?;
+        let mut shaders_wgsl = HashMap::new();
+        for cs in compiled_shaders {
+            shaders_wgsl.insert(cs.name, cs.wgsl);
+        }
+
+        let tick_arity = module.get_function("tick").map(|f| f.params.len()).unwrap_or(0);
+        let has_tick = tick_arity >= 2;
+        let has_update = module.get_function("update").is_some();
+        let has_on_slider = module.get_function("on_slider").is_some();
+        let has_on_input = module.get_function("on_input").is_some();
 
         let mut init_platform = CliHostPlatform::new();
         let (init_state, _) =
@@ -55,20 +71,23 @@ pub fn execute(file: &Path, gas: u64, trace: bool, gui: bool) -> Result<(), CliE
                 .map_err(CliError::Vm)?;
 
         let state_cell = RefCell::new(init_state);
+        let plat_cell = RefCell::new(init_platform);
         let file_label = file
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("knr app");
 
-        let config = WindowConfig::interactive(format!("knr - {file_label}"), 820, 560);
+        let config = WindowConfig::interactive(format!("knr - {file_label}"), 1120, 800);
         let module_ref = &module;
 
-        let launch_res = launch_interactive_ui(
+        let launch_res = launch_ui_app(
             config,
+            shaders_wgsl,
+            has_tick,
             || {
                 let st = state_cell.borrow().clone();
-                let mut plat = CliHostPlatform::new();
-                match knr_interp::execute_module(module_ref, "view", vec![st], &mut plat, gas, false)
+                let mut plat = plat_cell.borrow_mut();
+                match knr_interp::execute_module(module_ref, "view", vec![st], &mut *plat, gas, false)
                 {
                     Ok((val, _)) => UiNode::from_value(&val).unwrap_or_default(),
                     Err(e) => UiNode {
@@ -77,17 +96,86 @@ pub fn execute(file: &Path, gas: u64, trace: bool, gui: bool) -> Result<(), CliE
                     },
                 }
             },
-            |action| {
+            |ev| {
                 let st = state_cell.borrow().clone();
-                let mut plat = CliHostPlatform::new();
-                if let Ok((next_state, _)) = knr_interp::execute_module(
-                    module_ref,
-                    "update",
-                    vec![st, Value::Str(action.to_string())],
-                    &mut plat,
-                    gas,
-                    false,
-                ) {
+                let mut plat = plat_cell.borrow_mut();
+                let res = match ev {
+                    UiEvent::Click(action) | UiEvent::Toggle { action, .. } if has_update => {
+                        knr_interp::execute_module(
+                            module_ref,
+                            "update",
+                            vec![st, Value::Str(action)],
+                            &mut *plat,
+                            gas,
+                            false,
+                        )
+                    }
+                    UiEvent::SliderChange { action, value } => {
+                        if has_on_slider {
+                            knr_interp::execute_module(
+                                module_ref,
+                                "on_slider",
+                                vec![st, Value::Str(action), Value::F64(value)],
+                                &mut *plat,
+                                gas,
+                                false,
+                            )
+                        } else if has_update {
+                            knr_interp::execute_module(
+                                module_ref,
+                                "update",
+                                vec![st, Value::Str(format!("{action}:{value:.3}"))],
+                                &mut *plat,
+                                gas,
+                                false,
+                            )
+                        } else {
+                            return;
+                        }
+                    }
+                    UiEvent::TextInput { action, value } => {
+                        if has_on_input {
+                            knr_interp::execute_module(
+                                module_ref,
+                                "on_input",
+                                vec![st, Value::Str(action), Value::Str(value)],
+                                &mut *plat,
+                                gas,
+                                false,
+                            )
+                        } else if has_update {
+                            knr_interp::execute_module(
+                                module_ref,
+                                "update",
+                                vec![st, Value::Str(format!("{action}:{value}"))],
+                                &mut *plat,
+                                gas,
+                                false,
+                            )
+                        } else {
+                            return;
+                        }
+                    }
+                    _ => return,
+                };
+                if let Ok((next_state, _)) = res {
+                    *state_cell.borrow_mut() = next_state;
+                }
+            },
+            |dt, elapsed| {
+                if !has_tick {
+                    return;
+                }
+                let st = state_cell.borrow().clone();
+                let mut plat = plat_cell.borrow_mut();
+                let args = if tick_arity >= 3 {
+                    vec![st, Value::F64(dt), Value::F64(elapsed)]
+                } else {
+                    vec![st, Value::F64(dt)]
+                };
+                if let Ok((next_state, _)) =
+                    knr_interp::execute_module(module_ref, "tick", args, &mut *plat, gas, false)
+                {
                     *state_cell.borrow_mut() = next_state;
                 }
             },

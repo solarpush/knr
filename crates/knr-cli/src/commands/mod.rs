@@ -5,6 +5,7 @@ pub mod dev;
 pub mod disasm;
 pub mod explore;
 pub mod init;
+pub mod lsp;
 pub mod new;
 pub mod run;
 pub mod skill;

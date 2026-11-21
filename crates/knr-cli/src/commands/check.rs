@@ -47,7 +47,20 @@ pub fn execute(file: &Path, json: bool, graph: bool) -> Result<(), CliError> {
             }
         };
         return match knr_verify::verify_program_from_file(file) {
-            Ok(_) => {
+            Ok(module) => {
+                // Validate every `shader fn` compiles to valid naga-verified WGSL + WebGL2 GLSL
+                if let Err(err) = knr_codegen::WgslBackend::new().compile_all_shaders(&module) {
+                    let diag = Diagnostic::new("ShaderCompileError", "<shader>", 1, err.to_string())
+                        .with_fix_hint("Ensure shader fn uses pure GPU arithmetic/structs and returns Color/Vec4/Vec3 or f64");
+                    if json {
+                        let json_output = serde_json::to_string_pretty(&vec![diag])
+                            .map_err(|e| CliError::Other(e.to_string()))?;
+                        println!("{json_output}");
+                    } else {
+                        eprintln!("{diag}");
+                    }
+                    return Err(CliError::Verify(1));
+                }
                 if graph {
                     let project_graph = knr_core::explore_path(file).map_err(|err| {
                         eprintln!("{err}");
@@ -103,6 +116,18 @@ pub fn execute(file: &Path, json: bool, graph: bool) -> Result<(), CliError> {
 
     match knr_verify::verify_module(&module) {
         Ok(()) => {
+            if let Err(err) = knr_codegen::WgslBackend::new().compile_all_shaders(&module) {
+                let diag = Diagnostic::new("ShaderCompileError", "<shader>", 1, err.to_string())
+                    .with_fix_hint("Ensure shader fn uses pure GPU arithmetic/structs and returns Color/Vec4/Vec3 or f64");
+                if json {
+                    let json_output = serde_json::to_string_pretty(&vec![diag])
+                        .map_err(|e| CliError::Other(e.to_string()))?;
+                    println!("{json_output}");
+                } else {
+                    eprintln!("{diag}");
+                }
+                return Err(CliError::Verify(1));
+            }
             if graph {
                 let project_graph = knr_core::explore_path(file).map_err(|err| {
                     eprintln!("{err}");

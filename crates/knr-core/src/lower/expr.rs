@@ -49,6 +49,7 @@ impl<'a> FnLoweringContext<'a> {
                 ));
                 Ok((dst, Type::Str))
             }
+            ExprKind::ColorHex(hex) => self.lower_color_hex(hex, expected_ty, expr.span),
             ExprKind::Variable(ident) => {
                 let (reg, ty) = self.lookup_var(&ident.name, line)?;
                 self.record_span(reg, expr.span);
@@ -68,7 +69,11 @@ impl<'a> FnLoweringContext<'a> {
                 op,
                 payload,
             } => self.lower_syscall_expr(&effect.name, op, payload, expected_ty, expr.span),
-            ExprKind::StructLit { name, fields } => self.lower_struct_lit(&name.name, fields, line),
+            ExprKind::StructLit {
+                name,
+                fields,
+                spread,
+            } => self.lower_struct_lit(&name.name, fields, spread.as_deref(), line),
             ExprKind::EnumLit {
                 enum_name,
                 variant,
@@ -564,6 +569,169 @@ impl<'a> FnLoweringContext<'a> {
                 }
                 let dst = self.alloc_reg();
                 self.emit(Instruction::new(Some(dst), Type::I64, Op::StrLen(r), line));
+                return Ok((dst, Type::I64));
+            }
+            "sin" | "cos" | "tan" | "sqrt" | "abs" | "floor" | "ceil" | "fract" => {
+                self.expect_argc(callee, args, 1, line)?;
+                let (r, ty) = self.lower_expr(&args[0])?;
+                if ty != Type::F64 {
+                    return Err(LowerError::TypeMismatch {
+                        line,
+                        expected: "f64".to_string(),
+                        actual: ty.to_string(),
+                    });
+                }
+                if callee == "fract" {
+                    let fl = self.alloc_reg();
+                    self.emit(Instruction::new(Some(fl), Type::F64, Op::Floor(r), line));
+                    let dst = self.alloc_reg();
+                    self.emit(Instruction::new(Some(dst), Type::F64, Op::Sub(r, fl), line));
+                    return Ok((dst, Type::F64));
+                }
+                let op = match callee {
+                    "sin" => Op::Sin(r),
+                    "cos" => Op::Cos(r),
+                    "tan" => Op::Tan(r),
+                    "sqrt" => Op::Sqrt(r),
+                    "abs" => Op::Abs(r),
+                    "floor" => Op::Floor(r),
+                    _ => Op::Ceil(r),
+                };
+                let dst = self.alloc_reg();
+                self.emit(Instruction::new(Some(dst), Type::F64, op, line));
+                return Ok((dst, Type::F64));
+            }
+            "pow" | "atan2" | "min" | "max" => {
+                self.expect_argc(callee, args, 2, line)?;
+                let (a, ta) = self.lower_expr(&args[0])?;
+                let (b, tb) = self.lower_expr(&args[1])?;
+                if ta != Type::F64 || tb != Type::F64 {
+                    return Err(LowerError::TypeMismatch {
+                        line,
+                        expected: "(f64, f64)".to_string(),
+                        actual: format!("({ta}, {tb})"),
+                    });
+                }
+                let op = match callee {
+                    "pow" => Op::Pow(a, b),
+                    "atan2" => Op::Atan2(a, b),
+                    "min" => Op::Min(a, b),
+                    _ => Op::Max(a, b),
+                };
+                let dst = self.alloc_reg();
+                self.emit(Instruction::new(Some(dst), Type::F64, op, line));
+                return Ok((dst, Type::F64));
+            }
+            "clamp" => {
+                self.expect_argc(callee, args, 3, line)?;
+                let (x, tx) = self.lower_expr(&args[0])?;
+                let (lo, tlo) = self.lower_expr(&args[1])?;
+                let (hi, thi) = self.lower_expr(&args[2])?;
+                if tx != Type::F64 || tlo != Type::F64 || thi != Type::F64 {
+                    return Err(LowerError::TypeMismatch {
+                        line,
+                        expected: "(f64, f64, f64)".to_string(),
+                        actual: format!("({tx}, {tlo}, {thi})"),
+                    });
+                }
+                let r1 = self.alloc_reg();
+                self.emit(Instruction::new(Some(r1), Type::F64, Op::Max(x, lo), line));
+                let dst = self.alloc_reg();
+                self.emit(Instruction::new(Some(dst), Type::F64, Op::Min(r1, hi), line));
+                return Ok((dst, Type::F64));
+            }
+            "lerp" | "mix" => {
+                self.expect_argc(callee, args, 3, line)?;
+                let (a, ta) = self.lower_expr(&args[0])?;
+                let (b, tb) = self.lower_expr(&args[1])?;
+                let (t, tt) = self.lower_expr(&args[2])?;
+                if ta != Type::F64 || tb != Type::F64 || tt != Type::F64 {
+                    return Err(LowerError::TypeMismatch {
+                        line,
+                        expected: "(f64, f64, f64)".to_string(),
+                        actual: format!("({ta}, {tb}, {tt})"),
+                    });
+                }
+                let diff = self.alloc_reg();
+                self.emit(Instruction::new(Some(diff), Type::F64, Op::Sub(b, a), line));
+                let scaled = self.alloc_reg();
+                self.emit(Instruction::new(Some(scaled), Type::F64, Op::Mul(diff, t), line));
+                let dst = self.alloc_reg();
+                self.emit(Instruction::new(Some(dst), Type::F64, Op::Add(a, scaled), line));
+                return Ok((dst, Type::F64));
+            }
+            "smoothstep" => {
+                self.expect_argc(callee, args, 3, line)?;
+                let (e0, t0) = self.lower_expr(&args[0])?;
+                let (e1, t1) = self.lower_expr(&args[1])?;
+                let (x, tx) = self.lower_expr(&args[2])?;
+                if t0 != Type::F64 || t1 != Type::F64 || tx != Type::F64 {
+                    return Err(LowerError::TypeMismatch {
+                        line,
+                        expected: "(f64, f64, f64)".to_string(),
+                        actual: format!("({t0}, {t1}, {tx})"),
+                    });
+                }
+                let num = self.alloc_reg();
+                self.emit(Instruction::new(Some(num), Type::F64, Op::Sub(x, e0), line));
+                let den = self.alloc_reg();
+                self.emit(Instruction::new(Some(den), Type::F64, Op::Sub(e1, e0), line));
+                let raw = self.alloc_reg();
+                self.emit(Instruction::new(Some(raw), Type::F64, Op::Div(num, den), line));
+                let c0 = self.alloc_reg();
+                self.emit(Instruction::new(Some(c0), Type::F64, Op::ConstF64(0.0), line));
+                let c1 = self.alloc_reg();
+                self.emit(Instruction::new(Some(c1), Type::F64, Op::ConstF64(1.0), line));
+                let cl1 = self.alloc_reg();
+                self.emit(Instruction::new(Some(cl1), Type::F64, Op::Max(raw, c0), line));
+                let t = self.alloc_reg();
+                self.emit(Instruction::new(Some(t), Type::F64, Op::Min(cl1, c1), line));
+                let c2 = self.alloc_reg();
+                self.emit(Instruction::new(Some(c2), Type::F64, Op::ConstF64(2.0), line));
+                let c3 = self.alloc_reg();
+                self.emit(Instruction::new(Some(c3), Type::F64, Op::ConstF64(3.0), line));
+                let two_t = self.alloc_reg();
+                self.emit(Instruction::new(Some(two_t), Type::F64, Op::Mul(c2, t), line));
+                let three_m = self.alloc_reg();
+                self.emit(Instruction::new(Some(three_m), Type::F64, Op::Sub(c3, two_t), line));
+                let t2 = self.alloc_reg();
+                self.emit(Instruction::new(Some(t2), Type::F64, Op::Mul(t, t), line));
+                let dst = self.alloc_reg();
+                self.emit(Instruction::new(Some(dst), Type::F64, Op::Mul(t2, three_m), line));
+                return Ok((dst, Type::F64));
+            }
+            "to_f64" => {
+                self.expect_argc(callee, args, 1, line)?;
+                let (r, ty) = self.lower_expr(&args[0])?;
+                if ty == Type::F64 {
+                    return Ok((r, Type::F64));
+                }
+                if ty != Type::I64 {
+                    return Err(LowerError::TypeMismatch {
+                        line,
+                        expected: "i64".to_string(),
+                        actual: ty.to_string(),
+                    });
+                }
+                let dst = self.alloc_reg();
+                self.emit(Instruction::new(Some(dst), Type::F64, Op::IntToFloat(r), line));
+                return Ok((dst, Type::F64));
+            }
+            "to_i64" => {
+                self.expect_argc(callee, args, 1, line)?;
+                let (r, ty) = self.lower_expr(&args[0])?;
+                if ty == Type::I64 {
+                    return Ok((r, Type::I64));
+                }
+                if ty != Type::F64 {
+                    return Err(LowerError::TypeMismatch {
+                        line,
+                        expected: "f64".to_string(),
+                        actual: ty.to_string(),
+                    });
+                }
+                let dst = self.alloc_reg();
+                self.emit(Instruction::new(Some(dst), Type::I64, Op::FloatToInt(r), line));
                 return Ok((dst, Type::I64));
             }
             "buf_alloc" => {
@@ -1668,10 +1836,101 @@ impl<'a> FnLoweringContext<'a> {
         Ok((res_reg, final_ty))
     }
 
+    fn lower_color_hex(
+        &mut self,
+        hex: &str,
+        expected_ty: Option<&Type>,
+        span: Span,
+    ) -> Result<(RegId, Type), LowerError> {
+        let line = span.line;
+        if let Some(Type::Struct(sname)) = expected_ty {
+            if sname == "Color" {
+                if let Some(schema) = self.schemas.get("Color").cloned() {
+                    if schema.fields.len() >= 4
+                        && schema.fields[0].ty == Type::F64
+                        && schema.fields[1].ty == Type::F64
+                        && schema.fields[2].ty == Type::F64
+                        && schema.fields[3].ty == Type::F64
+                    {
+                        let s = hex.trim().strip_prefix('#').unwrap_or(hex);
+                        let (r, g, b, a) = match s.len() {
+                            3 => (
+                                u8::from_str_radix(&s[0..1], 16).unwrap_or(0) * 17,
+                                u8::from_str_radix(&s[1..2], 16).unwrap_or(0) * 17,
+                                u8::from_str_radix(&s[2..3], 16).unwrap_or(0) * 17,
+                                255u8,
+                            ),
+                            6 => (
+                                u8::from_str_radix(&s[0..2], 16).unwrap_or(0),
+                                u8::from_str_radix(&s[2..4], 16).unwrap_or(0),
+                                u8::from_str_radix(&s[4..6], 16).unwrap_or(0),
+                                255u8,
+                            ),
+                            8 => (
+                                u8::from_str_radix(&s[0..2], 16).unwrap_or(0),
+                                u8::from_str_radix(&s[2..4], 16).unwrap_or(0),
+                                u8::from_str_radix(&s[4..6], 16).unwrap_or(0),
+                                u8::from_str_radix(&s[6..8], 16).unwrap_or(255),
+                            ),
+                            _ => (0, 0, 0, 255),
+                        };
+                        let comps = [
+                            (r as f64) / 255.0,
+                            (g as f64) / 255.0,
+                            (b as f64) / 255.0,
+                            (a as f64) / 255.0,
+                        ];
+                        let struct_ty = Type::Struct("Color".to_string());
+                        let mut cur = self.alloc_reg();
+                        self.emit(Instruction::new(
+                            Some(cur),
+                            struct_ty.clone(),
+                            Op::StructNew("Color".to_string()),
+                            line,
+                        ));
+                        self.linear_tracker
+                            .mark_alive(cur, struct_ty.clone(), true, line);
+                        for (idx, val) in comps.iter().enumerate() {
+                            let c_reg = self.alloc_reg();
+                            self.emit(Instruction::new(
+                                Some(c_reg),
+                                Type::F64,
+                                Op::ConstF64(*val),
+                                line,
+                            ));
+                            let next = self.alloc_reg();
+                            self.emit(Instruction::new(
+                                Some(next),
+                                struct_ty.clone(),
+                                Op::StructSet(cur, idx as u32, c_reg),
+                                line,
+                            ));
+                            self.linear_tracker.mark_moved(cur, line)?;
+                            self.linear_tracker
+                                .mark_alive(next, struct_ty.clone(), true, line);
+                            cur = next;
+                        }
+                        return Ok((cur, struct_ty));
+                    }
+                }
+            }
+        }
+        let dst = self.alloc_reg();
+        self.record_span(dst, span);
+        self.emit(Instruction::new(
+            Some(dst),
+            Type::Str,
+            Op::ConstStr(hex.to_string()),
+            line,
+        ));
+        Ok((dst, Type::Str))
+    }
+
     pub fn lower_struct_lit(
         &mut self,
         name: &str,
         fields: &[crate::syntax::ast::FieldInit],
+        spread: Option<&Expr>,
         line: usize,
     ) -> Result<(RegId, Type), LowerError> {
         let schema = self
@@ -1685,16 +1944,32 @@ impl<'a> FnLoweringContext<'a> {
 
         let struct_ty = Type::Struct(name.to_string());
 
-        // 1. Initial struct allocation
-        let mut current_struct_reg = self.alloc_reg();
-        self.emit(Instruction::new(
-            Some(current_struct_reg),
-            struct_ty.clone(),
-            Op::StructNew(name.to_string()),
-            line,
-        ));
-        self.linear_tracker
-            .mark_alive(current_struct_reg, struct_ty.clone(), true, line);
+        // 1. Initial struct allocation OR consume base struct from `..spread`
+        let mut current_struct_reg = if let Some(spread_expr) = spread {
+            let (base_reg, base_ty) = self.lower_expr_with_expected(spread_expr, Some(&struct_ty))?;
+            if base_ty != struct_ty {
+                return Err(LowerError::TypeMismatch {
+                    line,
+                    expected: struct_ty.to_string(),
+                    actual: base_ty.to_string(),
+                });
+            }
+            if fields.is_empty() {
+                return Ok((base_reg, struct_ty));
+            }
+            base_reg
+        } else {
+            let r = self.alloc_reg();
+            self.emit(Instruction::new(
+                Some(r),
+                struct_ty.clone(),
+                Op::StructNew(name.to_string()),
+                line,
+            ));
+            self.linear_tracker
+                .mark_alive(r, struct_ty.clone(), true, line);
+            r
+        };
 
         // 2. Linear field threading
         for init in fields {

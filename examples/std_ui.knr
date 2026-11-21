@@ -1,0 +1,412 @@
+// Standard Unconstrained Typed UI, Styling, Animation & Shader Primitives for knr.
+// Zero raw HTML, zero raw CSS, zero raw GLSL — 100% statically verified schemas.
+// Works identically on Native GPU Desktop (`wgpu 23`) and Web (`WASM + WebGPU/WebGL2`).
+
+schema Vec2 {
+    0: x f64,
+    1: y f64,
+}
+
+schema Color {
+    0: r f64,
+    1: g f64,
+    2: b f64,
+    3: a f64,
+}
+
+schema Style {
+    0: w f64,
+    1: h f64,
+    2: min_w f64,
+    3: max_w f64,
+    4: bg str,
+    5: color str,
+    6: border str,
+    7: border_w f64,
+    8: r_tl f64,
+    9: r_tr f64,
+    10: r_br f64,
+    11: r_bl f64,
+    12: pad_t f64,
+    13: pad_r f64,
+    14: pad_b f64,
+    15: pad_l f64,
+    16: gap_x f64,
+    17: gap_y f64,
+    18: font_size f64,
+    19: font_weight i64,
+    20: align str,
+    21: justify str,
+    22: grid_cols i64,
+    23: shadow_x f64,
+    24: shadow_y f64,
+    25: shadow_blur f64,
+    26: shadow_color str,
+    27: backdrop_blur f64,
+    28: opacity f64,
+    29: translate_x f64,
+    30: translate_y f64,
+    31: scale f64,
+    32: rotate_deg f64,
+    33: hover_bg str,
+    34: hover_border str,
+    35: hover_scale f64,
+    36: transition_ms f64,
+    37: overflow str,
+    38: z_index i64,
+    39: grow f64,
+}
+
+schema Widget {
+    0: key str,
+    1: kind str,
+    2: text str,
+    3: action str,
+    4: value f64,
+    5: uniforms vec[f64],
+    6: style Style,
+    7: children vec[Widget],
+}
+
+// ============================================================================
+// Composable Style Presets (use with `..style_default()` / `..style_card()`)
+// ============================================================================
+
+fn style_default() -> Style {
+    return Style {
+        w: 0.0,
+        h: 0.0,
+        min_w: 0.0,
+        max_w: 0.0,
+        bg: "",
+        color: #f8fafc,
+        border: "",
+        border_w: 1.0,
+        r_tl: 0.0,
+        r_tr: 0.0,
+        r_br: 0.0,
+        r_bl: 0.0,
+        pad_t: 0.0,
+        pad_r: 0.0,
+        pad_b: 0.0,
+        pad_l: 0.0,
+        gap_x: 0.0,
+        gap_y: 0.0,
+        font_size: 16.0,
+        font_weight: 400,
+        align: "stretch",
+        justify: "start",
+        grid_cols: 0,
+        shadow_x: 0.0,
+        shadow_y: 0.0,
+        shadow_blur: 0.0,
+        shadow_color: "",
+        backdrop_blur: 0.0,
+        opacity: 1.0,
+        translate_x: 0.0,
+        translate_y: 0.0,
+        scale: 1.0,
+        rotate_deg: 0.0,
+        hover_bg: "",
+        hover_border: "",
+        hover_scale: 1.0,
+        transition_ms: 0.0,
+        overflow: "visible",
+        z_index: 0,
+        grow: 0.0,
+    };
+}
+
+fn style_radius(s: Style, r: f64) -> Style {
+    return Style {
+        r_tl: r,
+        r_tr: r,
+        r_br: r,
+        r_bl: r,
+        ..s
+    };
+}
+
+fn style_pad(s: Style, p: f64) -> Style {
+    return Style {
+        pad_t: p,
+        pad_r: p,
+        pad_b: p,
+        pad_l: p,
+        ..s
+    };
+}
+
+fn style_gap(s: Style, g: f64) -> Style {
+    return Style {
+        gap_x: g,
+        gap_y: g,
+        ..s
+    };
+}
+
+fn style_card() -> Style {
+    return Style {
+        bg: #111827cc,
+        color: #f8fafc,
+        border: #334155aa,
+        border_w: 1.0,
+        r_tl: 18.0,
+        r_tr: 18.0,
+        r_br: 18.0,
+        r_bl: 18.0,
+        pad_t: 22.0,
+        pad_r: 22.0,
+        pad_b: 22.0,
+        pad_l: 22.0,
+        gap_x: 14.0,
+        gap_y: 14.0,
+        shadow_x: 0.0,
+        shadow_y: 12.0,
+        shadow_blur: 28.0,
+        shadow_color: #00000066,
+        backdrop_blur: 16.0,
+        transition_ms: 160.0,
+        ..style_default()
+    };
+}
+
+fn style_button(bg: str, color: str) -> Style {
+    return Style {
+        bg: bg,
+        color: color,
+        border: #ffffff22,
+        border_w: 1.0,
+        r_tl: 12.0,
+        r_tr: 12.0,
+        r_br: 12.0,
+        r_bl: 12.0,
+        pad_t: 11.0,
+        pad_r: 18.0,
+        pad_b: 11.0,
+        pad_l: 18.0,
+        font_size: 15.0,
+        font_weight: 600,
+        hover_scale: 1.04,
+        transition_ms: 150.0,
+        ..style_default()
+    };
+}
+
+// ============================================================================
+// Declarative Widget Constructors
+// ============================================================================
+
+fn w_col(key: str, style: Style, children: vec[Widget]) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    return Widget {
+        key: key,
+        kind: "col",
+        text: "",
+        action: "",
+        value: 0.0,
+        uniforms: empty_u,
+        style: style,
+        children: children,
+    };
+}
+
+fn w_row(key: str, style: Style, children: vec[Widget]) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    return Widget {
+        key: key,
+        kind: "row",
+        text: "",
+        action: "",
+        value: 0.0,
+        uniforms: empty_u,
+        style: style,
+        children: children,
+    };
+}
+
+fn w_grid(key: str, cols: i64, style: Style, children: vec[Widget]) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    return Widget {
+        key: key,
+        kind: "grid",
+        text: "",
+        action: "",
+        value: 0.0,
+        uniforms: empty_u,
+        style: Style { grid_cols: cols, ..style },
+        children: children,
+    };
+}
+
+fn w_stack(key: str, style: Style, children: vec[Widget]) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    return Widget {
+        key: key,
+        kind: "stack",
+        text: "",
+        action: "",
+        value: 0.0,
+        uniforms: empty_u,
+        style: style,
+        children: children,
+    };
+}
+
+fn w_card(key: str, style: Style, children: vec[Widget]) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    return Widget {
+        key: key,
+        kind: "card",
+        text: "",
+        action: "",
+        value: 0.0,
+        uniforms: empty_u,
+        style: style,
+        children: children,
+    };
+}
+
+fn w_text(key: str, text: str, font_size: f64, color: str) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    let empty_c: vec[Widget] = vec_new();
+    return Widget {
+        key: key,
+        kind: "text",
+        text: text,
+        action: "",
+        value: 0.0,
+        uniforms: empty_u,
+        style: Style {
+            color: color,
+            font_size: font_size,
+            ..style_default()
+        },
+        children: empty_c,
+    };
+}
+
+fn w_badge(key: str, text: str, bg: str, color: str) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    let empty_c: vec[Widget] = vec_new();
+    return Widget {
+        key: key,
+        kind: "badge",
+        text: text,
+        action: "",
+        value: 0.0,
+        uniforms: empty_u,
+        style: Style {
+            bg: bg,
+            color: color,
+            border: #38bdf855,
+            r_tl: 999.0,
+            r_tr: 999.0,
+            r_br: 999.0,
+            r_bl: 999.0,
+            pad_t: 6.0,
+            pad_r: 12.0,
+            pad_b: 6.0,
+            pad_l: 12.0,
+            font_size: 13.0,
+            font_weight: 600,
+            ..style_default()
+        },
+        children: empty_c,
+    };
+}
+
+fn w_button(key: str, label: str, action: str, style: Style) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    let empty_c: vec[Widget] = vec_new();
+    return Widget {
+        key: key,
+        kind: "button",
+        text: label,
+        action: action,
+        value: 0.0,
+        uniforms: empty_u,
+        style: style,
+        children: empty_c,
+    };
+}
+
+fn w_input(key: str, text: str, action: str, style: Style) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    let empty_c: vec[Widget] = vec_new();
+    return Widget {
+        key: key,
+        kind: "input",
+        text: text,
+        action: action,
+        value: 0.0,
+        uniforms: empty_u,
+        style: style,
+        children: empty_c,
+    };
+}
+
+fn w_slider(key: str, action: str, value: f64, style: Style) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    let empty_c: vec[Widget] = vec_new();
+    return Widget {
+        key: key,
+        kind: "slider",
+        text: "",
+        action: action,
+        value: value,
+        uniforms: empty_u,
+        style: style,
+        children: empty_c,
+    };
+}
+
+fn w_toggle(key: str, label: str, action: str, checked: bool, style: Style) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    let empty_c: vec[Widget] = vec_new();
+    let v = if checked { 1.0 } else { 0.0 };
+    return Widget {
+        key: key,
+        kind: "toggle",
+        text: label,
+        action: action,
+        value: v,
+        uniforms: empty_u,
+        style: style,
+        children: empty_c,
+    };
+}
+
+fn w_shader(key: str, shader_name: str, uniforms: vec[f64], style: Style) -> Widget {
+    let empty_c: vec[Widget] = vec_new();
+    return Widget {
+        key: key,
+        kind: "shader",
+        text: shader_name,
+        action: "",
+        value: 0.0,
+        uniforms: uniforms,
+        style: style,
+        children: empty_c,
+    };
+}
+
+// ============================================================================
+// Pure Animation & Easing Helpers (`std/anim`)
+// ============================================================================
+
+fn ease_out_cubic(t: f64) -> f64 {
+    let c = clamp(t, 0.0, 1.0);
+    let inv = 1.0 - c;
+    return 1.0 - inv * inv * inv;
+}
+
+fn ease_in_out_sine(t: f64) -> f64 {
+    let c = clamp(t, 0.0, 1.0);
+    return 0.5 - 0.5 * cos(c * 3.141592653589793);
+}
+
+fn smooth_damp(current: f64, target: f64, dt: f64, rate: f64) -> f64 {
+    let factor = clamp(dt * rate, 0.0, 1.0);
+    return lerp(current, target, factor);
+}

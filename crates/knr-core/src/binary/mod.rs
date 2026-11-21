@@ -51,6 +51,9 @@ pub fn encode_knrbin(module: &Module) -> Result<Vec<u8>, BinaryError> {
         if func.effects.contains(&Effect::Async) {
             effects_mask |= 1 << 3;
         }
+        if func.is_shader {
+            effects_mask |= 1 << 6;
+        }
         let has_borrows = func.param_borrows.iter().any(|&b| b);
         if has_borrows {
             effects_mask |= 1 << 7;
@@ -505,6 +508,7 @@ pub fn decode_knrbin(bytes: &[u8]) -> Result<Module, BinaryError> {
             name,
             params,
             param_borrows,
+            is_shader: (effects_mask & (1 << 6)) != 0,
             ret_ty,
             effects,
             blocks,

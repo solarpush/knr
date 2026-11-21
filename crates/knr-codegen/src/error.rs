@@ -6,6 +6,8 @@ pub enum CodegenError {
     Cranelift(String),
     #[error("Wasm codegen error: {0}")]
     Wasm(String),
+    #[error("WGSL/Shader codegen error: {0}")]
+    Wgsl(String),
     #[error("Verification error: {0}")]
     Verify(String),
     #[error("I/O error: {0}")]

@@ -12,6 +12,7 @@ fn make_ret_const_i64_func(name: &str, val: i64) -> Function {
         param_borrows: vec![],
         ret_ty: Type::I64,
         effects: vec![],
+        is_shader: false,
         blocks: vec![BasicBlock {
             id: 0,
             params: vec![],
@@ -33,6 +34,7 @@ fn make_str_func(name: &str, s: &str) -> Function {
         param_borrows: vec![],
         ret_ty: Type::Str,
         effects: vec![],
+        is_shader: false,
         blocks: vec![BasicBlock {
             id: 0,
             params: vec![],
@@ -54,6 +56,7 @@ fn make_countdown_loop_func() -> Function {
         param_borrows: vec![],
         ret_ty: Type::I64,
         effects: vec![],
+        is_shader: false,
         blocks: vec![
             BasicBlock {
                 id: 0,
@@ -181,6 +184,7 @@ fn test_wasm_single_block_loop_converted_to_return_defect() {
         param_borrows: vec![],
         ret_ty: Type::Void,
         effects: vec![],
+        is_shader: false,
         blocks: vec![BasicBlock {
             id: 0,
             params: vec![],
@@ -224,6 +228,7 @@ fn test_cranelift_jit_i64_arithmetic_exhaustive() {
         param_borrows: vec![],
         ret_ty: Type::I64,
         effects: vec![],
+        is_shader: false,
         blocks: vec![BasicBlock {
             id: 0,
             params: vec![],
@@ -293,6 +298,7 @@ fn test_cranelift_jit_f64_math() {
         param_borrows: vec![],
         ret_ty: Type::F64,
         effects: vec![],
+        is_shader: false,
         blocks: vec![BasicBlock {
             id: 0,
             params: vec![],
@@ -339,6 +345,7 @@ fn test_cranelift_jit_buffer_write_read() {
         param_borrows: vec![],
         ret_ty: Type::I64,
         effects: vec![],
+        is_shader: false,
         blocks: vec![BasicBlock {
             id: 0,
             params: vec![],

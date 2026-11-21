@@ -129,6 +129,19 @@ impl<'a> Vm<'a> {
             Op::CmpLt(_, _) => "cmp_lt",
             Op::IntToStr(_) => "int_to_str",
             Op::StrLen(_) => "str_len",
+            Op::Sin(_) => "sin",
+            Op::Cos(_) => "cos",
+            Op::Tan(_) => "tan",
+            Op::Sqrt(_) => "sqrt",
+            Op::Abs(_) => "abs",
+            Op::Floor(_) => "floor",
+            Op::Ceil(_) => "ceil",
+            Op::Pow(_, _) => "pow",
+            Op::Atan2(_, _) => "atan2",
+            Op::Min(_, _) => "min",
+            Op::Max(_, _) => "max",
+            Op::IntToFloat(_) => "i64_to_f64",
+            Op::FloatToInt(_) => "f64_to_i64",
             Op::BufAlloc(_) => "buf_alloc",
             Op::BufReadU8(_, _) => "buf_read_u8",
             Op::BufWriteU8(_, _, _) => "buf_write_u8",
@@ -272,6 +285,77 @@ impl<'a> Vm<'a> {
                     Value::Str(s) => Ok(Value::I64(s.len() as i64)),
                     other => Err(VmError::TypeMismatch {
                         expected: "str".to_string(),
+                        actual: other.type_name().to_string(),
+                        line,
+                    }),
+                }
+            }
+
+            Op::Sin(r) | Op::Cos(r) | Op::Tan(r) | Op::Sqrt(r) | Op::Abs(r) | Op::Floor(r) | Op::Ceil(r) => {
+                let v = self.get_reg(*r, line)?;
+                match v {
+                    Value::F64(x) => {
+                        let out = match op {
+                            Op::Sin(_) => x.sin(),
+                            Op::Cos(_) => x.cos(),
+                            Op::Tan(_) => x.tan(),
+                            Op::Sqrt(_) => x.sqrt(),
+                            Op::Abs(_) => x.abs(),
+                            Op::Floor(_) => x.floor(),
+                            _ => x.ceil(),
+                        };
+                        Ok(Value::F64(out))
+                    }
+                    other => Err(VmError::TypeMismatch {
+                        expected: "f64".to_string(),
+                        actual: other.type_name().to_string(),
+                        line,
+                    }),
+                }
+            }
+
+            Op::Pow(a_reg, b_reg)
+            | Op::Atan2(a_reg, b_reg)
+            | Op::Min(a_reg, b_reg)
+            | Op::Max(a_reg, b_reg) => {
+                let a = self.get_reg(*a_reg, line)?;
+                let b = self.get_reg(*b_reg, line)?;
+                match (a, b) {
+                    (Value::F64(x), Value::F64(y)) => {
+                        let out = match op {
+                            Op::Pow(_, _) => x.powf(y),
+                            Op::Atan2(_, _) => x.atan2(y),
+                            Op::Min(_, _) => x.min(y),
+                            _ => x.max(y),
+                        };
+                        Ok(Value::F64(out))
+                    }
+                    (x, y) => Err(VmError::TypeMismatch {
+                        expected: "f64, f64".to_string(),
+                        actual: format!("{}, {}", x.type_name(), y.type_name()),
+                        line,
+                    }),
+                }
+            }
+
+            Op::IntToFloat(r) => {
+                let v = self.get_reg(*r, line)?;
+                match v {
+                    Value::I64(n) => Ok(Value::F64(n as f64)),
+                    other => Err(VmError::TypeMismatch {
+                        expected: "i64".to_string(),
+                        actual: other.type_name().to_string(),
+                        line,
+                    }),
+                }
+            }
+
+            Op::FloatToInt(r) => {
+                let v = self.get_reg(*r, line)?;
+                match v {
+                    Value::F64(f) => Ok(Value::I64(f as i64)),
+                    other => Err(VmError::TypeMismatch {
+                        expected: "f64".to_string(),
                         actual: other.type_name().to_string(),
                         line,
                     }),

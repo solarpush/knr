@@ -121,12 +121,26 @@ pub fn remap_op_registers(op: &mut Op, map: &HashMap<RegId, RegId>) {
         | Op::Mul(a, b)
         | Op::Div(a, b)
         | Op::Rem(a, b)
+        | Op::Pow(a, b)
+        | Op::Atan2(a, b)
+        | Op::Min(a, b)
+        | Op::Max(a, b)
         | Op::CmpEq(a, b)
         | Op::CmpLt(a, b) => {
             remap(a, map);
             remap(b, map);
         }
-        Op::IntToStr(a) | Op::StrLen(a) => remap(a, map),
+        Op::IntToStr(a)
+        | Op::StrLen(a)
+        | Op::Sin(a)
+        | Op::Cos(a)
+        | Op::Tan(a)
+        | Op::Sqrt(a)
+        | Op::Abs(a)
+        | Op::Floor(a)
+        | Op::Ceil(a)
+        | Op::IntToFloat(a)
+        | Op::FloatToInt(a) => remap(a, map),
         Op::BufAlloc(s) => remap(s, map),
         Op::BufReadU8(b, i) => {
             remap(b, map);

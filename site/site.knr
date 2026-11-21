@@ -1,0 +1,1215 @@
+// ============================================================================
+// knr — Official Interactive Showcase & Landing Website (`site/site.knr`)
+// 100% Pure `.knr` · Zero HTML · Zero CSS · Zero GLSL · Zero GC
+// ============================================================================
+// Run natively on GPU (`wgpu 23` Vulkan/Metal/DX12, auto CPU fallback):
+//   knr run site/site.knr --gui
+//   knr dev site/site.knr --gui
+// Build standalone SSR + zero-import WASM + WebGPU / WebGL2 web bundle:
+//   knr build site/site.knr --target web -o dist_site/
+// Verify statically in < 100 us & run deterministic built-in tests:
+//   knr check site/site.knr --graph
+//   knr test site/site.knr
+
+import "std/ui";
+
+// ============================================================================
+// 1. LIVE GPU HERO SHADER (`knr_hero_nebula`)
+//    Statically verified GPU-pure (`knr-verify`) and compiled via `naga` to:
+//    - WGSL (Desktop `wgpu` + Browser WebGPU)
+//    - GLSL ES 3.00 (Universal Browser WebGL2 fallback)
+//
+//    Exact WGSL parameter bindings:
+//      param 0 `uv: Vec2`       -> fragment UV `(0..1, 0..1)`
+//      param 1 `time: f64`      -> elapsed seconds
+//      param 2 `mouse: Vec2`    -> normalized pointer UV `(0..1, 0..1)`
+//      param 3 `energy: f64`    -> `uniforms[0]`
+//      param 4 `hue_shift: f64` -> `uniforms[1]`
+// ============================================================================
+
+fn nebula_cos(t: f64, phase: f64) -> f64 {
+    return 0.5 + 0.5 * cos(6.2831853 * (t + phase));
+}
+
+shader fn knr_hero_nebula(uv: Vec2, time: f64, mouse: Vec2, energy: f64, hue_shift: f64) -> Color {
+    let e = clamp(energy, 0.0, 1.0);
+    let h = clamp(hue_shift, 0.0, 1.0);
+    let t = time * (0.28 + e * 1.35);
+
+    // Wide-aspect centered coordinates for deep cosmic framing
+    let px = (uv.x - 0.5) * 2.1;
+    let py = (uv.y - 0.5) * 1.25;
+    let rad = sqrt(px * px + py * py);
+    let ang = atan2(py + 0.0001, px + 0.0001);
+
+    // Mouse-reactive glowing energy core + concentric plasma ripples
+    let mx = (uv.x - mouse.x) * 1.9;
+    let my = (uv.y - mouse.y) * 1.15;
+    let mdist = sqrt(mx * mx + my * my);
+    let core_glow = (0.042 + e * 0.068) / (mdist * mdist + 0.038);
+    let core_halo = (0.14 + e * 0.14) / (mdist + 0.24);
+    let ripple = smoothstep(0.35, 1.0, 0.5 + 0.5 * sin(mdist * 18.0 - t * 3.4)) * (0.12 / (mdist + 0.28));
+
+    // Domain-warped aurora nebula curtains (cyan / indigo / violet)
+    let warp_x = px + 0.28 * sin(py * 2.8 + t * 0.85) + 0.14 * cos(ang * 2.0 - t * 0.6);
+    let warp_y = py + 0.24 * cos(px * 2.6 - t * 0.75) + 0.12 * sin(rad * 4.5 - t * 1.1);
+
+    let wave1 = sin(warp_x * 3.4 + sin(warp_y * 2.9 - t * 0.9) + t * 0.65);
+    let wave2 = cos(warp_y * 4.1 - warp_x * 2.3 + t * 0.95 + cos(rad * 3.6 + t * 0.4) * 0.5);
+    let wave3 = sin((warp_x + warp_y) * 3.2 - t * 1.25 + ang * 1.5);
+
+    let field = 0.5 + 0.5 * (wave1 * 0.46 + wave2 * 0.34 + wave3 * 0.20);
+    let ribbon = smoothstep(0.18, 0.96, field);
+    let veil = smoothstep(0.05, 0.85, 0.5 + 0.5 * sin(warp_x * 1.8 - warp_y * 2.4 + t * 0.45));
+
+    // Subtle procedural starlight grid shimmer
+    let shimmer = smoothstep(0.92, 1.0, sin(uv.x * 46.0 + t * 0.3) * cos(uv.y * 26.0 - t * 0.25));
+    let aurora_amp = (0.38 + e * 0.85) * ribbon + 0.22 * veil;
+
+    // Cosine spectral palette shifted continuously by `hue_shift`
+    let pal_t = ribbon * 0.42 + veil * 0.20 + h + t * 0.035;
+    let pr = nebula_cos(pal_t, 0.68);
+    let pg = nebula_cos(pal_t, 0.16);
+    let pb = nebula_cos(pal_t, 0.90);
+
+    // Smooth vignette into deep obsidian backdrop
+    let vig = clamp(1.12 - rad * 0.42, 0.32, 1.0);
+
+    let base_r = lerp(0.025, 0.08 + aurora_amp * pr * 0.68, vig);
+    let base_g = lerp(0.045, 0.09 + aurora_amp * pg * 0.82, vig);
+    let base_b = lerp(0.115, 0.18 + aurora_amp * pb * 1.05, vig);
+
+    let r = clamp(base_r + core_glow * (0.34 + 0.45 * pr) + core_halo * 0.16 + ripple * 0.45 + shimmer * 0.18, 0.0, 1.0);
+    let g = clamp(base_g + core_glow * (0.62 + 0.30 * pg) + core_halo * 0.36 + ripple * 0.82 + shimmer * 0.26, 0.0, 1.0);
+    let b = clamp(base_b + core_glow * 0.98 + core_halo * 0.58 + ripple * 0.96 + shimmer * 0.34, 0.0, 1.0);
+
+    return Color { r: r, g: g, b: b, a: 1.0 };
+}
+
+// ============================================================================
+// 2. MVU APPLICATION STATE, 60/120 FPS TICK, AND INTERACTIVE EVENT HANDLERS
+// ============================================================================
+
+schema State {
+    0: active_tab i64,
+    1: energy f64,
+    2: hue_shift f64,
+    3: paused bool,
+    4: elapsed f64,
+    5: pulse f64,
+    6: headline str,
+    7: preset_name str,
+}
+
+fn init() -> State {
+    return State {
+        active_tab: 0,
+        energy: 0.72,
+        hue_shift: 0.12,
+        paused: false,
+        elapsed: 0.0,
+        pulse: 0.5,
+        headline: "Linear Ownership. Zero GC. Native GPU.",
+        preset_name: "Cyber Cyan",
+    };
+}
+
+fn tick(s: State, dt: f64, _wall_elapsed: f64) -> State {
+    let next_elapsed = if s.paused { s.elapsed } else { s.elapsed + dt };
+    let next_pulse = ease_in_out_sine(0.5 + 0.5 * sin(next_elapsed * 2.2));
+    return State {
+        elapsed: next_elapsed,
+        pulse: next_pulse,
+        ..s
+    };
+}
+
+fn update(s: State, action: str) -> State {
+    if action == "tab_overview" {
+        return State { active_tab: 0, ..s };
+    }
+    if action == "tab_shaders" {
+        return State { active_tab: 1, ..s };
+    }
+    if action == "tab_safety" {
+        return State { active_tab: 2, ..s };
+    }
+    if action == "tab_toolchain" {
+        return State { active_tab: 3, ..s };
+    }
+    if action == "preset_cyber_cyan" {
+        return State {
+            energy: 0.72,
+            hue_shift: 0.12,
+            preset_name: "Cyber Cyan",
+            ..s
+        };
+    }
+    if action == "preset_solar_violet" {
+        return State {
+            energy: 0.90,
+            hue_shift: 0.52,
+            preset_name: "Solar Violet",
+            ..s
+        };
+    }
+    if action == "preset_deep_ocean" {
+        return State {
+            energy: 0.45,
+            hue_shift: 0.85,
+            preset_name: "Deep Ocean",
+            ..s
+        };
+    }
+    if action == "toggle_pause" {
+        let next_paused = if s.paused { false } else { true };
+        return State { paused: next_paused, ..s };
+    }
+    if action == "reset_defaults" {
+        return State {
+            energy: 0.72,
+            hue_shift: 0.12,
+            paused: false,
+            headline: "Linear Ownership. Zero GC. Native GPU.",
+            preset_name: "Cyber Cyan",
+            ..s
+        };
+    }
+    return s;
+}
+
+fn on_slider(s: State, action: str, val: f64) -> State {
+    let v = clamp(val, 0.0, 1.0);
+    if action == "slider_energy" {
+        return State {
+            energy: v,
+            preset_name: "Custom",
+            ..s
+        };
+    }
+    if action == "slider_hue" {
+        return State {
+            hue_shift: v,
+            preset_name: "Custom",
+            ..s
+        };
+    }
+    return s;
+}
+
+fn on_input(s: State, action: str, text: str) -> State {
+    if action == "input_headline" {
+        return State { headline: text, ..s };
+    }
+    return s;
+}
+
+// ============================================================================
+// 3. COMPOSABLE GLASSMORPHISM STYLE & WIDGET HELPERS
+// ============================================================================
+
+fn style_glass() -> Style {
+    return Style {
+        bg: "linear(145, #111827dd, #0b1120ee)",
+        color: #f8fafc,
+        border: #334155aa,
+        border_w: 1.0,
+        r_tl: 20.0,
+        r_tr: 20.0,
+        r_br: 20.0,
+        r_bl: 20.0,
+        pad_t: 22.0,
+        pad_r: 24.0,
+        pad_b: 22.0,
+        pad_l: 24.0,
+        gap_x: 14.0,
+        gap_y: 12.0,
+        shadow_x: 0.0,
+        shadow_y: 14.0,
+        shadow_blur: 32.0,
+        shadow_color: #00000077,
+        backdrop_blur: 18.0,
+        hover_border: #38bdf877,
+        transition_ms: 160.0,
+        ..style_card()
+    };
+}
+
+fn style_hero_glass() -> Style {
+    return Style {
+        bg: "linear(155, #111b33dd, #090f1fee)",
+        border: #38bdf844,
+        border_w: 1.0,
+        r_tl: 24.0,
+        r_tr: 24.0,
+        r_br: 24.0,
+        r_bl: 24.0,
+        pad_t: 28.0,
+        pad_r: 28.0,
+        pad_b: 26.0,
+        pad_l: 28.0,
+        gap_x: 16.0,
+        gap_y: 16.0,
+        shadow_x: 0.0,
+        shadow_y: 18.0,
+        shadow_blur: 42.0,
+        shadow_color: #02061799,
+        backdrop_blur: 18.0,
+        transition_ms: 160.0,
+        ..style_card()
+    };
+}
+
+fn style_nav_btn(active: bool) -> Style {
+    let bg = if active { "linear(135, #0284c7, #6366f1)" } else { #1e293b99 };
+    let fg = if active { #ffffff } else { #cbd5e1 };
+    let bdr = if active { #38bdf8bb } else { #33415588 };
+    return Style {
+        border: bdr,
+        border_w: 1.0,
+        r_tl: 12.0,
+        r_tr: 12.0,
+        r_br: 12.0,
+        r_bl: 12.0,
+        pad_t: 10.0,
+        pad_r: 18.0,
+        pad_b: 10.0,
+        pad_l: 18.0,
+        font_size: 14.0,
+        font_weight: 600,
+        hover_bg: #334155cc,
+        hover_border: #38bdf8aa,
+        hover_scale: 1.04,
+        transition_ms: 160.0,
+        ..style_button(bg, fg)
+    };
+}
+
+fn style_cta_primary() -> Style {
+    return Style {
+        border: #38bdf899,
+        border_w: 1.0,
+        r_tl: 13.0,
+        r_tr: 13.0,
+        r_br: 13.0,
+        r_bl: 13.0,
+        pad_t: 12.0,
+        pad_r: 22.0,
+        pad_b: 12.0,
+        pad_l: 22.0,
+        font_size: 15.0,
+        font_weight: 700,
+        shadow_x: 0.0,
+        shadow_y: 8.0,
+        shadow_blur: 24.0,
+        shadow_color: #0ea5e944,
+        hover_scale: 1.04,
+        transition_ms: 160.0,
+        ..style_button("linear(135, #0ea5e9, #6366f1)", #ffffff)
+    };
+}
+
+fn style_cta_secondary() -> Style {
+    return Style {
+        border: #475569aa,
+        border_w: 1.0,
+        r_tl: 13.0,
+        r_tr: 13.0,
+        r_br: 13.0,
+        r_bl: 13.0,
+        pad_t: 12.0,
+        pad_r: 20.0,
+        pad_b: 12.0,
+        pad_l: 20.0,
+        font_size: 15.0,
+        font_weight: 600,
+        hover_bg: #1e293bee,
+        hover_border: #38bdf899,
+        hover_scale: 1.04,
+        transition_ms: 160.0,
+        ..style_button(#0f172acc, #e2e8f0)
+    };
+}
+
+fn style_preset_btn(active: bool, active_grad: str, active_fg: str) -> Style {
+    let bdr = if active { #ffffff66 } else { #334155aa };
+    if active {
+        return Style {
+            border: bdr,
+            border_w: 1.5,
+            r_tl: 12.0,
+            r_tr: 12.0,
+            r_br: 12.0,
+            r_bl: 12.0,
+            pad_t: 11.0,
+            pad_r: 18.0,
+            pad_b: 11.0,
+            pad_l: 18.0,
+            font_size: 14.0,
+            font_weight: 700,
+            hover_scale: 1.04,
+            transition_ms: 160.0,
+            ..style_button(active_grad, active_fg)
+        };
+    }
+    return Style {
+        border: bdr,
+        border_w: 1.0,
+        r_tl: 12.0,
+        r_tr: 12.0,
+        r_br: 12.0,
+        r_bl: 12.0,
+        pad_t: 11.0,
+        pad_r: 18.0,
+        pad_b: 11.0,
+        pad_l: 18.0,
+        font_size: 14.0,
+        font_weight: 600,
+        hover_bg: #1e293bee,
+        hover_border: #38bdf899,
+        hover_scale: 1.04,
+        transition_ms: 160.0,
+        ..style_button(#111827cc, #cbd5e1)
+    };
+}
+
+fn w_bold_text(key: str, text: str, font_size: f64, weight: i64, color: str) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    let empty_c: vec[Widget] = vec_new();
+    return Widget {
+        key: key,
+        kind: "text",
+        text: text,
+        action: "",
+        value: 0.0,
+        uniforms: empty_u,
+        style: Style {
+            color: color,
+            font_size: font_size,
+            font_weight: weight,
+            ..style_default()
+        },
+        children: empty_c,
+    };
+}
+
+fn w_info_card(
+    key: str,
+    badge_label: str,
+    badge_bg: str,
+    badge_fg: str,
+    title: str,
+    body: str,
+    foot: str,
+) -> Widget {
+    let k_badge = key + "_b";
+    let k_title = key + "_t";
+    let k_body = key + "_d";
+    let k_foot = key + "_f";
+
+    let items: vec[Widget] = vec_new();
+    items = vec_push(items, w_badge(k_badge, badge_label, badge_bg, badge_fg));
+    items = vec_push(items, w_bold_text(k_title, title, 18.0, 700, #f8fafc));
+    items = vec_push(items, w_text(k_body, body, 14.0, #94a3b8));
+    items = vec_push(items, w_bold_text(k_foot, foot, 13.0, 600, #38bdf8));
+    return w_card(key, style_glass(), items);
+}
+
+fn w_stat_card(key: str, metric: str, label: str, accent: str) -> Widget {
+    let k_val = key + "_v";
+    let k_lbl = key + "_l";
+
+    let items: vec[Widget] = vec_new();
+    items = vec_push(items, w_bold_text(k_val, metric, 26.0, 800, accent));
+    items = vec_push(items, w_text(k_lbl, label, 13.0, #94a3b8));
+    return w_card(
+        key,
+        Style {
+            bg: #0f172acc,
+            border: #33415588,
+            r_tl: 16.0,
+            r_tr: 16.0,
+            r_br: 16.0,
+            r_bl: 16.0,
+            pad_t: 18.0,
+            pad_r: 20.0,
+            pad_b: 18.0,
+            pad_l: 20.0,
+            gap_y: 6.0,
+            backdrop_blur: 18.0,
+            hover_border: #38bdf866,
+            transition_ms: 160.0,
+            ..style_card()
+        },
+        items,
+    );
+}
+
+fn make_shader_uniforms(s: &State) -> vec[f64] {
+    let u: vec[f64] = vec_new();
+    u = vec_push(u, s.energy);
+    u = vec_push(u, s.hue_shift);
+    return u;
+}
+
+fn style_nebula_viewport(height_px: f64) -> Style {
+    return Style {
+        h: height_px,
+        border: #38bdf877,
+        border_w: 1.5,
+        r_tl: 18.0,
+        r_tr: 18.0,
+        r_br: 18.0,
+        r_bl: 18.0,
+        shadow_x: 0.0,
+        shadow_y: 12.0,
+        shadow_blur: 36.0,
+        shadow_color: #38bdf833,
+        ..style_default()
+    };
+}
+
+// ============================================================================
+// 4. TOP NAVIGATION BAR & FOOTER
+// ============================================================================
+
+fn view_navbar(s: &State) -> Widget {
+    let brand_items: vec[Widget] = vec_new();
+    brand_items = vec_push(brand_items, w_bold_text("brand_logo", "knr", 24.0, 800, #f8fafc));
+    brand_items = vec_push(brand_items, w_badge("brand_ver", "v1.0 · Pure .knr", #0f172aee, #38bdf8));
+    let brand_row = w_row("nav_brand", style_gap(style_default(), 12.0), brand_items);
+
+    let nav_items: vec[Widget] = vec_new();
+    nav_items = vec_push(
+        nav_items,
+        w_button("nav_overview", "Overview", "tab_overview", style_nav_btn(s.active_tab == 0)),
+    );
+    nav_items = vec_push(
+        nav_items,
+        w_button("nav_shaders", "GPU & Shaders", "tab_shaders", style_nav_btn(s.active_tab == 1)),
+    );
+    nav_items = vec_push(
+        nav_items,
+        w_button("nav_safety", "Linear Safety", "tab_safety", style_nav_btn(s.active_tab == 2)),
+    );
+    nav_items = vec_push(
+        nav_items,
+        w_button("nav_toolchain", "Toolchain", "tab_toolchain", style_nav_btn(s.active_tab == 3)),
+    );
+    let nav_tabs = w_row("nav_tabs", style_gap(style_default(), 10.0), nav_items);
+
+    let bar_items: vec[Widget] = vec_new();
+    bar_items = vec_push(bar_items, brand_row);
+    bar_items = vec_push(bar_items, nav_tabs);
+
+    return w_row(
+        "top_navbar",
+        Style {
+            bg: #0b1224cc,
+            border: #334155aa,
+            border_w: 1.0,
+            r_tl: 18.0,
+            r_tr: 18.0,
+            r_br: 18.0,
+            r_bl: 18.0,
+            pad_t: 14.0,
+            pad_r: 20.0,
+            pad_b: 14.0,
+            pad_l: 20.0,
+            gap_x: 16.0,
+            gap_y: 12.0,
+            align: "center",
+            justify: "between",
+            shadow_x: 0.0,
+            shadow_y: 10.0,
+            shadow_blur: 28.0,
+            shadow_color: #00000066,
+            backdrop_blur: 18.0,
+            transition_ms: 160.0,
+            ..style_default()
+        },
+        bar_items,
+    );
+}
+
+fn view_footer(s: &State) -> Widget {
+    let tab_name = if s.active_tab == 0 {
+        "Overview"
+    } else if s.active_tab == 1 {
+        "GPU & Shaders"
+    } else if s.active_tab == 2 {
+        "Linear Safety"
+    } else {
+        "Toolchain"
+    };
+    let secs = to_i64(s.elapsed);
+
+    let foot_items: vec[Widget] = vec_new();
+    foot_items = vec_push(
+        foot_items,
+        w_text(
+            "foot_left",
+            "Built 100% in knr (site/site.knr) · Zero HTML · Zero CSS · Zero GLSL · Verified Linear SSA",
+            13.0,
+            #94a3b8,
+        ),
+    );
+    foot_items = vec_push(
+        foot_items,
+        w_text(
+            "foot_right",
+            "Section: " + tab_name + "  ·  Preset: " + s.preset_name + "  ·  Uptime " + to_str(secs) + "s",
+            13.0,
+            #64748b,
+        ),
+    );
+
+    return w_row(
+        "site_footer",
+        Style {
+            bg: #0b1224aa,
+            border: #1e293baa,
+            border_w: 1.0,
+            r_tl: 16.0,
+            r_tr: 16.0,
+            r_br: 16.0,
+            r_bl: 16.0,
+            pad_t: 14.0,
+            pad_r: 20.0,
+            pad_b: 14.0,
+            pad_l: 20.0,
+            gap_x: 16.0,
+            gap_y: 8.0,
+            justify: "between",
+            align: "center",
+            backdrop_blur: 18.0,
+            ..style_default()
+        },
+        foot_items,
+    );
+}
+
+// ============================================================================
+// 5. TAB 0 — OVERVIEW (Hero Nebula Canvas + 3-Column Feature Cards + Stats)
+// ============================================================================
+
+fn view_tab_overview(s: &State) -> Widget {
+    let energy_pct = to_i64(s.energy * 100.0);
+    let hue_pct = to_i64(s.hue_shift * 100.0);
+
+    let cta_items: vec[Widget] = vec_new();
+    cta_items = vec_push(
+        cta_items,
+        w_button("cta_lab", "Open GPU Shader Lab", "tab_shaders", style_cta_primary()),
+    );
+    cta_items = vec_push(
+        cta_items,
+        w_button("cta_safety", "Inspect Linear Safety", "tab_safety", style_cta_secondary()),
+    );
+    cta_items = vec_push(
+        cta_items,
+        w_button("cta_tools", "Explore Toolchain", "tab_toolchain", style_cta_secondary()),
+    );
+    let cta_row = w_row("hero_ctas", style_gap(style_default(), 12.0), cta_items);
+
+    let hero_shader = w_shader(
+        "hero_nebula_overview",
+        "knr_hero_nebula",
+        make_shader_uniforms(&s),
+        style_nebula_viewport(310.0),
+    );
+
+    let hero_items: vec[Widget] = vec_new();
+    hero_items = vec_push(
+        hero_items,
+        w_badge(
+            "hero_badge",
+            "100% Pure .knr · wgpu + WebGPU/WebGL2 · Zero HTML / Zero CSS / Zero GLSL",
+            #0f172aee,
+            #38bdf8,
+        ),
+    );
+    hero_items = vec_push(hero_items, w_bold_text("hero_title", s.headline, 34.0, 800, #f8fafc));
+    hero_items = vec_push(
+        hero_items,
+        w_text(
+            "hero_desc",
+            "One statically verified linear programming language compiling to deterministic VM, native Cranelift ELF binaries, zero-import WebAssembly, and real-time GPU shaders — with zero garbage collector and zero lifetime annotations.",
+            16.0,
+            #cbd5e1,
+        ),
+    );
+    hero_items = vec_push(hero_items, cta_row);
+    hero_items = vec_push(hero_items, hero_shader);
+    hero_items = vec_push(
+        hero_items,
+        w_text(
+            "hero_telemetry",
+            "Live GPU Kernel: knr_hero_nebula (WGSL + GLSL ES 3.00)  ·  Preset: " + s.preset_name + "  ·  Energy " + to_str(energy_pct) + "%  ·  Hue " + to_str(hue_pct) + "%  ·  Move pointer across canvas to energize core",
+            13.0,
+            #94a3b8,
+        ),
+    );
+    let hero_card = w_card("overview_hero", style_hero_glass(), hero_items);
+
+    // 3-Column Feature Pillars
+    let pillar_items: vec[Widget] = vec_new();
+    pillar_items = vec_push(
+        pillar_items,
+        w_info_card(
+            "pillar_linear",
+            "ZERO GC",
+            #0c4a6eaa,
+            #38bdf8,
+            "Zero-GC Linear Ownership",
+            "Every struct, enum, vec, map, buffer, and channel has unique linear ownership with deterministic scope auto-drop and second-class &T borrows — eliminating leaks and use-after-move at compile time.",
+            "Second-class &T · Zero lifetime annotations",
+        ),
+    );
+    pillar_items = vec_push(
+        pillar_items,
+        w_info_card(
+            "pillar_parity",
+            "TRIPLE PARITY",
+            #312e81aa,
+            #a5b4fc,
+            "Triple-Parity VM / Cranelift / WASM",
+            "Canonical linear SSA lowers bit-identically to the deterministic reference VM, native Cranelift machine code linked with knr-runtime, and zero-import WebAssembly + SSR web bundles.",
+            "VM == Native ELF == WebAssembly",
+        ),
+    );
+    pillar_items = vec_push(
+        pillar_items,
+        w_info_card(
+            "pillar_gpu",
+            "WGSL + GLSL",
+            #4c1d95aa,
+            #c4b5fd,
+            "Native GPU & Shaders",
+            "Write pure GPU kernels directly in .knr with shader fn. Verified free of effects, heap ops, and recursion, then compiled via naga to native wgpu Vulkan/Metal/DX12 and browser WebGPU/WebGL2.",
+            "60/120 FPS SDF UI + Dual Kawase Blur",
+        ),
+    );
+    let pillars_grid = w_grid("overview_pillars", 3, style_gap(style_default(), 18.0), pillar_items);
+
+    // 4-Column Architecture Metrics Strip
+    let stat_items: vec[Widget] = vec_new();
+    stat_items = vec_push(stat_items, w_stat_card("stat_verify", "< 100 us", "Static SSA & Linear Verification", #38bdf8));
+    stat_items = vec_push(stat_items, w_stat_card("stat_gc", "0 ms", "GC Pauses & Heap Leaks", #34d399));
+    stat_items = vec_push(stat_items, w_stat_card("stat_bijection", "1 : 1", "Lossless .ssa <-> .knrbin Codec", #a78bfa));
+    stat_items = vec_push(stat_items, w_stat_card("stat_fps", "120 FPS", "Native wgpu & WebGPU Pipeline", #f472b6));
+    let stats_grid = w_grid("overview_stats", 4, style_gap(style_default(), 14.0), stat_items);
+
+    let tab_items: vec[Widget] = vec_new();
+    tab_items = vec_push(tab_items, hero_card);
+    tab_items = vec_push(tab_items, pillars_grid);
+    tab_items = vec_push(tab_items, stats_grid);
+    return w_col("tab_view_overview", style_gap(style_default(), 20.0), tab_items);
+}
+
+// ============================================================================
+// 6. TAB 1 — GPU & SHADERS (Live Controls, Presets & Headline Customizer)
+// ============================================================================
+
+fn view_tab_shaders(s: &State) -> Widget {
+    let energy_pct = to_i64(s.energy * 100.0);
+    let hue_pct = to_i64(s.hue_shift * 100.0);
+    let clock_txt = if s.paused { "Frozen" } else { "60/120 FPS Live" };
+
+    // Top studio header + live GPU canvas
+    let lab_shader = w_shader(
+        "lab_nebula_canvas",
+        "knr_hero_nebula",
+        make_shader_uniforms(&s),
+        style_nebula_viewport(320.0),
+    );
+
+    let head_items: vec[Widget] = vec_new();
+    head_items = vec_push(
+        head_items,
+        w_badge(
+            "lab_badge",
+            "LIVE GPU SHADER WORKBENCH · naga WGSL + WebGL2 GLSL ES 3.00",
+            #0f172aee,
+            #c084fc,
+        ),
+    );
+    head_items = vec_push(head_items, w_bold_text("lab_title", s.headline, 28.0, 800, #f8fafc));
+    head_items = vec_push(
+        head_items,
+        w_text(
+            "lab_sub",
+            "Preset: " + s.preset_name + "  ·  Energy " + to_str(energy_pct) + "%  ·  Hue Shift " + to_str(hue_pct) + "%  ·  Clock: " + clock_txt,
+            14.0,
+            #94a3b8,
+        ),
+    );
+    head_items = vec_push(head_items, lab_shader);
+    let lab_card = w_card("lab_stage_card", style_hero_glass(), head_items);
+
+    // Left Control Card: Live GPU Uniform Sliders + Clock Freeze Toggle
+    let toggle_bg = if s.paused { #1e3a8acc } else { #0f172acc };
+    let toggle_bdr = if s.paused { #38bdf8aa } else { #334155aa };
+    let toggle_style = Style {
+        bg: toggle_bg,
+        color: #e2e8f0,
+        border: toggle_bdr,
+        border_w: 1.0,
+        r_tl: 12.0,
+        r_tr: 12.0,
+        r_br: 12.0,
+        r_bl: 12.0,
+        pad_t: 10.0,
+        pad_r: 16.0,
+        pad_b: 10.0,
+        pad_l: 16.0,
+        font_size: 14.0,
+        font_weight: 600,
+        transition_ms: 160.0,
+        ..style_default()
+    };
+
+    let left_actions: vec[Widget] = vec_new();
+    left_actions = vec_push(
+        left_actions,
+        w_toggle("tog_pause", "Freeze Simulation Clock", "toggle_pause", s.paused, toggle_style),
+    );
+    left_actions = vec_push(
+        left_actions,
+        w_button("btn_reset", "Reset Defaults", "reset_defaults", style_cta_secondary()),
+    );
+    let left_action_row = w_row("lab_clock_row", style_gap(style_default(), 10.0), left_actions);
+
+    let left_items: vec[Widget] = vec_new();
+    left_items = vec_push(left_items, w_bold_text("lbl_uniforms", "Live GPU Uniforms", 18.0, 700, #f8fafc));
+    left_items = vec_push(
+        left_items,
+        w_text("lbl_energy", "Nebula Energy — uniforms[0] (" + to_str(energy_pct) + "%)", 13.0, #cbd5e1),
+    );
+    left_items = vec_push(left_items, w_slider("sl_energy", "slider_energy", s.energy, style_default()));
+    left_items = vec_push(
+        left_items,
+        w_text("lbl_hue", "Spectral Hue Shift — uniforms[1] (" + to_str(hue_pct) + "%)", 13.0, #cbd5e1),
+    );
+    left_items = vec_push(left_items, w_slider("sl_hue", "slider_hue", s.hue_shift, style_default()));
+    left_items = vec_push(left_items, left_action_row);
+    let left_card = w_card("lab_uniform_card", style_glass(), left_items);
+
+    // Right Control Card: Shader Presets + Live Headline TextInput
+    let preset_items: vec[Widget] = vec_new();
+    preset_items = vec_push(
+        preset_items,
+        w_button(
+            "btn_cyber_cyan",
+            "Cyber Cyan",
+            "preset_cyber_cyan",
+            style_preset_btn(s.preset_name == "Cyber Cyan", "linear(135, #0284c7, #6366f1)", #ffffff),
+        ),
+    );
+    preset_items = vec_push(
+        preset_items,
+        w_button(
+            "btn_solar_violet",
+            "Solar Violet",
+            "preset_solar_violet",
+            style_preset_btn(s.preset_name == "Solar Violet", "linear(135, #ec4899, #7c3aed)", #ffffff),
+        ),
+    );
+    preset_items = vec_push(
+        preset_items,
+        w_button(
+            "btn_deep_ocean",
+            "Deep Ocean",
+            "preset_deep_ocean",
+            style_preset_btn(s.preset_name == "Deep Ocean", "linear(135, #0ea5e9, #14b8a6)", #04101c),
+        ),
+    );
+    let preset_row = w_row("lab_preset_row", style_gap(style_default(), 10.0), preset_items);
+
+    let input_style = Style {
+        bg: #090f1fee,
+        color: #f8fafc,
+        border: #38bdf866,
+        border_w: 1.0,
+        r_tl: 12.0,
+        r_tr: 12.0,
+        r_br: 12.0,
+        r_bl: 12.0,
+        pad_t: 11.0,
+        pad_r: 14.0,
+        pad_b: 11.0,
+        pad_l: 14.0,
+        font_size: 14.0,
+        transition_ms: 160.0,
+        ..style_default()
+    };
+
+    let right_items: vec[Widget] = vec_new();
+    right_items = vec_push(right_items, w_bold_text("lbl_presets", "Shader Presets & Live Headline", 18.0, 700, #f8fafc));
+    right_items = vec_push(right_items, preset_row);
+    right_items = vec_push(
+        right_items,
+        w_text("lbl_headline_in", "Live Hero Headline Customizer (syncs across Overview & Lab)", 13.0, #94a3b8),
+    );
+    right_items = vec_push(right_items, w_input("in_headline", s.headline, "input_headline", input_style));
+    right_items = vec_push(
+        right_items,
+        w_text(
+            "lbl_wgsl_sig",
+            "WGSL Signature: knr_hero_nebula(uv: Vec2, time: f64, mouse: Vec2, energy: f64, hue_shift: f64) -> Color",
+            12.0,
+            #64748b,
+        ),
+    );
+    let right_card = w_card("lab_preset_card", style_glass(), right_items);
+
+    let controls_grid_items: vec[Widget] = vec_new();
+    controls_grid_items = vec_push(controls_grid_items, left_card);
+    controls_grid_items = vec_push(controls_grid_items, right_card);
+    let controls_grid = w_grid("shader_controls_grid", 2, style_gap(style_default(), 18.0), controls_grid_items);
+
+    let tab_items: vec[Widget] = vec_new();
+    tab_items = vec_push(tab_items, lab_card);
+    tab_items = vec_push(tab_items, controls_grid);
+    return w_col("tab_view_shaders", style_gap(style_default(), 20.0), tab_items);
+}
+
+// ============================================================================
+// 7. TAB 2 — LINEAR SAFETY (&T Borrows, Match, Effects, < 100 us Verifier)
+// ============================================================================
+
+fn view_tab_safety(s: &State) -> Widget {
+    let intro_items: vec[Widget] = vec_new();
+    intro_items = vec_push(
+        intro_items,
+        w_badge("safety_badge", "STATICALLY VERIFIED LINEAR SSA · ZERO GARBAGE COLLECTION", #0f172aee, #34d399),
+    );
+    intro_items = vec_push(
+        intro_items,
+        w_bold_text("safety_title", "Memory Safety Without GC or Lifetime Gymnastics", 30.0, 800, #f8fafc),
+    );
+    intro_items = vec_push(
+        intro_items,
+        w_text(
+            "safety_desc",
+            "Every linear value in knr has a single owner tracked across the SSA control-flow graph. Safe declarative structs and collections auto-drop at scope exit, while unmanaged buffers and channels cannot leak. Current state headline '" + s.headline + "' is rendered via a zero-copy &State borrow.",
+            15.0,
+            #cbd5e1,
+        ),
+    );
+    let intro_card = w_card("safety_intro", style_hero_glass(), intro_items);
+
+    let cards: vec[Widget] = vec_new();
+    cards = vec_push(
+        cards,
+        w_info_card(
+            "safe_borrows",
+            "SECOND-CLASS &T",
+            #0c4a6eaa,
+            #38bdf8,
+            "Second-Class Borrows (&T)",
+            "Pass &State to view(s: &State) -> Widget and nested helper views without moving ownership. Borrowed parameters are strictly read-only and cannot be returned, moved, freed, or stored in structs — zero lifetime syntax required.",
+            "Statically rejects BorrowEscape",
+        ),
+    );
+    cards = vec_push(
+        cards,
+        w_info_card(
+            "safe_match",
+            "ALGEBRAIC TYPES",
+            #312e81aa,
+            #a5b4fc,
+            "Exhaustive match & Tagged Enums",
+            "Algebraic enum declarations lower directly to compact tagged linear schemas with discriminant slot 0. Every match expression and statement is verified exhaustive at compile time with zero runtime surprises.",
+            "Zero unhandled variants · Zero nulls",
+        ),
+    );
+    cards = vec_push(
+        cards,
+        w_info_card(
+            "safe_effects",
+            "CAPABILITY ISOLATION",
+            #064e3baa,
+            #34d399,
+            "Explicit Effect Isolation",
+            "Functions are pure by default. Host capabilities — effects(Net, Ui, Hw, Async) — are checked transitively across every call edge. Pure business logic, MVU updates, and GPU shader fn kernels are guaranteed side-effect free.",
+            "100% deterministic mocked testing",
+        ),
+    );
+    cards = vec_push(
+        cards,
+        w_info_card(
+            "safe_verifier",
+            "SUB-100 US CHECK",
+            #4c1d95aa,
+            #c4b5fd,
+            "< 100 us Static Verification",
+            "A single fast verification pass validates SSA dominance, types, linear ownership, borrow escape, effect signatures, and naga WGSL/GLSL GPU purity in microseconds — emitting machine-readable JSON diagnostics.",
+            "fix_hint · source_variable · alive_registers",
+        ),
+    );
+    let safety_grid = w_grid("safety_cards_grid", 2, style_gap(style_default(), 18.0), cards);
+
+    let inv_items: vec[Widget] = vec_new();
+    inv_items = vec_push(
+        inv_items,
+        w_stat_card("inv_uam", "UseAfterMove", "Caught statically with exact moved_line & alive set", #f472b6),
+    );
+    inv_items = vec_push(
+        inv_items,
+        w_stat_card("inv_leak", "LinearLeak", "Every owned resource is consumed, returned, or auto-dropped", #34d399),
+    );
+    inv_items = vec_push(
+        inv_items,
+        w_stat_card("inv_esc", "BorrowEscape", "Borrowed &T refs never outlive their lexical call frame", #38bdf8),
+    );
+    let inv_grid = w_grid("safety_invariants", 3, style_gap(style_default(), 16.0), inv_items);
+
+    let tab_items: vec[Widget] = vec_new();
+    tab_items = vec_push(tab_items, intro_card);
+    tab_items = vec_push(tab_items, safety_grid);
+    tab_items = vec_push(tab_items, inv_grid);
+    return w_col("tab_view_safety", style_gap(style_default(), 20.0), tab_items);
+}
+
+// ============================================================================
+// 8. TAB 3 — TOOLCHAIN (6 Unified Single-Binary CLI & Editor Tools)
+// ============================================================================
+
+fn view_tab_toolchain(s: &State) -> Widget {
+    let intro_items: vec[Widget] = vec_new();
+    intro_items = vec_push(
+        intro_items,
+        w_badge("tools_badge", "SINGLE-BINARY TOOLCHAIN · AI & HUMAN FIRST", #0f172aee, #38bdf8),
+    );
+    intro_items = vec_push(
+        intro_items,
+        w_bold_text("tools_title", "Explore, Verify, Test, Develop, and Ship from One CLI", 30.0, 800, #f8fafc),
+    );
+    intro_items = vec_push(
+        intro_items,
+        w_text(
+            "tools_desc",
+            "Every stage of the knr workflow — semantic exploration, microsecond verification, deterministic unit testing, live GPU hot-reload, WASM web bundling, and LSP editor support — ships in one fast binary. Active theme: " + s.preset_name + ".",
+            15.0,
+            #cbd5e1,
+        ),
+    );
+    let intro_card = w_card("tools_intro", style_hero_glass(), intro_items);
+
+    let tool_cards: vec[Widget] = vec_new();
+    tool_cards = vec_push(
+        tool_cards,
+        w_info_card(
+            "tool_explore",
+            "SEMANTIC GRAPH",
+            #0c4a6eaa,
+            #38bdf8,
+            "knr explore",
+            "Map an entire project in one shot: inspect schemas, callers, callees, effect boundaries, and orphan symbols in compact AI, JSON, or Mermaid graph formats.",
+            "knr explore site/ --format ai",
+        ),
+    );
+    tool_cards = vec_push(
+        tool_cards,
+        w_info_card(
+            "tool_check",
+            "< 100 US VERIFY",
+            #064e3baa,
+            #34d399,
+            "knr check",
+            "Run full static verification across SSA, linear ownership, second-class &T borrows, transitive effects, and GPU shader purity with structured JSON fix hints.",
+            "knr check site/site.knr --graph",
+        ),
+    );
+    tool_cards = vec_push(
+        tool_cards,
+        w_info_card(
+            "tool_test",
+            "DETERMINISTIC VM",
+            #312e81aa,
+            #a5b4fc,
+            "knr test",
+            "Discover and execute every fn test_*() -> bool in milliseconds inside the deterministic VM with mocked effects — zero browser, network, or test flakiness.",
+            "knr test site/site.knr --json",
+        ),
+    );
+    tool_cards = vec_push(
+        tool_cards,
+        w_info_card(
+            "tool_dev_gui",
+            "NATIVE WGPU",
+            #4c1d95aa,
+            #c4b5fd,
+            "knr dev --gui",
+            "Launch a real hardware-accelerated native desktop window (Wayland, X11, macOS, Windows) with live file watching, analytical SDF quads, and custom WGSL shaders.",
+            "knr dev site/site.knr --gui",
+        ),
+    );
+    tool_cards = vec_push(
+        tool_cards,
+        w_info_card(
+            "tool_build_web",
+            "WASM + WEBGPU",
+            #831843aa,
+            #f472b6,
+            "knr build --target web",
+            "Emit pre-rendered SSR index.html, zero-import app.wasm, key-reconciled DOM host, and naga-validated WebGPU WGSL + WebGL2 GLSL ES 3.00 shader pipelines.",
+            "knr build site/site.knr --target web -o dist/",
+        ),
+    );
+    tool_cards = vec_push(
+        tool_cards,
+        w_info_card(
+            "tool_lsp",
+            "EDITOR INTELLIGENCE",
+            #78350faa,
+            #fbbf24,
+            "knr lsp",
+            "Real-time Language Server Protocol support providing instant inline linear ownership diagnostics, hover type signatures, go-to-definition, and shader purity checks.",
+            "knr lsp (stdio JSON-RPC)",
+        ),
+    );
+    let tools_grid = w_grid("toolchain_grid", 3, style_gap(style_default(), 18.0), tool_cards);
+
+    let tab_items: vec[Widget] = vec_new();
+    tab_items = vec_push(tab_items, intro_card);
+    tab_items = vec_push(tab_items, tools_grid);
+    return w_col("tab_view_toolchain", style_gap(style_default(), 20.0), tab_items);
+}
+
+// ============================================================================
+// 9. ROOT DECLARATIVE VIEW (`fn view(s: &State) -> Widget`)
+// ============================================================================
+
+fn view_active_tab(s: &State) -> Widget {
+    if s.active_tab == 0 {
+        return view_tab_overview(&s);
+    }
+    if s.active_tab == 1 {
+        return view_tab_shaders(&s);
+    }
+    if s.active_tab == 2 {
+        return view_tab_safety(&s);
+    }
+    return view_tab_toolchain(&s);
+}
+
+fn view(s: &State) -> Widget {
+    let shell_items: vec[Widget] = vec_new();
+    shell_items = vec_push(shell_items, view_navbar(&s));
+    shell_items = vec_push(shell_items, view_active_tab(&s));
+    shell_items = vec_push(shell_items, view_footer(&s));
+
+    let shell = w_col(
+        "site_shell",
+        Style {
+            w: -1.0,
+            max_w: 1180.0,
+            gap_x: 20.0,
+            gap_y: 20.0,
+            ..style_default()
+        },
+        shell_items,
+    );
+
+    let root_items: vec[Widget] = vec_new();
+    root_items = vec_push(root_items, shell);
+
+    return w_col(
+        "site_root",
+        Style {
+            bg: "radial(#172554, #0b1120)",
+            align: "center",
+            pad_t: 24.0,
+            pad_r: 24.0,
+            pad_b: 36.0,
+            pad_l: 24.0,
+            ..style_default()
+        },
+        root_items,
+    );
+}
+
+// ============================================================================
+// 10. BUILT-IN DETERMINISTIC UNIT TESTS (`knr test site/site.knr`)
+// ============================================================================
+
+fn test_site_init_and_navigation() -> bool {
+    let s = init();
+    let init_ok = s.active_tab == 0 && s.energy > 0.7 && s.hue_shift > 0.1 && s.preset_name == "Cyber Cyan";
+    let v0 = view(&s);
+    let ok0 = v0.kind == "col" && v0.key == "site_root";
+
+    s = update(s, "tab_shaders");
+    let v1 = view(&s);
+    let ok1 = s.active_tab == 1 && v1.kind == "col";
+
+    s = update(s, "tab_safety");
+    let v2 = view(&s);
+    let ok2 = s.active_tab == 2 && v2.kind == "col";
+
+    s = update(s, "tab_toolchain");
+    let v3 = view(&s);
+    let ok3 = s.active_tab == 3 && v3.kind == "col";
+
+    s = update(s, "tab_overview");
+    let ok_back = s.active_tab == 0;
+
+    return init_ok && ok0 && ok1 && ok2 && ok3 && ok_back;
+}
+
+fn test_site_shader_controls_and_tick() -> bool {
+    let s = init();
+    s = tick(s, 0.016, 0.016);
+    s = tick(s, 0.500, 0.516);
+    let tick_ok = s.elapsed > 0.5 && s.pulse >= 0.0 && s.pulse <= 1.0;
+
+    let prev_elapsed = s.elapsed;
+    s = update(s, "toggle_pause");
+    s = tick(s, 1.0, 1.516);
+    let pause_ok = s.paused && s.elapsed == prev_elapsed;
+    s = update(s, "toggle_pause");
+    let unpause_ok = !s.paused;
+
+    s = on_slider(s, "slider_energy", 0.94);
+    s = on_slider(s, "slider_hue", 0.64);
+    s = on_input(s, "input_headline", "Zero-GC Linear GPU");
+    let controls_ok = s.energy > 0.90 && s.hue_shift > 0.60 && s.preset_name == "Custom" && s.headline == "Zero-GC Linear GPU";
+
+    s = update(s, "preset_solar_violet");
+    let p1_ok = s.preset_name == "Solar Violet" && s.energy > 0.85 && s.hue_shift > 0.45;
+
+    s = update(s, "preset_deep_ocean");
+    let p2_ok = s.preset_name == "Deep Ocean" && s.energy < 0.55 && s.hue_shift > 0.80;
+
+    s = update(s, "preset_cyber_cyan");
+    let p3_ok = s.preset_name == "Cyber Cyan" && s.energy > 0.65 && s.hue_shift < 0.20;
+
+    s = update(s, "tab_shaders");
+    let v = view(&s);
+    let view_ok = v.kind == "col";
+
+    return tick_ok && pause_ok && unpause_ok && controls_ok && p1_ok && p2_ok && p3_ok && view_ok;
+}
+
+fn test_site_hero_shader_cpu_parity() -> bool {
+    let uv1 = Vec2 { x: 0.5, y: 0.5 };
+    let m1 = Vec2 { x: 0.5, y: 0.5 };
+    let c1 = knr_hero_nebula(uv1, 1.25, m1, 0.72, 0.12);
+
+    let uv2 = Vec2 { x: 0.22, y: 0.78 };
+    let m2 = Vec2 { x: 0.75, y: 0.30 };
+    let c2 = knr_hero_nebula(uv2, 3.4, m2, 0.90, 0.52);
+
+    let uv3 = Vec2 { x: 0.85, y: 0.18 };
+    let m3 = Vec2 { x: 0.15, y: 0.85 };
+    let c3 = knr_hero_nebula(uv3, 0.0, m3, 0.45, 0.85);
+
+    let ok1 = c1.r >= 0.0 && c1.r <= 1.0 && c1.g >= 0.0 && c1.g <= 1.0 && c1.b >= 0.0 && c1.b <= 1.0 && c1.a == 1.0;
+    let ok2 = c2.r >= 0.0 && c2.r <= 1.0 && c2.g >= 0.0 && c2.g <= 1.0 && c2.b >= 0.0 && c2.b <= 1.0 && c2.a == 1.0;
+    let ok3 = c3.r >= 0.0 && c3.r <= 1.0 && c3.g >= 0.0 && c3.g <= 1.0 && c3.b >= 0.0 && c3.b <= 1.0 && c3.a == 1.0;
+    let core_lit = c1.b > 0.15 || c1.g > 0.15;
+
+    return ok1 && ok2 && ok3 && core_lit;
+}

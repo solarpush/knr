@@ -16,7 +16,9 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> Result<(), CliError> {
         CliCommand::Help | CliCommand::Version => Ok(()),
         CliCommand::Check(args) => commands::check::execute(&args.file, args.json, args.graph),
         CliCommand::Run(args) => {
-            if args.watch {
+            if args.watch && args.gui {
+                commands::dev::execute_gui(Some(&args.file), 150, 200, args.gas, args.once)
+            } else if args.watch {
                 commands::dev::execute(
                     Some(&args.file),
                     150,
@@ -46,16 +48,29 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> Result<(), CliError> {
         } => commands::update::execute(check, force, version.as_deref()),
         CliCommand::Explore(args) => commands::explore::execute(&args),
         CliCommand::Skill(args) => commands::skill::execute(&args),
-        CliCommand::Dev(args) => commands::dev::execute(
-            args.path.as_deref(),
-            args.debounce_ms,
-            args.poll_ms,
-            args.gas,
-            args.trace,
-            args.clear,
-            args.once,
-        ),
+        CliCommand::Dev(args) => {
+            if args.gui {
+                commands::dev::execute_gui(
+                    args.path.as_deref(),
+                    args.debounce_ms,
+                    args.poll_ms,
+                    args.gas,
+                    args.once,
+                )
+            } else {
+                commands::dev::execute(
+                    args.path.as_deref(),
+                    args.debounce_ms,
+                    args.poll_ms,
+                    args.gas,
+                    args.trace,
+                    args.clear,
+                    args.once,
+                )
+            }
+        }
         CliCommand::Test(args) => commands::test::execute(&args.path, args.json, args.gas),
+        CliCommand::Lsp => commands::lsp::execute(),
         CliCommand::Init(args) => commands::init::execute(
             args.dir.as_deref(),
             args.name.as_deref(),

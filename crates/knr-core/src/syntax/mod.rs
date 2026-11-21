@@ -1,11 +1,13 @@
 pub mod ast;
 pub mod lexer;
 pub mod parser;
+pub mod stdlib;
 pub mod token;
 
 pub use ast::*;
 pub use lexer::Lexer;
 pub use parser::Parser;
+pub use stdlib::resolve_builtin_std;
 pub use token::{Token, TokenKind};
 
 use crate::error::ParseError;

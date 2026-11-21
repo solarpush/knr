@@ -78,6 +78,11 @@ impl CraneliftBackend {
         jit_builder.symbol("rt_chan_send", knr_runtime::rt_chan_send as *const u8);
         jit_builder.symbol("rt_chan_recv", knr_runtime::rt_chan_recv as *const u8);
         jit_builder.symbol("rt_syscall", knr_runtime::rt_syscall as *const u8);
+        jit_builder.symbol("rt_sin", knr_runtime::rt_sin as *const u8);
+        jit_builder.symbol("rt_cos", knr_runtime::rt_cos as *const u8);
+        jit_builder.symbol("rt_tan", knr_runtime::rt_tan as *const u8);
+        jit_builder.symbol("rt_pow", knr_runtime::rt_pow as *const u8);
+        jit_builder.symbol("rt_atan2", knr_runtime::rt_atan2 as *const u8);
     }
 
     /// Compiles a single SSA `Function` to executable machine code via Cranelift JIT.
@@ -240,6 +245,11 @@ fn declare_runtime_symbols<M: cranelift_module::Module>(
     decl_fn(module, &mut f, "rt_chan_recv", &[i64t], &[i64t])?;
 
     decl_fn(module, &mut f, "rt_syscall", &[i64t, i64t, i64t, i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_sin", &[f64t], &[f64t])?;
+    decl_fn(module, &mut f, "rt_cos", &[f64t], &[f64t])?;
+    decl_fn(module, &mut f, "rt_tan", &[f64t], &[f64t])?;
+    decl_fn(module, &mut f, "rt_pow", &[f64t, f64t], &[f64t])?;
+    decl_fn(module, &mut f, "rt_atan2", &[f64t, f64t], &[f64t])?;
 
     Ok(f)
 }
@@ -566,6 +576,93 @@ fn emit_instruction<M: cranelift_module::Module>(
             let callee = module.declare_func_in_func(runtime_funcs["rt_str_len"], builder.func);
             let call = builder.ins().call(callee, &[va]);
             let res = builder.inst_results(call)[0];
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::Sin(a) | Op::Cos(a) | Op::Tan(a) => {
+            let va = builder.use_var(var(*a));
+            let sym = match &inst.op {
+                Op::Sin(_) => "rt_sin",
+                Op::Cos(_) => "rt_cos",
+                _ => "rt_tan",
+            };
+            let callee = module.declare_func_in_func(runtime_funcs[sym], builder.func);
+            let call = builder.ins().call(callee, &[va]);
+            let res = builder.inst_results(call)[0];
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::Sqrt(a) => {
+            let va = builder.use_var(var(*a));
+            let res = builder.ins().sqrt(va);
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::Abs(a) => {
+            let va = builder.use_var(var(*a));
+            let res = builder.ins().fabs(va);
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::Floor(a) => {
+            let va = builder.use_var(var(*a));
+            let res = builder.ins().floor(va);
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::Ceil(a) => {
+            let va = builder.use_var(var(*a));
+            let res = builder.ins().ceil(va);
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::Pow(a, b) | Op::Atan2(a, b) => {
+            let va = builder.use_var(var(*a));
+            let vb = builder.use_var(var(*b));
+            let sym = if matches!(&inst.op, Op::Pow(_, _)) {
+                "rt_pow"
+            } else {
+                "rt_atan2"
+            };
+            let callee = module.declare_func_in_func(runtime_funcs[sym], builder.func);
+            let call = builder.ins().call(callee, &[va, vb]);
+            let res = builder.inst_results(call)[0];
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::Min(a, b) => {
+            let va = builder.use_var(var(*a));
+            let vb = builder.use_var(var(*b));
+            let res = builder.ins().fmin(va, vb);
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::Max(a, b) => {
+            let va = builder.use_var(var(*a));
+            let vb = builder.use_var(var(*b));
+            let res = builder.ins().fmax(va, vb);
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::IntToFloat(a) => {
+            let va = builder.use_var(var(*a));
+            let res = builder.ins().fcvt_from_sint(types::F64, va);
+            if let Some(dst) = dst_var {
+                builder.def_var(dst, res);
+            }
+        }
+        Op::FloatToInt(a) => {
+            let va = builder.use_var(var(*a));
+            let res = builder.ins().fcvt_to_sint_sat(types::I64, va);
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }

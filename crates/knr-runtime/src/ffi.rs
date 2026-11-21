@@ -166,6 +166,35 @@ pub extern "C" fn rt_f64_to_str(val: f64) -> *mut c_char {
 }
 
 // ============================================================================
+// Math C-ABI (parité exacte avec VM, WASM et WGSL)
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn rt_sin(x: f64) -> f64 {
+    x.sin()
+}
+
+#[no_mangle]
+pub extern "C" fn rt_cos(x: f64) -> f64 {
+    x.cos()
+}
+
+#[no_mangle]
+pub extern "C" fn rt_tan(x: f64) -> f64 {
+    x.tan()
+}
+
+#[no_mangle]
+pub extern "C" fn rt_pow(a: f64, b: f64) -> f64 {
+    a.powf(b)
+}
+
+#[no_mangle]
+pub extern "C" fn rt_atan2(y: f64, x: f64) -> f64 {
+    y.atan2(x)
+}
+
+// ============================================================================
 // Channel C-ABI
 // ============================================================================
 
@@ -339,7 +368,7 @@ pub extern "C" fn rt_syscall(
 }
 
 unsafe fn rt_struct_to_ui_node(ptr: *const RtStruct) -> crate::gui::UiNode {
-    use crate::gui::{UiKind, UiNode};
+    use crate::gui::{UiKind, UiNode, UiStyle};
     if ptr.is_null() {
         return UiNode::default();
     }
@@ -350,7 +379,130 @@ unsafe fn rt_struct_to_ui_node(ptr: *const RtStruct) -> crate::gui::UiNode {
         read_c_str(p)
     };
     let get_i64 = |idx: usize| -> i64 { f.get(idx).copied().unwrap_or(0) };
+    let get_f64 = |idx: usize| -> f64 { f64::from_bits(get_i64(idx) as u64) };
 
+    // New canonical 8-field `Widget { key, kind, text, action, value, uniforms, style, children }`
+    if f.len() == 8 {
+        let key = get_str(0);
+        let kind = UiKind::from_str_kind(&get_str(1));
+        let text = get_str(2);
+        let action = get_str(3);
+        let value = get_f64(4);
+
+        let mut uniforms = Vec::new();
+        let u_ptr = get_i64(5) as *const RtVec;
+        if !u_ptr.is_null() {
+            for &raw in &*u_ptr {
+                uniforms.push(f64::from_bits(raw as u64));
+            }
+        }
+
+        let mut bg = String::new();
+        let mut color = "#f8fafc".to_string();
+        let mut border = String::new();
+        let mut font_size = 16.0f32;
+        let mut style = UiStyle::default();
+
+        let st_ptr = get_i64(6) as *const RtStruct;
+        if !st_ptr.is_null() {
+            let sf = &(*st_ptr).fields;
+            let sf64 = |i: usize| -> f32 { f64::from_bits(sf.get(i).copied().unwrap_or(0) as u64) as f32 };
+            let sstr = |i: usize| -> String {
+                let p = sf.get(i).copied().unwrap_or(0) as *const c_char;
+                read_c_str(p)
+            };
+            let si64 = |i: usize| -> i64 { sf.get(i).copied().unwrap_or(0) };
+
+            style.w = sf64(0);
+            style.h = sf64(1);
+            style.min_w = sf64(2);
+            style.max_w = sf64(3);
+            bg = sstr(4);
+            let c = sstr(5);
+            if !c.is_empty() {
+                color = c;
+            }
+            border = sstr(6);
+            let bw = sf64(7);
+            style.border_w = if bw > 0.0 { bw } else { 1.0 };
+            style.radius_corners = [sf64(8).max(0.0), sf64(9).max(0.0), sf64(10).max(0.0), sf64(11).max(0.0)];
+            style.pad_edges = [sf64(12).max(0.0), sf64(13).max(0.0), sf64(14).max(0.0), sf64(15).max(0.0)];
+            style.gap_x = sf64(16).max(0.0);
+            style.gap_y = sf64(17).max(0.0);
+            let fs = sf64(18);
+            if fs > 0.0 {
+                font_size = fs;
+            }
+            let fw = si64(19);
+            style.font_weight = if fw > 0 { fw } else { 400 };
+            let al = sstr(20);
+            if !al.is_empty() {
+                style.align = al;
+            }
+            let ju = sstr(21);
+            if !ju.is_empty() {
+                style.justify = ju;
+            }
+            style.grid_cols = si64(22);
+            style.shadow_x = sf64(23);
+            style.shadow_y = sf64(24);
+            style.shadow_blur = sf64(25).max(0.0);
+            style.shadow_color = sstr(26);
+            style.backdrop_blur = sf64(27).max(0.0);
+            let op = sf64(28);
+            style.opacity = if sf.len() > 28 && op > 0.0 { op.clamp(0.0, 1.0) } else { 1.0 };
+            style.translate_x = sf64(29);
+            style.translate_y = sf64(30);
+            let sc = sf64(31);
+            style.scale = if sc > 0.0 { sc } else { 1.0 };
+            style.rotate_deg = sf64(32);
+            style.hover_bg = sstr(33);
+            style.hover_border = sstr(34);
+            let hs = sf64(35);
+            style.hover_scale = if hs > 0.0 { hs } else { 1.0 };
+            style.transition_ms = sf64(36).max(0.0);
+            let ov = sstr(37);
+            if !ov.is_empty() {
+                style.overflow = ov;
+            }
+            style.z_index = si64(38);
+            style.grow = sf64(39).max(0.0);
+        }
+
+        let mut children = Vec::new();
+        let vec_ptr = get_i64(7) as *const RtVec;
+        if !vec_ptr.is_null() {
+            for &child_raw in &*vec_ptr {
+                if !child_raw.is_null() {
+                    children.push(rt_struct_to_ui_node(child_raw as *const RtStruct));
+                }
+            }
+        }
+
+        let radius = style.radius_corners[0];
+        let pad = style.pad_edges[0];
+        let gap = style.gap_y.max(style.gap_x);
+
+        return UiNode {
+            key,
+            kind,
+            text,
+            action,
+            value,
+            uniforms,
+            bg,
+            color,
+            border,
+            radius,
+            pad,
+            gap,
+            font_size,
+            style,
+            children,
+        };
+    }
+
+    // Legacy 11-field `UiNode`
     let kind = UiKind::from_str_kind(&get_str(0));
     let text = get_str(1);
     let action = get_str(2);
@@ -374,10 +526,21 @@ unsafe fn rt_struct_to_ui_node(ptr: *const RtStruct) -> crate::gui::UiNode {
         }
     }
 
+    let style = UiStyle {
+        radius_corners: [radius; 4],
+        pad_edges: [pad; 4],
+        gap_x: gap,
+        gap_y: gap,
+        ..UiStyle::default()
+    };
+
     UiNode {
+        key: action.clone(),
         kind,
         text,
         action,
+        value: 0.0,
+        uniforms: Vec::new(),
         bg,
         color,
         border,
@@ -385,6 +548,7 @@ unsafe fn rt_struct_to_ui_node(ptr: *const RtStruct) -> crate::gui::UiNode {
         pad,
         gap,
         font_size,
+        style,
         children,
     }
 }

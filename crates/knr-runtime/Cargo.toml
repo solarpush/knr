@@ -6,6 +6,10 @@ edition = "2021"
 [lib]
 crate-type = ["rlib", "staticlib"]
 
+[features]
+default = []
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
 [dependencies]
 knr-core = { path = "../knr-core" }
 tokio = { workspace = true }
@@ -16,3 +20,7 @@ tiny-skia = "0.11.4"
 ab_glyph = "0.2.32"
 winit = "0.30.12"
 softbuffer = "0.4.8"
+wgpu = { version = "23.0.1", optional = true }
+pollster = { version = "0.4.0", optional = true }
+bytemuck = { version = "1.25.2", features = ["derive"], optional = true }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }

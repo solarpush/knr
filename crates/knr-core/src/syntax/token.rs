@@ -4,6 +4,7 @@ use super::ast::Span;
 pub enum TokenKind {
     // Keywords
     Fn,
+    Shader,
     Struct,
     Schema,
     Enum,
@@ -26,6 +27,7 @@ pub enum TokenKind {
     IntLit(i64),
     FloatLit(f64),
     StrLit(String),
+    HexColor(String),
 
     // Symbols & Delimiters
     LBrace,     // {
@@ -39,6 +41,7 @@ pub enum TokenKind {
     ColonColon, // ::
     Comma,      // ,
     Dot,        // .
+    DotDot,     // ..
     Arrow,      // ->
     FatArrow,   // =>
     Assign,     // =

@@ -4,6 +4,7 @@ pub mod diagnostic;
 pub mod effects;
 pub mod linear;
 pub mod program;
+pub mod shader;
 pub mod ssa;
 pub mod types;
 
@@ -11,6 +12,7 @@ pub use diagnostic::Diagnostic;
 pub use effects::{verify_effects, verify_module_effects};
 pub use linear::{verify_linear, verify_linear_with_env};
 pub use program::{verify_program, verify_program_from_file, verify_program_with_schemas};
+pub use shader::verify_shader_function;
 pub use ssa::verify_ssa;
 pub use types::{verify_types, verify_types_with_env, verify_types_with_schemas};
 
@@ -30,6 +32,7 @@ pub fn verify_function_with_env(
     linear::verify_linear_with_env(func, functions)?;
     ssa::verify_ssa(func)?;
     types::verify_types_with_env(func, schemas, functions)?;
+    shader::verify_shader_function(func, schemas, functions)?;
     Ok(())
 }
 
