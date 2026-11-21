@@ -1,0 +1,102 @@
+{
+  "name": "knr-lang",
+  "displayName": "knr Language Support",
+  "description": "Syntax highlighting and built-in LSP support (live diagnostics, hover docs, autocomplete, and document symbols) for the knr linear programming language and SSA IR.",
+  "version": "0.1.0",
+  "publisher": "knr-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "knr",
+    "ssa",
+    "linear",
+    "shader",
+    "wgsl",
+    "lsp"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:knr"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "knr",
+        "aliases": [
+          "knr",
+          "KNR"
+        ],
+        "extensions": [
+          ".knr"
+        ],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "knr-ssa",
+        "aliases": [
+          "knr SSA",
+          "knr-ssa"
+        ],
+        "extensions": [
+          ".ssa",
+          ".ssa.schema"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "knr",
+        "scopeName": "source.knr",
+        "path": "./syntaxes/knr.tmLanguage.json"
+      },
+      {
+        "language": "knr-ssa",
+        "scopeName": "source.knr",
+        "path": "./syntaxes/knr.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "knr.restartServer",
+        "title": "knr: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "knr",
+      "properties": {
+        "knr.serverPath": {
+          "type": "string",
+          "default": "knr",
+          "description": "Path to the knr CLI executable used to start the built-in Language Server (`knr lsp`)."
+        },
+        "knr.serverArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "lsp"
+          ],
+          "description": "Command-line arguments passed to `knr.serverPath` when spawning the Language Server."
+        },
+        "knr.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Controls LSP protocol logging in the knr Language Server output channel."
+        }
+      }
+    }
+  }
+}

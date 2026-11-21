@@ -18,7 +18,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::gui::anim::UiAnimator;
@@ -43,6 +43,136 @@ fn offset_layout_y(node: &mut LayoutNode, dy: f32) {
     node.rect.y += dy;
     for ch in &mut node.children {
         offset_layout_y(ch, dy);
+    }
+}
+
+/// Deletes the last word (and any trailing whitespace) from a text input buffer (`Ctrl+Backspace`).
+fn delete_last_word(buf: &mut String) {
+    while buf.chars().last().is_some_and(char::is_whitespace) {
+        buf.pop();
+    }
+    if let Some(last) = buf.chars().last() {
+        let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+        if is_word_char(last) {
+            while buf.chars().last().is_some_and(is_word_char) {
+                buf.pop();
+            }
+        } else {
+            while buf
+                .chars()
+                .last()
+                .is_some_and(|c| !c.is_whitespace() && !is_word_char(c))
+            {
+                buf.pop();
+            }
+        }
+    }
+}
+
+/// Best-effort non-blocking system clipboard write (never blocks the UI event loop).
+fn try_set_system_clipboard(text: String) {
+    #[cfg(target_os = "linux")]
+    {
+        let has_wayland = env::var("WAYLAND_DISPLAY")
+            .map(|d| !d.is_empty())
+            .unwrap_or(false);
+        std::thread::spawn(move || {
+            let mut cmd = if has_wayland {
+                std::process::Command::new("wl-copy")
+            } else {
+                let mut c = std::process::Command::new("xclip");
+                c.args(["-selection", "clipboard"]);
+                c
+            };
+            if let Ok(mut child) = cmd
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                let _ = child.wait();
+            }
+        });
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::thread::spawn(move || {
+            if let Ok(mut child) = std::process::Command::new("pbcopy")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                let _ = child.wait();
+            }
+        });
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = text;
+    }
+}
+
+/// Best-effort bounded system clipboard read (returns `None` quickly if unavailable).
+fn try_get_system_clipboard() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    let mut cmd = if env::var("WAYLAND_DISPLAY")
+        .map(|d| !d.is_empty())
+        .unwrap_or(false)
+    {
+        let mut c = std::process::Command::new("wl-paste");
+        c.arg("--no-newline");
+        c
+    } else {
+        let mut c = std::process::Command::new("xclip");
+        c.args(["-o", "-selection", "clipboard"]);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = std::process::Command::new("pbpaste");
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let mut child = cmd
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()?;
+        let deadline = Instant::now() + Duration::from_millis(60);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    if !status.success() {
+                        return None;
+                    }
+                    let mut out = String::new();
+                    if let Some(mut stdout) = child.stdout.take() {
+                        let _ = stdout.read_to_string(&mut out);
+                    }
+                    return (!out.is_empty()).then_some(out);
+                }
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return None;
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(_) => return None,
+            }
+        }
     }
 }
 
@@ -208,6 +338,10 @@ where
     scale_factor: f32,
     hovered_action: Option<String>,
     focused_input: Option<(String, String)>, // (action, current_text)
+    modifiers: ModifiersState,
+    clipboard_buf: String,
+    last_local_copy: Option<Instant>,
+    input_selected_all: bool,
     dragging_slider: Option<(String, LayoutRect)>,
     scroll_y: f32,
     content_height: f32,
@@ -351,6 +485,8 @@ where
             elapsed_sec: elapsed as f32,
         };
 
+        let scroll_state = Some((self.scroll_y, self.content_height));
+
         #[cfg(feature = "gpu")]
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.resize(phys_w, phys_h);
@@ -363,6 +499,8 @@ where
                     dt as f32,
                     (logical_w, logical_h),
                     scale,
+                    scroll_state,
+                    self.input_selected_all,
                 )
                 .is_ok()
             {
@@ -390,8 +528,13 @@ where
             }
             if let Some(pixmap) = self.cpu_pixmap.as_mut() {
                 if self.cpu_ui_dirty {
-                    self.renderer
-                        .render_layout_into(pixmap, &frame_layout, &state);
+                    self.renderer.render_layout_into_ex(
+                        pixmap,
+                        &frame_layout,
+                        &state,
+                        scroll_state,
+                        self.input_selected_all,
+                    );
                     self.cpu_ui_dirty = false;
                 } else {
                     self.renderer
@@ -563,6 +706,12 @@ where
             WindowEvent::CloseRequested | WindowEvent::Destroyed => {
                 self.shutdown_and_exit(event_loop);
             }
+            WindowEvent::ModifiersChanged(mods) => {
+                self.modifiers = mods.state();
+            }
+            WindowEvent::Focused(false) => {
+                self.modifiers = ModifiersState::empty();
+            }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = (scale_factor as f32).clamp(0.5, 4.0);
                 self.layout_dirty = true;
@@ -579,53 +728,189 @@ where
                         ..
                     },
                 ..
-            } => match logical_key {
-                Key::Named(NamedKey::Escape) => {
-                    if self.focused_input.is_some() {
-                        self.focused_input = None;
-                        self.cpu_ui_dirty = true;
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
-                    } else {
-                        self.shutdown_and_exit(event_loop);
-                    }
-                }
-                Key::Named(NamedKey::Enter) => {
-                    if self.focused_input.is_some() {
-                        self.focused_input = None;
-                        self.cpu_ui_dirty = true;
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
+            } => {
+                let shortcut_mod = (self.modifiers.control_key() || self.modifiers.super_key())
+                    && !self.modifiers.alt_key();
+                match logical_key {
+                    Key::Named(NamedKey::Escape) => {
+                        if self.focused_input.is_some() {
+                            self.focused_input = None;
+                            self.input_selected_all = false;
+                            self.cpu_ui_dirty = true;
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        } else {
+                            self.shutdown_and_exit(event_loop);
                         }
                     }
-                }
-                Key::Named(NamedKey::Backspace) => {
-                    if let Some((act, mut buf)) = self.focused_input.clone() {
-                        buf.pop();
-                        self.focused_input = Some((act.clone(), buf.clone()));
-                        self.dispatch_and_refresh(UiEvent::TextInput {
-                            action: act,
-                            value: buf,
-                        });
-                    }
-                }
-                _ => {
-                    if let Some((act, mut buf)) = self.focused_input.clone() {
-                        if let Some(txt) = text {
-                            let clean: String = txt.chars().filter(|c| !c.is_control()).collect();
-                            if !clean.is_empty() {
-                                buf.push_str(&clean);
-                                self.focused_input = Some((act.clone(), buf.clone()));
-                                self.dispatch_and_refresh(UiEvent::TextInput {
-                                    action: act,
-                                    value: buf,
-                                });
+                    Key::Named(NamedKey::Enter) => {
+                        if self.focused_input.is_some() {
+                            self.focused_input = None;
+                            self.input_selected_all = false;
+                            self.cpu_ui_dirty = true;
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
                             }
                         }
                     }
+                    Key::Named(NamedKey::Backspace) => {
+                        if let Some((act, mut buf)) = self.focused_input.clone() {
+                            if self.input_selected_all {
+                                buf.clear();
+                                self.input_selected_all = false;
+                            } else if shortcut_mod {
+                                delete_last_word(&mut buf);
+                            } else {
+                                buf.pop();
+                            }
+                            self.focused_input = Some((act.clone(), buf.clone()));
+                            self.dispatch_and_refresh(UiEvent::TextInput {
+                                action: act,
+                                value: buf,
+                            });
+                        }
+                    }
+                    Key::Named(NamedKey::Delete) => {
+                        if let Some((act, _)) =
+                            self.focused_input.clone().filter(|_| self.input_selected_all)
+                        {
+                            self.input_selected_all = false;
+                            self.focused_input = Some((act.clone(), String::new()));
+                            self.dispatch_and_refresh(UiEvent::TextInput {
+                                action: act,
+                                value: String::new(),
+                            });
+                        }
+                    }
+                    Key::Named(
+                        NamedKey::ArrowLeft
+                        | NamedKey::ArrowRight
+                        | NamedKey::Home
+                        | NamedKey::End,
+                    ) => {
+                        if self.focused_input.is_some() && self.input_selected_all {
+                            self.input_selected_all = false;
+                            self.cpu_ui_dirty = true;
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        }
+                    }
+                    Key::Named(key @ (NamedKey::PageDown | NamedKey::PageUp)) => {
+                        if self.focused_input.is_none() {
+                            let logical_h = self
+                                .window
+                                .as_ref()
+                                .map(|w| {
+                                    (w.inner_size().height as f32 / self.scale_factor.max(0.5))
+                                        .max(1.0)
+                                })
+                                .unwrap_or(self.config.height as f32);
+                            let page_step = (logical_h * 0.85).max(160.0);
+                            let max_scroll = (self.content_height - logical_h).max(0.0);
+                            let delta = if key == NamedKey::PageDown {
+                                page_step
+                            } else {
+                                -page_step
+                            };
+                            self.scroll_y = (self.scroll_y + delta).clamp(0.0, max_scroll);
+                            self.layout_dirty = true;
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        }
+                    }
+                    Key::Character(ref ch) if shortcut_mod => {
+                        let c = ch.as_str();
+                        if c.eq_ignore_ascii_case("a") || c == "\x01" {
+                            if self.focused_input.is_some() {
+                                self.input_selected_all = true;
+                                self.cpu_ui_dirty = true;
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
+                                }
+                            }
+                        } else if c.eq_ignore_ascii_case("c") || c == "\x03" {
+                            if let Some((_, buf)) = &self.focused_input {
+                                self.clipboard_buf = buf.clone();
+                                self.last_local_copy = Some(Instant::now());
+                                try_set_system_clipboard(buf.clone());
+                            }
+                        } else if c.eq_ignore_ascii_case("x") || c == "\x18" {
+                            if let Some((act, buf)) = self.focused_input.clone() {
+                                self.clipboard_buf = buf.clone();
+                                self.last_local_copy = Some(Instant::now());
+                                try_set_system_clipboard(buf);
+                                self.input_selected_all = false;
+                                self.focused_input = Some((act.clone(), String::new()));
+                                self.dispatch_and_refresh(UiEvent::TextInput {
+                                    action: act,
+                                    value: String::new(),
+                                });
+                            }
+                        } else if c.eq_ignore_ascii_case("v") || c == "\x16" {
+                            if let Some((act, mut buf)) = self.focused_input.clone() {
+                                let recent_local = self
+                                    .last_local_copy
+                                    .is_some_and(|t| t.elapsed() < Duration::from_millis(250));
+                                let raw_paste = if recent_local {
+                                    self.clipboard_buf.clone()
+                                } else {
+                                    try_get_system_clipboard()
+                                        .unwrap_or_else(|| self.clipboard_buf.clone())
+                                };
+                                let clean: String = raw_paste
+                                    .chars()
+                                    .map(|ch_in| {
+                                        if matches!(ch_in, '\n' | '\r' | '\t') {
+                                            ' '
+                                        } else {
+                                            ch_in
+                                        }
+                                    })
+                                    .filter(|ch_in| !ch_in.is_control())
+                                    .collect();
+                                if !clean.is_empty() {
+                                    if self.input_selected_all {
+                                        buf = clean;
+                                        self.input_selected_all = false;
+                                    } else {
+                                        buf.push_str(&clean);
+                                    }
+                                    self.focused_input = Some((act.clone(), buf.clone()));
+                                    self.dispatch_and_refresh(UiEvent::TextInput {
+                                        action: act,
+                                        value: buf,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    _ if !shortcut_mod => {
+                        if let Some((act, mut buf)) = self.focused_input.clone() {
+                            if let Some(txt) = text {
+                                let clean: String =
+                                    txt.chars().filter(|c| !c.is_control()).collect();
+                                if !clean.is_empty() {
+                                    if self.input_selected_all {
+                                        buf = clean;
+                                        self.input_selected_all = false;
+                                    } else {
+                                        buf.push_str(&clean);
+                                    }
+                                    self.focused_input = Some((act.clone(), buf.clone()));
+                                    self.dispatch_and_refresh(UiEvent::TextInput {
+                                        action: act,
+                                        value: buf,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-            },
+            }
             WindowEvent::Resized(new_size) => {
                 if new_size.width == 0 || new_size.height == 0 {
                     return;
@@ -692,6 +977,7 @@ where
                     Some(hb) => match hb.kind {
                         UiKind::Input => {
                             self.focused_input = Some((hb.action.clone(), hb.text.clone()));
+                            self.input_selected_all = false;
                             self.cpu_ui_dirty = true;
                             if let Some(w) = &self.window {
                                 w.request_redraw();
@@ -699,6 +985,7 @@ where
                         }
                         UiKind::Slider => {
                             self.focused_input = None;
+                            self.input_selected_all = false;
                             let norm = ((self.cursor_pos.0 - hb.rect.x) / hb.rect.w.max(1.0))
                                 .clamp(0.0, 1.0);
                             self.dragging_slider = Some((hb.action.clone(), hb.rect));
@@ -709,6 +996,7 @@ where
                         }
                         UiKind::Toggle => {
                             self.focused_input = None;
+                            self.input_selected_all = false;
                             self.dispatch_and_refresh(UiEvent::Toggle {
                                 action: hb.action,
                                 checked: hb.value <= 0.5,
@@ -716,12 +1004,14 @@ where
                         }
                         _ => {
                             self.focused_input = None;
+                            self.input_selected_all = false;
                             self.dispatch_and_refresh(UiEvent::Click(hb.action));
                         }
                     },
                     None => {
                         if self.focused_input.is_some() {
                             self.focused_input = None;
+                            self.input_selected_all = false;
                             self.cpu_ui_dirty = true;
                             if let Some(w) = &self.window {
                                 w.request_redraw();
@@ -847,6 +1137,10 @@ where
                 scale_factor: 1.0,
                 hovered_action: None,
                 focused_input: None,
+                modifiers: ModifiersState::empty(),
+                clipboard_buf: String::new(),
+                last_local_copy: None,
+                input_selected_all: false,
                 dragging_slider: None,
                 scroll_y: 0.0,
                 content_height: 0.0,

@@ -829,3 +829,225 @@ fn demo() -> i64 {
         "Expected long descriptions on Linear Safety tab to wrap across multiple lines, got {wrapped_count}"
     );
 }
+
+#[test]
+fn test_v010_native_gui_binary_std_sys_ui_polish_and_editors_e2e() {
+    use knr_runtime::gui::{compute_ui_layout, RenderInteractionState, UiKind};
+
+    let root = repo_root();
+
+    // ------------------------------------------------------------------
+    // 1. Editor Extensions (`editors/`) exist & all JSON manifests parse cleanly
+    // ------------------------------------------------------------------
+    for rel in [
+        "editors/README.md",
+        "editors/vscode/package.json",
+        "editors/vscode/language-configuration.json",
+        "editors/vscode/syntaxes/knr.tmLanguage.json",
+        "editors/vscode/extension.js",
+        "editors/neovim/knr.lua",
+        "editors/zed/extension.toml",
+        "editors/zed/languages/knr/config.toml",
+    ] {
+        let p = root.join(rel);
+        assert!(p.is_file(), "Missing editor extension file: {rel}");
+        if rel.ends_with(".json") {
+            let content = fs::read_to_string(&p).expect("read editor JSON");
+            let _: serde_json::Value = serde_json::from_str(&content)
+                .unwrap_or_else(|e| panic!("Invalid JSON in {rel}: {e}"));
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 2. System Stdlib (`import "std/sys";`): check, test, VM run & native AOT ELF!
+    // ------------------------------------------------------------------
+    let sys_demo = root.join("examples/sys_demo.knr");
+    let chk = Command::new(knr_bin())
+        .args(["check", sys_demo.to_str().unwrap()])
+        .output()
+        .expect("knr check sys_demo.knr");
+    assert!(
+        chk.status.success(),
+        "knr check sys_demo.knr failed:\n{}",
+        String::from_utf8_lossy(&chk.stderr)
+    );
+
+    let tst = Command::new(knr_bin())
+        .args(["test", sys_demo.to_str().unwrap(), "--json"])
+        .output()
+        .expect("knr test sys_demo.knr");
+    assert!(
+        tst.status.success(),
+        "knr test sys_demo.knr failed:\n{}",
+        String::from_utf8_lossy(&tst.stderr)
+    );
+    let tst_json: serde_json::Value = serde_json::from_slice(&tst.stdout).expect("JSON");
+    assert_eq!(tst_json["status"], "ok");
+    assert_eq!(tst_json["passed"], 3);
+    assert_eq!(tst_json["failed"], 0);
+
+    let vm_run = Command::new(knr_bin())
+        .args(["run", sys_demo.to_str().unwrap()])
+        .output()
+        .expect("knr run sys_demo.knr");
+    assert!(
+        vm_run.status.success(),
+        "knr run sys_demo.knr failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&vm_run.stdout),
+        String::from_utf8_lossy(&vm_run.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&vm_run.stdout).contains("8"),
+        "Expected sys_demo VM to pass all 8 checks, got: {}",
+        String::from_utf8_lossy(&vm_run.stdout)
+    );
+
+    let rt_lib_exists = root.join("target/debug/libknr_runtime.a").is_file()
+        || root.join("target/release/libknr_runtime.a").is_file();
+
+    if rt_lib_exists {
+        // Native AOT binary for `examples/sys_demo.knr` (verifies rt_syscall struct bridging)
+        let sys_bin = std::env::temp_dir().join(format!("knr_sys_native_{}", std::process::id()));
+        let _ = fs::remove_file(&sys_bin);
+        let bld_sys = Command::new(knr_bin())
+            .args([
+                "build",
+                sys_demo.to_str().unwrap(),
+                "--target",
+                "native",
+                "-o",
+                sys_bin.to_str().unwrap(),
+            ])
+            .output()
+            .expect("knr build sys_demo --target native");
+        assert!(
+            bld_sys.status.success(),
+            "knr build sys_demo --target native failed:\n{}",
+            String::from_utf8_lossy(&bld_sys.stderr)
+        );
+        let run_sys_native = Command::new(&sys_bin).output().expect("run sys_demo ELF");
+        let _ = fs::remove_file(&sys_bin);
+        assert_eq!(
+            run_sys_native.status.code(),
+            Some(8),
+            "Expected sys_demo native ELF main() to return 8 (all 8 fs+json checks passed), got {:?}\nstdout: {}\nstderr: {}",
+            run_sys_native.status.code(),
+            String::from_utf8_lossy(&run_sys_native.stdout),
+            String::from_utf8_lossy(&run_sys_native.stderr)
+        );
+
+        // ------------------------------------------------------------------
+        // 3. Standalone Native Desktop GUI Binary (`knr build --target native --gui`)
+        // ------------------------------------------------------------------
+        let studio_knr = root.join("examples/shader_studio.knr");
+        let gui_bin =
+            std::env::temp_dir().join(format!("knr_gui_native_{}", std::process::id()));
+        let _ = fs::remove_file(&gui_bin);
+        let bld_gui = Command::new(knr_bin())
+            .args([
+                "build",
+                studio_knr.to_str().unwrap(),
+                "--target",
+                "native",
+                "--gui",
+                "-o",
+                gui_bin.to_str().unwrap(),
+            ])
+            .output()
+            .expect("knr build shader_studio --target native --gui");
+        assert!(
+            bld_gui.status.success(),
+            "knr build --target native --gui failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&bld_gui.stdout),
+            String::from_utf8_lossy(&bld_gui.stderr)
+        );
+        assert!(gui_bin.is_file(), "Native GUI ELF binary must be created");
+
+        let run_gui = Command::new(&gui_bin)
+            .env("KNR_HEADLESS", "1")
+            .output()
+            .expect("run native GUI ELF headless");
+        let _ = fs::remove_file(&gui_bin);
+        assert!(
+            run_gui.status.success(),
+            "Native GUI ELF headless run failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&run_gui.stdout),
+            String::from_utf8_lossy(&run_gui.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&run_gui.stdout)
+                .contains("[GUI-NATIVE] Headless rendered snapshot"),
+            "Expected [GUI-NATIVE] snapshot line, got: {}",
+            String::from_utf8_lossy(&run_gui.stdout)
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // 4. UI Polish: Divider, Progress, Responsive Grid Breakpoints & Scrollbar
+    // ------------------------------------------------------------------
+    let ui_src = r#"
+        import "std/ui";
+
+        fn view() -> Widget {
+            let cards: vec[Widget] = vec_new();
+            let c1: vec[Widget] = vec_new();
+            c1 = vec_push(c1, w_text("t1", "Card 1", 16.0, #f8fafc));
+            cards = vec_push(cards, w_card("k1", style_card(), c1));
+            let c2: vec[Widget] = vec_new();
+            c2 = vec_push(c2, w_text("t2", "Card 2", 16.0, #f8fafc));
+            cards = vec_push(cards, w_card("k2", style_card(), c2));
+            let c3: vec[Widget] = vec_new();
+            c3 = vec_push(c3, w_text("t3", "Card 3", 16.0, #f8fafc));
+            cards = vec_push(cards, w_card("k3", style_card(), c3));
+
+            let root_kids: vec[Widget] = vec_new();
+            root_kids = vec_push(root_kids, w_grid("g", 3, Style { gap_x: 16.0, gap_y: 16.0, ..style_default() }, cards));
+            root_kids = vec_push(root_kids, w_divider("d1", style_default()));
+            root_kids = vec_push(root_kids, w_progress("p1", 0.65, Style { h: 12.0, ..style_default() }));
+            return w_col("root", Style { bg: #020617, pad_t: 20.0, pad_r: 20.0, pad_b: 20.0, pad_l: 20.0, gap_y: 16.0, ..style_default() }, root_kids);
+        }
+    "#;
+    let prog = knr_core::syntax::parse_knr(ui_src).expect("parse polish UI");
+    let module = knr_core::lower::lower_program(&prog).expect("lower polish UI");
+    knr_verify::verify_module(&module).expect("verify polish UI");
+
+    let mut mock = MockPlatform::new();
+    let (ui_val, _) =
+        knr_interp::execute_module(&module, "view", vec![], &mut mock, 1_000_000, false).unwrap();
+    let ui_node = UiNode::from_value(&ui_val).unwrap();
+    assert_eq!(ui_node.children[1].kind, UiKind::Divider);
+    assert_eq!(ui_node.children[2].kind, UiKind::Progress);
+
+    let html = ui_node.render_html();
+    assert!(html.contains("65.0%"), "Progress HTML must show 65.0% fill: {html}");
+
+    let renderer = UiRenderer::new();
+    // Wide (1120px): all 3 grid cards on the same row (equal y)
+    let (laid_wide, _) = compute_ui_layout(&ui_node, 1120.0, 600.0, &renderer);
+    let g_wide = &laid_wide.children[0].children;
+    assert!((g_wide[0].rect.y - g_wide[1].rect.y).abs() < 1.0);
+    assert!((g_wide[0].rect.y - g_wide[2].rect.y).abs() < 1.0);
+
+    // Medium (680px): collapses 3 -> 2 cols (cards 0 & 1 on row 0, card 2 on row 1)
+    let (laid_med, _) = compute_ui_layout(&ui_node, 680.0, 600.0, &renderer);
+    let g_med = &laid_med.children[0].children;
+    assert!((g_med[0].rect.y - g_med[1].rect.y).abs() < 1.0);
+    assert!(g_med[2].rect.y > g_med[0].rect.y + 10.0);
+
+    // Narrow (420px): collapses to 1 col (all 3 stacked vertically)
+    let (laid_narrow, _) = compute_ui_layout(&ui_node, 420.0, 600.0, &renderer);
+    let g_narrow = &laid_narrow.children[0].children;
+    assert!(g_narrow[1].rect.y > g_narrow[0].rect.y + 10.0);
+    assert!(g_narrow[2].rect.y > g_narrow[1].rect.y + 10.0);
+
+    // Render with and without scrollbar overlay and verify visual difference
+    let state = RenderInteractionState::default();
+    let pix_plain = renderer.render_layout(&laid_wide, 800, 500, &state);
+    let mut pix_scroll = renderer.render_layout(&laid_wide, 800, 500, &state);
+    renderer.paint_scrollbar(&mut pix_scroll, 120.0, 1400.0);
+    assert_ne!(
+        pixmap_fnv_hash(&pix_plain),
+        pixmap_fnv_hash(&pix_scroll),
+        "Scrollbar indicator must visibly paint when content overflows viewport"
+    );
+}

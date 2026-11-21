@@ -10,6 +10,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  KNR_HEADLESS: "1"
+  RUST_BACKTRACE: "1"
 
 jobs:
   verify-main:
@@ -31,15 +33,22 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Run Clippy
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo clippy -p knr-runtime --no-default-features -- -D warnings
+
       - name: Build Rust Runtime Staticlib
-        run: cargo build -p knr-runtime
+        run: cargo build -p knr-runtime --lib
 
       - name: Run Workspace Tests
-        run: cargo test --workspace
+        run: cargo test --workspace -- --test-threads=4
 
   build:
     name: Build (${{ matrix.target }})
@@ -95,8 +104,24 @@ jobs:
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
         run: |
+          # knr-runtime default features exclude wgpu -> small, zero-C-dep staticlib
           cargo build --release --target "${{ matrix.target }}" -p knr-runtime --lib
+          # knr CLI enables knr-runtime/gpu (wgpu 23 + CPU fallback)
           cargo build --release --target "${{ matrix.target }}" -p knr-cli --bin knr
+
+      - name: Verify built release artifacts
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/release/knr"
+          RT="target/${{ matrix.target }}/release/libknr_runtime.a"
+          ls -lh "${BIN}" "${RT}"
+          test -s "${BIN}"
+          test -s "${RT}"
+          if [ "${{ matrix.cross }}" != "true" ]; then
+            "${BIN}" --version
+            "${BIN}" check examples/counter_app.knr
+            "${BIN}" test examples/counter_app.knr
+          fi
 
       - name: Package archive & SHA256 checksum
         shell: bash
@@ -106,8 +131,13 @@ jobs:
           chmod 755 dist/stage/knr
           cp "target/${{ matrix.target }}/release/libknr_runtime.a" dist/stage/libknr_runtime.a
           cp README.md SPEC.md install.sh dist/stage/
+          STAGE_ITEMS=(knr libknr_runtime.a README.md SPEC.md install.sh)
+          if [ -d editors ]; then
+            cp -R editors dist/stage/editors
+            STAGE_ITEMS+=(editors)
+          fi
           ARCHIVE="knr-${{ matrix.target }}.tar.gz"
-          tar -czf "dist/${ARCHIVE}" -C dist/stage knr libknr_runtime.a README.md SPEC.md install.sh
+          tar -czf "dist/${ARCHIVE}" -C dist/stage "${STAGE_ITEMS[@]}"
           cd dist
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
@@ -142,7 +172,7 @@ jobs:
         run: |
           cp install.sh artifacts/install.sh
           cd artifacts
-          cat *.sha256 > SHA256SUMS
+          cat knr-*.tar.gz.sha256 > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -8,8 +8,17 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
+  KNR_HEADLESS: "1"
+  RUST_BACKTRACE: "1"
 
 jobs:
   test-and-lint:
@@ -27,19 +36,34 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Clippy
+      - name: Run Clippy (Workspace & All Targets)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Run Clippy (knr-runtime without GPU feature)
+        run: cargo clippy -p knr-runtime --no-default-features -- -D warnings
+
       - name: Build Rust Runtime Staticlib
-        run: cargo build -p knr-runtime
+        run: cargo build -p knr-runtime --lib
+
+      - name: Build knr CLI Binary
+        run: cargo build -p knr-cli --bin knr
 
       - name: Run Workspace Tests
-        run: cargo test --workspace
+        run: cargo test --workspace -- --test-threads=4
 
       - name: Verify Self-Hosted Site, Examples & Built-in Tests
         run: |
-          cargo run -p knr-cli -- check site/site.ssa
-          cargo run -p knr-cli -- check site/server.ssa
-          cargo run -p knr-cli -- check examples/http_server.knr
-          cargo run -p knr-cli -- check examples/counter_app.knr
-          cargo run -p knr-cli -- test examples/counter_app.knr
+          ./target/debug/knr check site/site.ssa
+          ./target/debug/knr check site/server.ssa
+          ./target/debug/knr check site/site.knr
+          ./target/debug/knr test site/site.knr
+          ./target/debug/knr check examples/http_server.knr
+          ./target/debug/knr check examples/counter_app.knr
+          ./target/debug/knr test examples/counter_app.knr
+          ./target/debug/knr check examples/shader_studio.knr
+          ./target/debug/knr test examples/shader_studio.knr
+          ./target/debug/knr check examples/raymarch_3d.knr
+          ./target/debug/knr test examples/raymarch_3d.knr
+          if [ -f examples/sys_demo.knr ]; then
+            ./target/debug/knr check examples/sys_demo.knr
+          fi

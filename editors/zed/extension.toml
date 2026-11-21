@@ -1,0 +1,11 @@
+id = "knr"
+name = "knr"
+version = "0.1.0"
+schema_version = 1
+authors = ["knr Contributors"]
+description = "Language support and built-in LSP integration for knr (.knr)."
+repository = "https://github.com/knr-lang/knr"
+
+[language_servers.knr-lsp]
+name = "knr-lsp"
+languages = ["knr"]

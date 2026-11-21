@@ -4,6 +4,7 @@
 //! - `import "std/ui";`
 //! - `import "std/anim";`
 //! - `import "std/math";`
+//! - `import "std/sys";`
 //!
 //! These resolve identically for both on-disk `.knr` files and in-memory
 //! `parse_knr` + `lower_program` / `verify_program` pipelines.
@@ -513,16 +514,120 @@ fn w_shader(key: str, shader_name: str, uniforms: vec[f64], style: Style) -> Wid
         children: empty_c,
     };
 }
+
+fn w_divider(key: str, style: Style) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    let empty_c: vec[Widget] = vec_new();
+    return Widget {
+        key: key,
+        kind: "divider",
+        text: "",
+        action: "",
+        value: 0.0,
+        uniforms: empty_u,
+        style: style,
+        children: empty_c,
+    };
+}
+
+fn w_progress(key: str, value: f64, style: Style) -> Widget {
+    let empty_u: vec[f64] = vec_new();
+    let empty_c: vec[Widget] = vec_new();
+    return Widget {
+        key: key,
+        kind: "progress",
+        text: "",
+        action: "",
+        value: value,
+        uniforms: empty_u,
+        style: style,
+        children: empty_c,
+    };
+}
+"###;
+
+/// Standard system, filesystem, JSON, and HTTP/1.1 client helpers (`import "std/sys";`).
+pub const STD_SYS_SRC: &str = r###"// Standard System, Filesystem, JSON & HTTP Client Library (`std/sys`).
+// Capability-isolated via `effects(Hw)` (filesystem & JSON) and `effects(Net)` (HTTP/1.1 client).
+
+schema FileWrite {
+    0: path str,
+    1: content str,
+}
+
+schema JsonQuery {
+    0: json str,
+    1: key str,
+}
+
+schema HttpPost {
+    0: url str,
+    1: body str,
+}
+
+fn fs_read(path: str) -> str effects(Hw) {
+    let out: str = syscall Hw "fs.read_file" path;
+    return out;
+}
+
+fn fs_write(path: str, content: str) -> bool effects(Hw) {
+    let req = FileWrite { path: path, content: content };
+    let ok: bool = syscall Hw "fs.write_file" req;
+    return ok;
+}
+
+fn fs_exists(path: str) -> bool effects(Hw) {
+    let ok: bool = syscall Hw "fs.exists" path;
+    return ok;
+}
+
+fn fs_remove(path: str) -> bool effects(Hw) {
+    let ok: bool = syscall Hw "fs.remove_file" path;
+    return ok;
+}
+
+fn fs_list(dir: str) -> str effects(Hw) {
+    let out: str = syscall Hw "fs.list_dir" dir;
+    return out;
+}
+
+fn json_is_valid(raw: str) -> bool effects(Hw) {
+    let ok: bool = syscall Hw "json.is_valid" raw;
+    return ok;
+}
+
+fn json_pretty(raw: str) -> str effects(Hw) {
+    let out: str = syscall Hw "json.pretty" raw;
+    return out;
+}
+
+fn json_get(raw: str, key: str) -> str effects(Hw) {
+    let q = JsonQuery { json: raw, key: key };
+    let out: str = syscall Hw "json.get" q;
+    return out;
+}
+
+fn http_get(url: str) -> str effects(Net) {
+    let body: str = syscall Net "http.get" url;
+    return body;
+}
+
+fn http_post(url: str, body: str) -> str effects(Net) {
+    let req = HttpPost { url: url, body: body };
+    let resp: str = syscall Net "http.post" req;
+    return resp;
+}
 "###;
 
 /// Resolves a built-in standard library import path (`"std/ui"`, `"std/anim"`, `"std/math"`,
-/// with or without a `.knr` suffix) to its embedded `.knr` source code.
+/// `"std/sys"`, with or without a `.knr` suffix) to its embedded `.knr` source code.
 pub fn resolve_builtin_std(import_path: &str) -> Option<&'static str> {
     let normalized = import_path.strip_suffix(".knr").unwrap_or(import_path);
     match normalized {
         "std/ui" => Some(STD_UI_SRC),
         "std/anim" => Some(STD_ANIM_SRC),
         "std/math" => Some(STD_MATH_SRC),
+        "std/sys" => Some(STD_SYS_SRC),
         _ => None,
     }
 }
@@ -543,8 +648,81 @@ mod tests {
         assert!(resolve_builtin_std("std/anim.knr").is_some());
         assert!(resolve_builtin_std("std/math").is_some());
         assert!(resolve_builtin_std("std/math.knr").is_some());
+        assert!(resolve_builtin_std("std/sys").is_some());
+        assert!(resolve_builtin_std("std/sys.knr").is_some());
         assert!(resolve_builtin_std("./std_ui.knr").is_none());
         assert!(resolve_builtin_std("std/unknown").is_none());
+    }
+
+    #[test]
+    fn test_builtin_std_sys_lowering() {
+        let src = r#"
+            import "std/sys";
+
+            fn check_fs_and_json() -> bool effects(Hw) {
+                let wrote = fs_write("/tmp/test_sys.json", "{\"user\":{\"name\":\"knr\"}}");
+                let exists = fs_exists("/tmp/test_sys.json");
+                let valid = json_is_valid(fs_read("/tmp/test_sys.json"));
+                let pretty = json_pretty("{\"a\":1}");
+                let name = json_get("{\"user\":{\"name\":\"knr\"}}", "user.name");
+                let listing = fs_list("/tmp");
+                let removed = fs_remove("/tmp/test_sys.json");
+                return wrote
+                    && exists
+                    && valid
+                    && str_len(pretty) > 0
+                    && name == "knr"
+                    && str_len(listing) >= 0
+                    && removed;
+            }
+
+            fn check_http() -> str effects(Net) {
+                let a = http_get("http://127.0.0.1:8080/health");
+                let b = http_post("http://127.0.0.1:8080/echo", "{}");
+                return a + b;
+            }
+        "#;
+
+        let prog = parse_knr(src).expect("parse program using std/sys");
+        let module = lower_program(&prog).expect("lower program using std/sys");
+
+        let mut schema_names = HashSet::new();
+        for s in &module.schemas {
+            assert!(
+                schema_names.insert(s.name.clone()),
+                "Duplicate schema '{}'",
+                s.name
+            );
+        }
+        assert!(schema_names.contains("FileWrite"));
+        assert!(schema_names.contains("JsonQuery"));
+        assert!(schema_names.contains("HttpPost"));
+
+        let mut fn_names = HashSet::new();
+        for f in &module.functions {
+            assert!(
+                fn_names.insert(f.name.clone()),
+                "Duplicate function '{}'",
+                f.name
+            );
+        }
+        for expected in [
+            "fs_read",
+            "fs_write",
+            "fs_exists",
+            "fs_remove",
+            "fs_list",
+            "json_is_valid",
+            "json_pretty",
+            "json_get",
+            "http_get",
+            "http_post",
+        ] {
+            assert!(
+                fn_names.contains(expected),
+                "Missing std/sys function '{expected}'"
+            );
+        }
     }
 
     #[test]

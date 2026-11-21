@@ -45,6 +45,7 @@ Use the `knr` binary directly from `$PATH` (never invoke `cargo run` or `/tmp/..
    knr dev <app.knr> --gui                          # Live hot-reloading GUI + WGSL shaders window
    knr lsp                                          # Built-in JSON-RPC 2.0 Language Server (stdio)
    knr build <server.knr> --target native -o server # Standalone native ELF linked with Rust knr-runtime
+   knr build <app.knr> --target native --gui -o app # Standalone native desktop GUI executable (MVU + shaders)
    knr build <app.knr> --target wasm -o app.wasm    # Standalone zero-import WebAssembly binary
    knr build <app.knr> --target web -o dist/        # SSR index.html + zero-import app.wasm + WebGPU/WebGL2
    knr asm <file.ssa> -o out.knrbin                 # Compact binary IR codec (1:1 bijection)
@@ -57,7 +58,8 @@ Use the `knr` binary directly from `$PATH` (never invoke `cargo run` or `/tmp/..
 
 `.knr` lowers cleanly to canonical verified linear SSA (`.ssa` / `.knrbin`):
 
-- **Multi-file & Built-in Stdlib Imports**: `import "std/ui";`, `import "std/anim";`, `import "std/math";` (built directly into `knr-core`, zero relative paths needed!), plus relative `import "./helper.knr";` (cycle-safe, diamond-deduplicated; also imports `.ssa` and `.ssa.schema`).
+- **Multi-file & Built-in Stdlib Imports**: `import "std/ui";` (widgets including `w_divider`/`w_progress` + responsive `w_grid`), `import "std/anim";`, `import "std/math";`, `import "std/sys";` (`fs_read`/`fs_write`/`fs_exists`/`fs_remove`/`fs_list`, `json_is_valid`/`json_pretty`/`json_get`, `http_get`/`http_post`) — built directly into `knr-core`, zero relative paths needed! Plus relative `import "./helper.knr";` (cycle-safe, diamond-deduplicated; also imports `.ssa` and `.ssa.schema`).
+- **Editor Extensions**: Ready-to-use VS Code, Neovim, and Zed integrations wired to `knr lsp` live in `editors/`.
 - **Typed Schemas & Tagged Unions (`enum`)**:
   ```knr
   schema State { 0: count i64, 1: status str }

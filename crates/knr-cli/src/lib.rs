@@ -36,7 +36,8 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> Result<(), CliError> {
             file,
             target,
             output,
-        } => commands::build::execute(&file, target, &output),
+            gui,
+        } => commands::build::execute(&file, target, &output, gui),
         CliCommand::Asm { file, output } => commands::asm::execute(&file, &output),
         CliCommand::Disasm { file, output } => {
             commands::disasm::execute(&file, output.as_deref())

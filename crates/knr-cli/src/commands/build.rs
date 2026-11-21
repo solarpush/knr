@@ -6,7 +6,7 @@ use crate::args::BuildTarget;
 use crate::c_runtime::{KNR_ENTRY_SHIM_C, KNR_RT_C};
 use crate::error::CliError;
 
-pub fn execute(file: &Path, target: BuildTarget, output: &Path) -> Result<(), CliError> {
+pub fn execute(file: &Path, target: BuildTarget, output: &Path, gui: bool) -> Result<(), CliError> {
     let module = if file.to_string_lossy().ends_with(".knr") {
         let src = std::fs::read_to_string(file).map_err(|e| {
             eprintln!("{e}");
@@ -157,6 +157,120 @@ pub fn execute(file: &Path, target: BuildTarget, output: &Path) -> Result<(), Cl
             Ok(())
         }
         BuildTarget::Native => {
+            if gui {
+                if module.get_function("init").is_none() || module.get_function("view").is_none() {
+                    return Err(CliError::Other(
+                        "Native GUI build (--gui) requires both `init()` and `view(state)` functions"
+                            .to_string(),
+                    ));
+                }
+
+                let compiled_shaders = knr_codegen::WgslBackend::new()
+                    .compile_all_shaders(&module)
+                    .map_err(|err| {
+                        eprintln!("{err}");
+                        CliError::Codegen(err)
+                    })?;
+                let mut shader_map = std::collections::BTreeMap::new();
+                for cs in compiled_shaders {
+                    shader_map.insert(cs.name, cs.wgsl);
+                }
+                let shaders_json =
+                    serde_json::to_string(&shader_map).unwrap_or_else(|_| "{}".to_string());
+
+                let rust_rt_lib = find_rust_runtime_staticlib().ok_or_else(|| {
+                    CliError::Linker(
+                        "libknr_runtime.a is required for --target native --gui; build knr-runtime first"
+                            .to_string(),
+                    )
+                })?;
+
+                let mut backend = knr_codegen::CraneliftBackend::new().map_err(|err| {
+                    eprintln!("{err}");
+                    CliError::Codegen(err)
+                })?;
+                let obj_bytes = backend.compile_object(&module).map_err(|err| {
+                    eprintln!("{err}");
+                    CliError::Codegen(err)
+                })?;
+
+                let compiler = find_c_compiler().ok_or_else(|| {
+                    CliError::Linker(
+                        "No C compiler (cc, gcc, clang) found in PATH for native linking"
+                            .to_string(),
+                    )
+                })?;
+
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                let temp_dir = std::env::temp_dir().join(format!(
+                    "knr_build_{}_{}",
+                    std::process::id(),
+                    timestamp
+                ));
+                fs::create_dir_all(&temp_dir).map_err(CliError::Io)?;
+
+                let obj_path = temp_dir.join("module.o");
+                fs::write(&obj_path, obj_bytes).map_err(CliError::Io)?;
+
+                let title = file
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("knr native app");
+                let gui_shim_c = generate_native_gui_shim_c(&module, title, &shaders_json);
+                let shim_path = temp_dir.join("gui_entry_shim.c");
+                fs::write(&shim_path, gui_shim_c).map_err(CliError::Io)?;
+
+                let mut cmd = Command::new(compiler);
+                cmd.arg("-O2")
+                    .arg(&obj_path)
+                    .arg(&shim_path)
+                    .arg(&rust_rt_lib)
+                    .arg("-o")
+                    .arg(output)
+                    .arg("-lpthread")
+                    .arg("-ldl")
+                    .arg("-lm");
+
+                #[cfg(target_os = "macos")]
+                {
+                    for fw in [
+                        "AppKit",
+                        "CoreFoundation",
+                        "CoreGraphics",
+                        "Foundation",
+                        "Metal",
+                        "QuartzCore",
+                    ] {
+                        cmd.arg("-framework").arg(fw);
+                    }
+                }
+
+                let compile_res = cmd.output();
+                let _ = fs::remove_dir_all(&temp_dir);
+
+                let res = compile_res.map_err(CliError::Io)?;
+                if !res.status.success() {
+                    let err_msg = String::from_utf8_lossy(&res.stderr).to_string();
+                    eprintln!("Linker error: {err_msg}");
+                    return Err(CliError::Linker(err_msg));
+                }
+
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(metadata) = fs::metadata(output) {
+                        let mut perms = metadata.permissions();
+                        perms.set_mode(0o755);
+                        let _ = fs::set_permissions(output, perms);
+                    }
+                }
+
+                return Ok(());
+            }
+
             let mut backend = knr_codegen::CraneliftBackend::new().map_err(|err| {
                 eprintln!("{err}");
                 CliError::Codegen(err)
@@ -292,6 +406,113 @@ fn find_c_compiler() -> Option<&'static str> {
         .iter()
         .copied()
         .find(|&compiler| Command::new(compiler).arg("--version").output().is_ok())
+}
+
+fn escape_c_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 16);
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\{:03o}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn generate_native_gui_shim_c(
+    module: &knr_core::Module,
+    title: &str,
+    shaders_json: &str,
+) -> String {
+    let has_update = module.get_function("update").is_some();
+    let tick_arity = module
+        .get_function("tick")
+        .map(|f| f.params.len())
+        .unwrap_or(0);
+    let has_on_slider = module.get_function("on_slider").is_some();
+    let has_on_input = module.get_function("on_input").is_some();
+
+    let mut externs =
+        String::from("extern int64_t init(void);\nextern int64_t view(int64_t);\n");
+    if has_update {
+        externs.push_str("extern int64_t update(int64_t, const char*);\n");
+    }
+    if tick_arity == 2 {
+        externs.push_str("extern int64_t tick(int64_t, double);\n");
+    } else if tick_arity >= 3 {
+        externs.push_str("extern int64_t tick(int64_t, double, double);\n");
+    }
+    if has_on_slider {
+        externs.push_str("extern int64_t on_slider(int64_t, const char*, double);\n");
+    }
+    if has_on_input {
+        externs.push_str("extern int64_t on_input(int64_t, const char*, const char*);\n");
+    }
+
+    let update_arg = if has_update { "update" } else { "NULL" };
+    let tick2_arg = if tick_arity == 2 { "tick" } else { "NULL" };
+    let tick3_arg = if tick_arity >= 3 { "tick" } else { "NULL" };
+    let slider_arg = if has_on_slider { "on_slider" } else { "NULL" };
+    let input_arg = if has_on_input { "on_input" } else { "NULL" };
+
+    let escaped_title = escape_c_string(title);
+    let escaped_shaders = escape_c_string(shaders_json);
+
+    format!(
+        r#"#include <stddef.h>
+#include <stdint.h>
+
+typedef int64_t (*knr_init_fn)(void);
+typedef int64_t (*knr_view_fn)(int64_t);
+typedef int64_t (*knr_update_fn)(int64_t, const char*);
+typedef int64_t (*knr_tick2_fn)(int64_t, double);
+typedef int64_t (*knr_tick3_fn)(int64_t, double, double);
+typedef int64_t (*knr_on_slider_fn)(int64_t, const char*, double);
+typedef int64_t (*knr_on_input_fn)(int64_t, const char*, const char*);
+
+extern int64_t rt_gui_launch_native(
+    const char* title,
+    uint32_t width,
+    uint32_t height,
+    knr_init_fn init_fn,
+    knr_view_fn view_fn,
+    knr_update_fn update_fn,
+    knr_tick2_fn tick2_fn,
+    knr_tick3_fn tick3_fn,
+    knr_on_slider_fn on_slider_fn,
+    knr_on_input_fn on_input_fn,
+    const char* shaders_json
+);
+
+{externs}
+static const char* KNR_GUI_TITLE = "{escaped_title}";
+static const char* KNR_SHADERS_JSON = "{escaped_shaders}";
+
+int main(void) {{
+    return (int)rt_gui_launch_native(
+        KNR_GUI_TITLE,
+        1120u,
+        800u,
+        init,
+        view,
+        {update_arg},
+        {tick2_arg},
+        {tick3_arg},
+        {slider_arg},
+        {input_arg},
+        KNR_SHADERS_JSON
+    );
+}}
+"#
+    )
 }
 
 fn base64_encode(bytes: &[u8]) -> String {

@@ -1333,6 +1333,8 @@ impl GpuUiEngine {
         dt_sec: f32,
         logical_size: (f32, f32),
         scale_factor: f32,
+        scroll_state: Option<(f32, f32)>,
+        input_selected_all: bool,
     ) -> Result<(), String> {
         let w = self.config.width.max(1);
         let h = self.config.height.max(1);
@@ -1361,8 +1363,39 @@ impl GpuUiEngine {
             lh,
             scale,
             1.0,
+            input_selected_all,
             &mut staging,
         );
+
+        // Optional translucent vertical pill scrollbar along the right edge
+        if let Some((scroll_y, content_height)) = scroll_state {
+            if content_height > lh + 2.0 && lh > 24.0 && lw > 16.0 {
+                let max_thumb = (lh - 16.0).max(4.0);
+                let min_thumb = 28.0f32.min(max_thumb);
+                let thumb_h = (lh / content_height * lh).clamp(min_thumb, max_thumb);
+                let max_scroll = (content_height - lh).max(1.0);
+                let ratio = (scroll_y / max_scroll).clamp(0.0, 1.0);
+                let thumb_y = ratio * (lh - thumb_h - 8.0).max(0.0) + 4.0;
+                let track_x = lw - 8.0;
+
+                staging.push_quad(simple_quad(
+                    [track_x, 4.0, 5.0, (lh - 8.0).max(4.0)],
+                    [2.5; 4],
+                    [0.06, 0.09, 0.16, 0.28],
+                    [0.0; 4],
+                    0.0,
+                    1.0,
+                ));
+                staging.push_quad(simple_quad(
+                    [track_x, thumb_y, 5.0, thumb_h],
+                    [2.5; 4],
+                    [0.58, 0.64, 0.72, 0.52],
+                    [0.22, 0.74, 0.97, 0.25],
+                    0.75,
+                    1.0,
+                ));
+            }
+        }
 
         // Grow persistent vertex buffers only when capacity is exceeded (zero alloc in steady state)
         if staging.quads.len() > self.quad_vbuf_cap {
@@ -1751,6 +1784,7 @@ impl GpuUiEngine {
         lh: f32,
         scale: f32,
         parent_opacity: f32,
+        input_selected_all: bool,
         staging: &mut FrameStaging,
     ) {
         let node = &laid.node;
@@ -1768,7 +1802,16 @@ impl GpuUiEngine {
             !node.action.is_empty() && state.hovered_action == Some(node.action.as_str());
         let is_focused =
             !node.action.is_empty() && state.focused_action == Some(node.action.as_str());
-        let radii = node.effective_radii();
+        let raw_radii = node.effective_radii();
+        let radii = if raw_radii.iter().all(|&r| r <= 0.0) {
+            match node.kind {
+                UiKind::Progress => [rect.h * 0.5; 4],
+                UiKind::Divider => [(rect.h * 0.5).min(2.0); 4],
+                _ => raw_radii,
+            }
+        } else {
+            raw_radii
+        };
 
         // 1. Optional Dual Kawase backdrop_blur behind glass cards
         if node.style.backdrop_blur > 0.0
@@ -1835,15 +1878,25 @@ impl GpuUiEngine {
         }
 
         let active_border = if is_focused {
-            "#38bdf8"
+            if input_selected_all && node.kind == UiKind::Input {
+                "#7dd3fc"
+            } else {
+                "#38bdf8"
+            }
         } else if is_hovered && !node.style.hover_border.is_empty() {
             node.style.hover_border.as_str()
         } else {
             node.border.as_str()
         };
-        let (border_color, border_w) = if let Some((r, g, b, a)) = parse_hex_color(active_border) {
+        let (border_color, border_w) = if node.kind == UiKind::Divider {
+            ([0.0; 4], 0.0)
+        } else if let Some((r, g, b, a)) = parse_hex_color(active_border) {
             let bw = if is_focused {
-                2.0
+                if input_selected_all && node.kind == UiKind::Input {
+                    2.25
+                } else {
+                    2.0
+                }
             } else if is_hovered {
                 node.style.border_w.max(1.5)
             } else {
@@ -2016,12 +2069,68 @@ impl GpuUiEngine {
                     opacity,
                 ));
             }
+            UiKind::Divider => {
+                if node.bg.is_empty() {
+                    let (r, g, b, a) = if !node.border.is_empty() {
+                        parse_hex_color(&node.border).unwrap_or((51, 65, 85, 170))
+                    } else {
+                        (51, 65, 85, 170)
+                    };
+                    staging.push_quad(simple_quad(
+                        [rect.x, rect.y, rect.w, rect.h],
+                        radii,
+                        [
+                            r as f32 / 255.0,
+                            g as f32 / 255.0,
+                            b as f32 / 255.0,
+                            a as f32 / 255.0,
+                        ],
+                        [0.0; 4],
+                        0.0,
+                        opacity,
+                    ));
+                }
+            }
+            UiKind::Progress => {
+                if node.bg.is_empty() {
+                    staging.push_quad(simple_quad(
+                        [rect.x, rect.y, rect.w, rect.h],
+                        radii,
+                        [30.0 / 255.0, 41.0 / 255.0, 59.0 / 255.0, 0.92],
+                        [0.0; 4],
+                        0.0,
+                        opacity,
+                    ));
+                }
+                let t = node.value.clamp(0.0, 1.0) as f32;
+                if t > 0.001 {
+                    let fill_w = (rect.w * t).max(2.0).min(rect.w);
+                    staging.push_quad(QuadInstance {
+                        rect: [rect.x, rect.y, fill_w, rect.h],
+                        radii,
+                        color_start: [0.22, 0.74, 0.97, 1.0],
+                        color_end: [0.51, 0.55, 0.97, 1.0],
+                        border_color: [0.0; 4],
+                        shadow_color: [0.0; 4],
+                        params0: [0.0, 1.0, 0.0, opacity],
+                        params1: [0.0; 4],
+                        params2: [1.0, 0.0, 0.0, 0.0],
+                    });
+                }
+            }
             _ => {}
         }
 
         // 4. Text via GPU GlyphAtlas (uses pre-wrapped multi-line layout so text never overflows!)
         if !laid.wrapped_lines.is_empty()
-            && !matches!(node.kind, UiKind::Shader | UiKind::Image | UiKind::Slider)
+            && !matches!(
+                node.kind,
+                UiKind::Shader
+                    | UiKind::Image
+                    | UiKind::Slider
+                    | UiKind::Divider
+                    | UiKind::Progress
+            )
         {
             let (tr, tg, tb, ta) = parse_hex_color(&node.color).unwrap_or((248, 250, 252, 255));
             let color = [
@@ -2050,6 +2159,30 @@ impl GpuUiEngine {
             };
             let tx_f = tx + node.style.translate_x;
             let ty_f = ty + node.style.translate_y;
+
+            // Subtle cyan selection highlight behind input text when Ctrl+A is active
+            if node.kind == UiKind::Input && is_focused && input_selected_all && tw > 0.0 {
+                let sel_pad_x = 3.0f32;
+                let sel_pad_y = 2.0f32;
+                let max_sel_w = (rect.w - (tx_f - rect.x) - 8.0).max(0.0);
+                let sel_w = (tw + sel_pad_x * 2.0).min(max_sel_w);
+                if sel_w > 0.0 {
+                    staging.push_quad(simple_quad(
+                        [
+                            tx_f - sel_pad_x,
+                            ty_f - sel_pad_y,
+                            sel_w,
+                            th.max(14.0) + sel_pad_y * 2.0,
+                        ],
+                        [4.0; 4],
+                        [0.22, 0.74, 0.97, 0.32],
+                        [0.0; 4],
+                        0.0,
+                        opacity,
+                    ));
+                }
+            }
+
             for (line_idx, line) in laid.wrapped_lines.iter().enumerate() {
                 if !line.is_empty() {
                     let ly = ty_f + (line_idx as f32) * laid.line_height;
@@ -2075,6 +2208,19 @@ impl GpuUiEngine {
                     opacity,
                 ));
             }
+        } else if node.kind == UiKind::Input && is_focused {
+            let [_, _, _, pl] = node.effective_pad();
+            let (_, th) = measurer.measure_text_size("Mg", node.font_size);
+            let tx_f = rect.x + pl.max(12.0) + node.style.translate_x;
+            let ty_f = rect.y + ((rect.h - th) * 0.5).max(0.0) + node.style.translate_y;
+            staging.push_quad(simple_quad(
+                [tx_f, ty_f, 2.0, th.max(14.0)],
+                [1.0; 4],
+                [0.22, 0.74, 0.97, 1.0],
+                [0.0; 4],
+                0.0,
+                opacity,
+            ));
         }
 
         // 5. Children
@@ -2091,6 +2237,7 @@ impl GpuUiEngine {
                 lh,
                 scale,
                 opacity,
+                input_selected_all,
                 staging,
             );
         }

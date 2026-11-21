@@ -99,6 +99,7 @@ pub enum CliCommand {
         file: PathBuf,
         target: BuildTarget,
         output: PathBuf,
+        gui: bool,
     },
     Asm {
         file: PathBuf,
@@ -462,26 +463,30 @@ fn parse_build(args: &[String]) -> Result<CliCommand, CliError> {
     let mut file: Option<PathBuf> = None;
     let mut target: Option<BuildTarget> = None;
     let mut output: Option<PathBuf> = None;
+    let mut gui = false;
 
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
         if arg == "--help" || arg == "-h" {
             println!(
-                "knr build - Compile an SSA module to native executable or WebAssembly
+                "knr build - Compile a .knr or .ssa module to native executable, WebAssembly, or Web app
 
 USAGE:
-    knr build <FILE> --target <native|wasm> -o <OUTPUT>
+    knr build <FILE> --target <native|wasm|web> -o <OUTPUT> [OPTIONS]
 
 ARGS:
-    <FILE>    Path to .ssa source file
+    <FILE>    Path to .knr or .ssa source file
 
 OPTIONS:
-    --target <TARGET>    Compilation target: 'native' or 'wasm'
-    -o, --output <PATH>  Output artifact file path
+    --target <TARGET>    Compilation target: 'native', 'wasm', or 'web'
+    -o, --output <PATH>  Output artifact file or directory path
+    -g, --gui            Build standalone native desktop GUI executable (with --target native)
     -h, --help           Print help information"
             );
             return Ok(CliCommand::Help);
+        } else if arg == "--gui" || arg == "-g" {
+            gui = true;
         } else if arg == "--target" {
             i += 1;
             if i >= args.len() {
@@ -513,11 +518,11 @@ OPTIONS:
     }
 
     let file = file.ok_or_else(|| {
-        CliError::Args("Missing input file for 'knr build'. Usage: knr build <file.ssa> --target <native|wasm> -o <out>".to_string())
+        CliError::Args("Missing input file for 'knr build'. Usage: knr build <file.knr> --target <native|wasm|web> -o <out> [--gui]".to_string())
     })?;
 
     let target = target.ok_or_else(|| {
-        CliError::Args("Missing '--target' for 'knr build'. Supported targets: 'native', 'wasm'".to_string())
+        CliError::Args("Missing '--target' for 'knr build'. Supported targets: 'native', 'wasm', 'web'".to_string())
     })?;
 
     let output = output.ok_or_else(|| {
@@ -528,6 +533,7 @@ OPTIONS:
         file,
         target,
         output,
+        gui,
     })
 }
 

@@ -182,9 +182,74 @@ impl UiRenderer {
         layout_root: &LayoutNode,
         state: &RenderInteractionState<'_>,
     ) {
+        self.render_layout_into_ex(pixmap, layout_root, state, None, false);
+    }
+
+    /// Renders a pre-computed `LayoutNode` tree into an existing reusable `Pixmap` with optional
+    /// visual scrollbar `(scroll_y, content_height)` and input select-all highlight.
+    pub fn render_layout_into_ex(
+        &self,
+        pixmap: &mut Pixmap,
+        layout_root: &LayoutNode,
+        state: &RenderInteractionState<'_>,
+        scroll_state: Option<(f32, f32)>,
+        input_selected_all: bool,
+    ) {
         let (br, bg, bb, ba) = parse_hex_color(&layout_root.node.bg).unwrap_or((11, 17, 32, 255));
         pixmap.fill(SkColor::from_rgba8(br, bg, bb, ba));
-        self.paint_layout_node(pixmap, layout_root, state, 1.0, Transform::identity());
+        self.paint_layout_node(
+            pixmap,
+            layout_root,
+            state,
+            1.0,
+            Transform::identity(),
+            input_selected_all,
+        );
+        if let Some((scroll_y, content_height)) = scroll_state {
+            self.paint_scrollbar(pixmap, scroll_y, content_height);
+        }
+    }
+
+    /// Draws a subtle translucent vertical pill scrollbar along the right edge when content
+    /// overflows the viewport height.
+    pub fn paint_scrollbar(&self, pixmap: &mut Pixmap, scroll_y: f32, content_height: f32) {
+        let logical_w = pixmap.width() as f32;
+        let logical_h = pixmap.height() as f32;
+        if content_height <= logical_h + 2.0 || logical_h <= 24.0 || logical_w <= 16.0 {
+            return;
+        }
+        let max_thumb = (logical_h - 16.0).max(4.0);
+        let min_thumb = 28.0f32.min(max_thumb);
+        let thumb_h = (logical_h / content_height * logical_h).clamp(min_thumb, max_thumb);
+        let max_scroll = (content_height - logical_h).max(1.0);
+        let ratio = (scroll_y / max_scroll).clamp(0.0, 1.0);
+        let thumb_y = ratio * (logical_h - thumb_h - 8.0).max(0.0) + 4.0;
+        let track_x = logical_w - 8.0;
+
+        let track_rect = LayoutRect::new(track_x, 4.0, 5.0, (logical_h - 8.0).max(4.0));
+        fill_rounded_rect_solid(
+            pixmap,
+            track_rect,
+            [2.5; 4],
+            (15, 23, 42, 72),
+            Transform::identity(),
+        );
+        let thumb_rect = LayoutRect::new(track_x, thumb_y, 5.0, thumb_h);
+        fill_rounded_rect_solid(
+            pixmap,
+            thumb_rect,
+            [2.5; 4],
+            (148, 163, 184, 133),
+            Transform::identity(),
+        );
+        stroke_rounded_rect_corners(
+            pixmap,
+            thumb_rect,
+            [2.5; 4],
+            (56, 189, 248, 64),
+            0.75,
+            Transform::identity(),
+        );
     }
 
     /// Fast incremental CPU update: repaints ONLY `UiKind::Shader` viewports (and their border)
@@ -243,6 +308,7 @@ impl UiRenderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn paint_layout_node(
         &self,
         pixmap: &mut Pixmap,
@@ -250,6 +316,7 @@ impl UiRenderer {
         state: &RenderInteractionState<'_>,
         parent_opacity: f32,
         parent_xform: Transform,
+        input_selected_all: bool,
     ) {
         let node = &laid.node;
         let rect = laid.rect;
@@ -269,7 +336,16 @@ impl UiRenderer {
 
         let local_xform = compute_node_transform(rect, &node.style);
         let xform = parent_xform.post_concat(local_xform);
-        let radii = node.effective_radii();
+        let raw_radii = node.effective_radii();
+        let radii = if raw_radii.iter().all(|&r| r <= 0.0) {
+            match node.kind {
+                UiKind::Progress => [rect.h * 0.5; 4],
+                UiKind::Divider => [(rect.h * 0.5).min(2.0); 4],
+                _ => raw_radii,
+            }
+        } else {
+            raw_radii
+        };
 
         // 1. Soft drop shadow
         if node.style.shadow_blur > 0.0 && !node.style.shadow_color.is_empty() {
@@ -419,6 +495,42 @@ impl UiRenderer {
                     xform,
                 );
             }
+            UiKind::Divider => {
+                if node.bg.is_empty() {
+                    let (r, g, b, a) = if !node.border.is_empty() {
+                        parse_hex_color(&node.border).unwrap_or((51, 65, 85, 170))
+                    } else {
+                        (51, 65, 85, 170)
+                    };
+                    let aa = (a as f32 * opacity).round().clamp(0.0, 255.0) as u8;
+                    fill_rounded_rect_solid(pixmap, rect, radii, (r, g, b, aa), xform);
+                }
+            }
+            UiKind::Progress => {
+                if node.bg.is_empty() {
+                    fill_rounded_rect_solid(
+                        pixmap,
+                        rect,
+                        radii,
+                        (30, 41, 59, (235.0 * opacity) as u8),
+                        xform,
+                    );
+                }
+                let t = node.value.clamp(0.0, 1.0) as f32;
+                if t > 0.001 {
+                    let fill_w = (rect.w * t).max(2.0).min(rect.w);
+                    let filled = LayoutRect::new(rect.x, rect.y, fill_w, rect.h);
+                    fill_rounded_rect_linear_grad(
+                        pixmap,
+                        filled,
+                        radii,
+                        90.0,
+                        [0.22, 0.74, 0.97, opacity],
+                        [0.51, 0.55, 0.97, opacity],
+                        xform,
+                    );
+                }
+            }
             UiKind::Input if node.bg.is_empty() => {
                 fill_rounded_rect_solid(
                     pixmap,
@@ -432,31 +544,48 @@ impl UiRenderer {
         }
 
         // 4. Border stroke (with focus ring for Input and hover_border support)
-        let active_border = if is_focused {
-            "#38bdf8"
-        } else if is_hovered && !node.style.hover_border.is_empty() {
-            node.style.hover_border.as_str()
-        } else {
-            node.border.as_str()
-        };
-        if let Some((r, g, b, a)) = parse_hex_color(active_border) {
-            let bw = if is_focused {
-                2.0
-            } else if is_hovered {
-                node.style.border_w.max(1.5)
+        if node.kind != UiKind::Divider {
+            let active_border = if is_focused {
+                if input_selected_all && node.kind == UiKind::Input {
+                    "#7dd3fc"
+                } else {
+                    "#38bdf8"
+                }
+            } else if is_hovered && !node.style.hover_border.is_empty() {
+                node.style.hover_border.as_str()
             } else {
-                node.style.border_w.max(1.0)
+                node.border.as_str()
             };
-            let aa = (a as f32 * opacity).round().clamp(0.0, 255.0) as u8;
-            stroke_rounded_rect_corners(pixmap, rect, radii, (r, g, b, aa), bw, xform);
-        } else if is_hovered && matches!(node.kind, UiKind::Button) {
-            let aa = (96.0 * opacity).round().clamp(0.0, 255.0) as u8;
-            stroke_rounded_rect_corners(pixmap, rect, radii, (255, 255, 255, aa), 1.5, xform);
+            if let Some((r, g, b, a)) = parse_hex_color(active_border) {
+                let bw = if is_focused {
+                    if input_selected_all && node.kind == UiKind::Input {
+                        2.25
+                    } else {
+                        2.0
+                    }
+                } else if is_hovered {
+                    node.style.border_w.max(1.5)
+                } else {
+                    node.style.border_w.max(1.0)
+                };
+                let aa = (a as f32 * opacity).round().clamp(0.0, 255.0) as u8;
+                stroke_rounded_rect_corners(pixmap, rect, radii, (r, g, b, aa), bw, xform);
+            } else if is_hovered && matches!(node.kind, UiKind::Button) {
+                let aa = (96.0 * opacity).round().clamp(0.0, 255.0) as u8;
+                stroke_rounded_rect_corners(pixmap, rect, radii, (255, 255, 255, aa), 1.5, xform);
+            }
         }
 
         // 5. Text rendering (uses pre-wrapped multi-line layout so text never overflows!)
         if !laid.wrapped_lines.is_empty()
-            && !matches!(node.kind, UiKind::Shader | UiKind::Image | UiKind::Slider)
+            && !matches!(
+                node.kind,
+                UiKind::Shader
+                    | UiKind::Image
+                    | UiKind::Slider
+                    | UiKind::Divider
+                    | UiKind::Progress
+            )
         {
             let (tr, tg, tb, ta) = parse_hex_color(&node.color).unwrap_or((248, 250, 252, 255));
             let color = (tr, tg, tb, (ta as f32 * opacity).round().clamp(0.0, 255.0) as u8);
@@ -480,6 +609,25 @@ impl UiRenderer {
             };
             let tx_final = tx + node.style.translate_x;
             let ty_final = ty + node.style.translate_y;
+
+            // Subtle cyan selection highlight behind input text when Ctrl+A is active
+            if node.kind == UiKind::Input && is_focused && input_selected_all && tw > 0.0 {
+                let sel_pad_x = 3.0f32;
+                let sel_pad_y = 2.0f32;
+                let max_sel_w = (rect.w - (tx_final - rect.x) - 8.0).max(0.0);
+                let sel_w = (tw + sel_pad_x * 2.0).min(max_sel_w);
+                if sel_w > 0.0 {
+                    let sel_rect = LayoutRect::new(
+                        tx_final - sel_pad_x,
+                        ty_final - sel_pad_y,
+                        sel_w,
+                        th.max(14.0) + sel_pad_y * 2.0,
+                    );
+                    let sa = (84.0 * opacity).round().clamp(0.0, 255.0) as u8;
+                    fill_rounded_rect_solid(pixmap, sel_rect, [4.0; 4], (56, 189, 248, sa), xform);
+                }
+            }
+
             for (line_idx, line) in laid.wrapped_lines.iter().enumerate() {
                 if !line.is_empty() {
                     let ly = ty_final + (line_idx as f32) * laid.line_height;
@@ -492,11 +640,18 @@ impl UiRenderer {
                 let caret_rect = LayoutRect::new(tx_final + tw + 2.0, ty_final, 2.0, th.max(14.0));
                 fill_rounded_rect_solid(pixmap, caret_rect, [1.0; 4], (56, 189, 248, 255), xform);
             }
+        } else if node.kind == UiKind::Input && is_focused {
+            let [_, _, _, pl] = node.effective_pad();
+            let (_, th) = self.measure_text_size("Mg", node.font_size);
+            let tx_final = rect.x + pl.max(12.0) + node.style.translate_x;
+            let ty_final = rect.y + ((rect.h - th) * 0.5).max(0.0) + node.style.translate_y;
+            let caret_rect = LayoutRect::new(tx_final, ty_final, 2.0, th.max(14.0));
+            fill_rounded_rect_solid(pixmap, caret_rect, [1.0; 4], (56, 189, 248, 255), xform);
         }
 
         // 6. Children
         for child in &laid.children {
-            self.paint_layout_node(pixmap, child, state, opacity, xform);
+            self.paint_layout_node(pixmap, child, state, opacity, xform, input_selected_all);
         }
     }
 

@@ -277,6 +277,24 @@ impl HostPlatform for HwPlatform {
             return Err(RuntimeError::UnsupportedEffect(effect));
         }
 
+        if op.starts_with("fs.") {
+            if let Some(res) = crate::sys::handle_fs_op(op, payload)? {
+                return Ok(res);
+            }
+            return Err(RuntimeError::InvalidOperation(format!(
+                "Unknown hw operation: {op}"
+            )));
+        }
+
+        if op.starts_with("json.") {
+            if let Some(res) = crate::sys::handle_json_op(op, payload)? {
+                return Ok(res);
+            }
+            return Err(RuntimeError::InvalidOperation(format!(
+                "Unknown hw operation: {op}"
+            )));
+        }
+
         match op {
             "hw.alloc" => {
                 let size = match payload {

@@ -77,6 +77,7 @@ impl CraneliftBackend {
         jit_builder.symbol("rt_chan_new", knr_runtime::rt_chan_new as *const u8);
         jit_builder.symbol("rt_chan_send", knr_runtime::rt_chan_send as *const u8);
         jit_builder.symbol("rt_chan_recv", knr_runtime::rt_chan_recv as *const u8);
+        jit_builder.symbol("rt_spawn", knr_runtime::rt_spawn as *const u8);
         jit_builder.symbol("rt_syscall", knr_runtime::rt_syscall as *const u8);
         jit_builder.symbol("rt_sin", knr_runtime::rt_sin as *const u8);
         jit_builder.symbol("rt_cos", knr_runtime::rt_cos as *const u8);
@@ -108,7 +109,7 @@ impl CraneliftBackend {
 
         let mut ctx = jit_mod.make_context();
         for func in &module.functions {
-            let fid = user_funcs[&func.name];
+            let (fid, _) = user_funcs[&func.name];
             compile_function_into_module(
                 &mut jit_mod,
                 &mut ctx,
@@ -125,7 +126,7 @@ impl CraneliftBackend {
             .finalize_definitions()
             .map_err(|e| CodegenError::Cranelift(e.to_string()))?;
 
-        let entry_id = *user_funcs.get(entry).ok_or_else(|| {
+        let (entry_id, _) = *user_funcs.get(entry).ok_or_else(|| {
             CodegenError::Cranelift(format!("Entry function '{entry}' not found in module"))
         })?;
         let code_ptr = jit_mod.get_finalized_function(entry_id);
@@ -144,7 +145,7 @@ impl CraneliftBackend {
 
         let mut ctx = obj_module.make_context();
         for func in &module.functions {
-            let fid = user_funcs[&func.name];
+            let (fid, _) = user_funcs[&func.name];
             compile_function_into_module(
                 &mut obj_module,
                 &mut ctx,
@@ -168,7 +169,7 @@ impl CraneliftBackend {
 fn declare_user_functions<M: cranelift_module::Module>(
     module: &mut M,
     functions: &[Function],
-) -> Result<HashMap<String, FuncId>, CodegenError> {
+) -> Result<HashMap<String, (FuncId, bool)>, CodegenError> {
     let mut user_funcs = HashMap::with_capacity(functions.len());
     for func in functions {
         let mut sig = module.make_signature();
@@ -181,7 +182,9 @@ fn declare_user_functions<M: cranelift_module::Module>(
         // Export "main" as "knr_main" only? No — keep exact function names so both
         // C entry wrappers (`ENTRY_FN`) and direct `main` exports work cleanly.
         let id = module.declare_function(&func.name, Linkage::Export, &sig)?;
-        user_funcs.insert(func.name.clone(), id);
+        let spawnable_via_i64 =
+            func.params.is_empty() || (func.params.len() == 1 && func.params[0].1 != Type::F64);
+        user_funcs.insert(func.name.clone(), (id, spawnable_via_i64));
     }
     Ok(user_funcs)
 }
@@ -243,6 +246,7 @@ fn declare_runtime_symbols<M: cranelift_module::Module>(
     decl_fn(module, &mut f, "rt_chan_new", &[i64t], &[i64t])?;
     decl_fn(module, &mut f, "rt_chan_send", &[i64t, i64t], &[i64t])?;
     decl_fn(module, &mut f, "rt_chan_recv", &[i64t], &[i64t])?;
+    decl_fn(module, &mut f, "rt_spawn", &[i64t, i64t], &[i64t])?;
 
     decl_fn(module, &mut f, "rt_syscall", &[i64t, i64t, i64t, i64t], &[i64t])?;
     decl_fn(module, &mut f, "rt_sin", &[f64t], &[f64t])?;
@@ -274,7 +278,7 @@ fn compile_function_into_module<M: cranelift_module::Module>(
     func: &Function,
     schemas: &[Schema],
     runtime_funcs: &HashMap<&'static str, FuncId>,
-    user_funcs: &HashMap<String, FuncId>,
+    user_funcs: &HashMap<String, (FuncId, bool)>,
 ) -> Result<(), CodegenError> {
     let mut sig = module.make_signature();
     for (_, ty) in &func.params {
@@ -417,7 +421,7 @@ fn emit_instruction<M: cranelift_module::Module>(
     reg_types: &HashMap<RegId, Type>,
     schemas: &[Schema],
     runtime_funcs: &HashMap<&'static str, FuncId>,
-    user_funcs: &HashMap<String, FuncId>,
+    user_funcs: &HashMap<String, (FuncId, bool)>,
     str_counter: &mut usize,
 ) -> Result<(), CodegenError> {
     let dst_var = inst.dst.map(var);
@@ -842,8 +846,22 @@ fn emit_instruction<M: cranelift_module::Module>(
                 builder.def_var(dst, res);
             }
         }
-        Op::Spawn(_, _) => {
-            let res = builder.ins().iconst(types::I64, 1);
+        Op::Spawn(fn_name, arg) => {
+            let res = match user_funcs.get(fn_name) {
+                Some(&(target_id, true)) => {
+                    let local_target = module.declare_func_in_func(target_id, builder.func);
+                    let fn_addr = builder.ins().func_addr(types::I64, local_target);
+                    let mut v_arg = builder.use_var(var(*arg));
+                    if reg_types.get(arg) == Some(&Type::F64) {
+                        v_arg = builder.ins().bitcast(types::I64, MemFlags::new(), v_arg);
+                    }
+                    let spawn_callee =
+                        module.declare_func_in_func(runtime_funcs["rt_spawn"], builder.func);
+                    let call = builder.ins().call(spawn_callee, &[fn_addr, v_arg]);
+                    builder.inst_results(call)[0]
+                }
+                _ => builder.ins().iconst(types::I64, 1),
+            };
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
@@ -973,7 +991,7 @@ fn emit_instruction<M: cranelift_module::Module>(
             }
         }
         Op::Call(fn_name, args) => {
-            let &target_id = user_funcs.get(fn_name).ok_or_else(|| {
+            let &(target_id, _) = user_funcs.get(fn_name).ok_or_else(|| {
                 CodegenError::Cranelift(format!("Unknown function in call: {fn_name}"))
             })?;
             let local_callee = module.declare_func_in_func(target_id, builder.func);
@@ -1041,5 +1059,67 @@ fn emit_terminator(
                 &e_vals,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use knr_core::BasicBlock;
+    use std::time::Duration;
+
+    #[test]
+    fn test_cranelift_spawn_jit_and_aot_real_thread() {
+        let mut module = Module::new();
+
+        // worker(%0: chan[i64]) -> i64
+        let mut worker = Function::new("worker", Type::I64);
+        worker.add_param(0, Type::Chan(Box::new(Type::I64)));
+        let mut w_bb0 = BasicBlock::new(0, Terminator::Ret(Some(1)));
+        w_bb0.push(KnrInst::new(Some(1), Type::I64, Op::ConstI64(42), 1));
+        w_bb0.push(KnrInst::new(Some(2), Type::Bool, Op::ChanSend(0, 1), 2));
+        worker.add_block(w_bb0);
+        module.add_function(worker);
+
+        // main(%0: chan[i64]) -> i64
+        let mut main_fn = Function::new("main", Type::I64);
+        main_fn.add_param(0, Type::Chan(Box::new(Type::I64)));
+        main_fn.add_effect(Effect::Async);
+        let mut m_bb0 = BasicBlock::new(0, Terminator::Ret(Some(1)));
+        m_bb0.push(KnrInst::new(
+            Some(1),
+            Type::Bool,
+            Op::Spawn("worker".into(), 0),
+            1,
+        ));
+        main_fn.add_block(m_bb0);
+        module.add_function(main_fn);
+
+        // Verify AOT object emission includes `rt_spawn` cleanly
+        let mut backend = CraneliftBackend::new().expect("backend init");
+        let obj = backend.compile_object(&module).expect("AOT compile with spawn");
+        assert!(!obj.is_empty());
+
+        // Verify JIT execution spawns a real OS thread that sends 42 over the runtime channel
+        let code_ptr = backend
+            .compile_jit_module(&module, "main")
+            .expect("JIT compile with spawn");
+        let entry: extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute::<*const u8, extern "C" fn(i64) -> i64>(code_ptr) };
+
+        let ch = knr_runtime::rt_chan_new(4);
+        assert_eq!(entry(ch), 1);
+
+        let mut received = 0;
+        for _ in 0..200 {
+            received = knr_runtime::rt_chan_recv(ch);
+            if received == 42 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(received, 42);
+        // Allow worker thread epilogue to return before JITModule pages are dropped
+        std::thread::sleep(Duration::from_millis(10));
     }
 }

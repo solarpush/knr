@@ -1,0 +1,108 @@
+// System & JSON Standard Library Demo in .knr (`import "std/sys";`)
+//
+// Verify statically (SSA, Linear Ownership, Types, Effects):
+//   knr check examples/sys_demo.knr
+// Run deterministic unit tests (zero disk/network I/O):
+//   knr test examples/sys_demo.knr
+// Execute live filesystem + JSON workflow on the VM:
+//   knr run examples/sys_demo.knr
+
+import "std/sys";
+
+fn demo_file_path() -> str {
+    return "/tmp/knr_sys_demo_profile.json";
+}
+
+fn build_profile_json(name: str, role: str, primary_item: str, secondary_item: str) -> str {
+    return "{\"user\":{\"name\":\""
+        + name
+        + "\",\"role\":\""
+        + role
+        + "\"},\"items\":[\""
+        + primary_item
+        + "\",\""
+        + secondary_item
+        + "\"],\"active\":true}";
+}
+
+fn format_user_endpoint(host: str, port: i64, user_id: i64) -> str {
+    return "http://" + host + ":" + to_str(port) + "/api/users/" + to_str(user_id);
+}
+
+fn main() -> i64 effects(Hw) {
+    let payload = build_profile_json("Ada Lovelace", "architect", "compiler", "runtime");
+
+    // 1. Write JSON document to disk
+    let wrote = fs_write(demo_file_path(), payload);
+
+    // 2. Verify file exists on disk
+    let exists_before = fs_exists(demo_file_path());
+
+    // 3. Validate and pretty-print JSON read back from disk
+    let valid = json_is_valid(fs_read(demo_file_path()));
+    let pretty = json_pretty(fs_read(demo_file_path()));
+    let has_pretty = str_len(pretty) > 0;
+
+    // 4. Extract nested fields and array elements using dotted JSON paths
+    let user_name = json_get(fs_read(demo_file_path()), "user.name");
+    let user_role = json_get(fs_read(demo_file_path()), "user.role");
+    let first_item = json_get(fs_read(demo_file_path()), "items.0");
+    let second_item = json_get(fs_read(demo_file_path()), "items.1");
+    let is_active = json_get(fs_read(demo_file_path()), "active");
+
+    // 5. Remove temporary file and confirm cleanup
+    let removed = fs_remove(demo_file_path());
+    let exists_after = fs_exists(demo_file_path());
+
+    let passed: i64 = 0;
+    if wrote {
+        passed = passed + 1;
+    }
+    if exists_before {
+        passed = passed + 1;
+    }
+    if valid && has_pretty {
+        passed = passed + 1;
+    }
+    if user_name == "Ada Lovelace" {
+        passed = passed + 1;
+    }
+    if user_role == "architect" {
+        passed = passed + 1;
+    }
+    if first_item == "compiler" && second_item == "runtime" {
+        passed = passed + 1;
+    }
+    if is_active == "true" {
+        passed = passed + 1;
+    }
+    if removed && !exists_after {
+        passed = passed + 1;
+    }
+    return passed;
+}
+
+// ============================================================================
+// Deterministic Built-in Unit Tests (run via `knr test examples/sys_demo.knr`)
+// ============================================================================
+
+fn test_build_profile_json() -> bool {
+    let json = build_profile_json("Ada", "admin", "fs", "json");
+    let expected = "{\"user\":{\"name\":\"Ada\",\"role\":\"admin\"},\"items\":[\"fs\",\"json\"],\"active\":true}";
+    return json == expected && str_len(json) > 40;
+}
+
+fn test_format_user_endpoint() -> bool {
+    let url = format_user_endpoint("127.0.0.1", 8080, 42);
+    return url == "http://127.0.0.1:8080/api/users/42";
+}
+
+fn test_std_sys_schemas() -> bool {
+    let fw = FileWrite { path: "/tmp/a.txt", content: "hello" };
+    let jq = JsonQuery { json: "{\"k\":\"v\"}", key: "k" };
+    let hp = HttpPost { url: "http://127.0.0.1:8080/echo", body: "ping" };
+    return fw.path == "/tmp/a.txt"
+        && fw.content == "hello"
+        && jq.key == "k"
+        && hp.body == "ping";
+}

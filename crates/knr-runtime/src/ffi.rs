@@ -346,6 +346,25 @@ pub extern "C" fn rt_syscall(
             let val = match payload_kind {
                 1 => Value::Str(unsafe { read_c_str(payload as *const c_char) }),
                 4 => Value::Bool(payload != 0),
+                2 | 5 => {
+                    let ptr = payload as *const RtStruct;
+                    if !ptr.is_null() && matches!(op, "fs.write_file" | "json.get" | "http.post") {
+                        let s = unsafe { &*ptr };
+                        let s0 = unsafe { read_c_str(s.fields.first().copied().unwrap_or(0) as *const c_char) };
+                        let s1 = unsafe { read_c_str(s.fields.get(1).copied().unwrap_or(0) as *const c_char) };
+                        let schema = match op {
+                            "fs.write_file" => "FileWrite",
+                            "json.get" => "JsonQuery",
+                            _ => "HttpPost",
+                        };
+                        Value::Struct {
+                            schema: schema.to_string(),
+                            fields: vec![Value::Str(s0), Value::Str(s1)],
+                        }
+                    } else {
+                        Value::I64(payload)
+                    }
+                }
                 _ => Value::I64(payload),
             };
             let result = match eff {
@@ -550,6 +569,121 @@ unsafe fn rt_struct_to_ui_node(ptr: *const RtStruct) -> crate::gui::UiNode {
         font_size,
         style,
         children,
+    }
+}
+
+// ============================================================================
+// Standalone Native Desktop GUI C-ABI
+// ============================================================================
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn rt_gui_launch_native(
+    title_ptr: *const c_char,
+    width: u32,
+    height: u32,
+    init_fn: Option<extern "C" fn() -> i64>,
+    view_fn: Option<extern "C" fn(i64) -> i64>,
+    update_fn: Option<extern "C" fn(i64, *const c_char) -> i64>,
+    tick2_fn: Option<extern "C" fn(i64, f64) -> i64>,
+    tick3_fn: Option<extern "C" fn(i64, f64, f64) -> i64>,
+    on_slider_fn: Option<extern "C" fn(i64, *const c_char, f64) -> i64>,
+    on_input_fn: Option<extern "C" fn(i64, *const c_char, *const c_char) -> i64>,
+    shaders_json_ptr: *const c_char,
+) -> i64 {
+    use crate::gui::{launch_ui_app, UiEvent, WindowBackend, WindowConfig};
+    use std::cell::Cell;
+
+    let (Some(init), Some(view)) = (init_fn, view_fn) else {
+        eprintln!("[GUI-NATIVE] Missing required init() or view() entrypoint");
+        return 1;
+    };
+
+    let raw_title = unsafe { read_c_str(title_ptr) };
+    let title = if raw_title.is_empty() {
+        "knr native app".to_string()
+    } else {
+        raw_title
+    };
+    let w = if width == 0 { 1120 } else { width };
+    let h = if height == 0 { 800 } else { height };
+    let config = WindowConfig::interactive(title, w, h);
+
+    let shaders_json = unsafe { read_c_str(shaders_json_ptr) };
+    let shaders_wgsl: HashMap<String, String> = if shaders_json.is_empty() {
+        HashMap::new()
+    } else {
+        serde_json::from_str(&shaders_json).unwrap_or_default()
+    };
+
+    let init_state = init();
+    let state_cell = Cell::new(init_state);
+    let has_tick = tick3_fn.is_some() || tick2_fn.is_some();
+
+    let launch_res = launch_ui_app(
+        config,
+        shaders_wgsl,
+        has_tick,
+        || {
+            let raw_ptr = view(state_cell.get());
+            unsafe { rt_struct_to_ui_node(raw_ptr as *const RtStruct) }
+        },
+        |ev| {
+            let st = state_cell.get();
+            match ev {
+                UiEvent::Click(action) | UiEvent::Toggle { action, .. } => {
+                    if let Some(update) = update_fn {
+                        let c_act = leak_c_string(&action) as *const c_char;
+                        state_cell.set(update(st, c_act));
+                    }
+                }
+                UiEvent::SliderChange { action, value } => {
+                    if let Some(on_slider) = on_slider_fn {
+                        let c_act = leak_c_string(&action) as *const c_char;
+                        state_cell.set(on_slider(st, c_act, value));
+                    } else if let Some(update) = update_fn {
+                        let payload = format!("{action}:{value:.3}");
+                        let c_payload = leak_c_string(&payload) as *const c_char;
+                        state_cell.set(update(st, c_payload));
+                    }
+                }
+                UiEvent::TextInput { action, value } => {
+                    if let Some(on_input) = on_input_fn {
+                        let c_act = leak_c_string(&action) as *const c_char;
+                        let c_val = leak_c_string(&value) as *const c_char;
+                        state_cell.set(on_input(st, c_act, c_val));
+                    } else if let Some(update) = update_fn {
+                        let payload = format!("{action}:{value}");
+                        let c_payload = leak_c_string(&payload) as *const c_char;
+                        state_cell.set(update(st, c_payload));
+                    }
+                }
+            }
+        },
+        |dt, elapsed| {
+            let st = state_cell.get();
+            if let Some(tick3) = tick3_fn {
+                state_cell.set(tick3(st, dt, elapsed));
+            } else if let Some(tick2) = tick2_fn {
+                state_cell.set(tick2(st, dt));
+            }
+        },
+    );
+
+    match launch_res {
+        Ok(res) => {
+            if res.backend == WindowBackend::Headless {
+                println!(
+                    "[GUI-NATIVE] Headless rendered snapshot (hash=0x{:016x})",
+                    res.final_pixel_hash
+                );
+            }
+            0
+        }
+        Err(err) => {
+            eprintln!("[GUI-NATIVE] Desktop window error: {err}");
+            1
+        }
     }
 }
 

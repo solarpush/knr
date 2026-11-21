@@ -26,6 +26,8 @@ pub enum UiKind {
     Image,
     Shader,
     Spacer,
+    Divider,
+    Progress,
 }
 
 impl UiKind {
@@ -45,6 +47,8 @@ impl UiKind {
             "image" | "img" => UiKind::Image,
             "shader" | "shaderview" | "canvas" => UiKind::Shader,
             "spacer" => UiKind::Spacer,
+            "divider" | "hr" => UiKind::Divider,
+            "progress" | "progressbar" => UiKind::Progress,
             _ => UiKind::Col,
         }
     }
@@ -66,6 +70,8 @@ impl UiKind {
             UiKind::Image => "image",
             UiKind::Shader => "shader",
             UiKind::Spacer => "spacer",
+            UiKind::Divider => "divider",
+            UiKind::Progress => "progress",
         }
     }
 }
@@ -698,6 +704,46 @@ impl UiNode {
             UiKind::Spacer => {
                 styles.push(format!("min-height:{}px", self.pad.max(8.0) as i32));
             }
+            UiKind::Divider => {
+                if st.w <= 0.0 {
+                    styles.push("width:100%".into());
+                }
+                if st.h <= 0.0 {
+                    let dh = if st.border_w > 1.0 {
+                        st.border_w.max(2.0) as i32
+                    } else {
+                        1
+                    };
+                    styles.push(format!("height:{dh}px"));
+                }
+                if self.bg.is_empty() {
+                    let div_bg = if !self.border.is_empty() {
+                        escape_html_attr(&self.border)
+                    } else {
+                        "#334155aa".to_string()
+                    };
+                    styles.push(format!("background:{div_bg}"));
+                }
+            }
+            UiKind::Progress => {
+                if st.w <= 0.0 {
+                    styles.push("width:100%".into());
+                }
+                if st.h <= 0.0 {
+                    styles.push("height:10px".into());
+                }
+                if self.bg.is_empty() {
+                    styles.push("background:#1e293b".into());
+                }
+                let r = self.effective_radii();
+                if r.iter().all(|&c| c <= 0.0) {
+                    styles.push("border-radius:9999px".into());
+                }
+                if st.overflow != "hidden" {
+                    styles.push("overflow:hidden".into());
+                }
+                styles.push("box-sizing:border-box".into());
+            }
         }
 
         if st.w > 0.0 {
@@ -745,7 +791,7 @@ impl UiNode {
         if !self.color.is_empty() {
             styles.push(format!("color:{}", escape_html_attr(&self.color)));
         }
-        if !self.border.is_empty() {
+        if !self.border.is_empty() && self.kind != UiKind::Divider {
             let bw = st.border_w.max(1.0);
             styles.push(format!("border:{bw}px solid {}", escape_html_attr(&self.border)));
         }
@@ -886,6 +932,23 @@ impl UiNode {
                     out.push('"');
                 }
                 out.push_str("></canvas>");
+                return;
+            }
+            UiKind::Divider => {
+                out.push_str("></div>");
+                return;
+            }
+            UiKind::Progress => {
+                let pct = self.value.clamp(0.0, 1.0) * 100.0;
+                let fill_css = if !self.color.is_empty() && self.color != "#f8fafc" {
+                    fill_to_css(&self.color)
+                        .unwrap_or_else(|| "linear-gradient(90deg,#38bdf8,#818cf8)".to_string())
+                } else {
+                    "linear-gradient(90deg,#38bdf8,#818cf8)".to_string()
+                };
+                out.push_str(&format!(
+                    "><div style=\"width:{pct:.1}%;height:100%;background:{fill_css};border-radius:inherit;transition:width 150ms ease\"></div></div>"
+                ));
                 return;
             }
             _ => {}
@@ -1171,6 +1234,17 @@ pub fn compute_ui_layout<M: TextMeasurer>(
     (laid_out, hit_boxes)
 }
 
+fn effective_grid_cols(requested: i64, avail_w: f32) -> usize {
+    let req = requested.max(1) as usize;
+    if req >= 2 && avail_w < 500.0 {
+        1
+    } else if req >= 3 && avail_w < 760.0 {
+        2
+    } else {
+        req
+    }
+}
+
 fn measure_intrinsic<M: TextMeasurer>(node: &UiNode, max_w: f32, measurer: &M) -> (f32, f32) {
     let [pt, pr, pb, pl] = node.effective_pad();
     let gx = node.effective_gap_x();
@@ -1212,6 +1286,22 @@ fn measure_intrinsic<M: TextMeasurer>(node: &UiNode, max_w: f32, measurer: &M) -
             (w, h)
         }
         UiKind::Spacer => (pl.max(8.0), pt.max(8.0)),
+        UiKind::Divider => {
+            let default_h = if node.style.border_w > 1.0 {
+                node.style.border_w.max(2.0)
+            } else {
+                1.0
+            };
+            (avail, node.style.h.max(default_h))
+        }
+        UiKind::Progress => {
+            let h = if node.style.h > 0.0 {
+                node.style.h
+            } else {
+                10.0
+            };
+            (avail, h)
+        }
         UiKind::Col | UiKind::Card | UiKind::Scroll => {
             let inner_max = (avail - pl - pr).max(40.0);
             let mut max_child_w: f32 = 0.0;
@@ -1241,7 +1331,7 @@ fn measure_intrinsic<M: TextMeasurer>(node: &UiNode, max_w: f32, measurer: &M) -
             (w, total_h + pt + pb)
         }
         UiKind::Grid => {
-            let cols = node.style.grid_cols.max(1) as usize;
+            let cols = effective_grid_cols(node.style.grid_cols, avail);
             let inner_w = (avail - pl - pr).max(40.0);
             let col_w = ((inner_w - gx * (cols.saturating_sub(1) as f32)) / cols as f32).max(20.0);
             let mut total_h: f32 = 0.0;
@@ -1348,10 +1438,16 @@ fn layout_node<M: TextMeasurer>(
         | UiKind::Toggle
         | UiKind::Image
         | UiKind::Shader
-        | UiKind::Spacer => {
+        | UiKind::Spacer
+        | UiKind::Divider
+        | UiKind::Progress => {
             let (iw, ih) = measure_intrinsic(node, box_w, measurer);
             let w = match node.kind {
-                UiKind::Input | UiKind::Slider | UiKind::Shader => {
+                UiKind::Input
+                | UiKind::Slider
+                | UiKind::Shader
+                | UiKind::Divider
+                | UiKind::Progress => {
                     if node.style.w > 0.0 { node.style.w } else { box_w }
                 }
                 UiKind::Text => iw.min(box_w),
@@ -1372,6 +1468,7 @@ fn layout_node<M: TextMeasurer>(
                     let (_, th) = measurer.measure_text_size("Mg", node.font_size);
                     (vec![fitted], th)
                 }
+                UiKind::Divider | UiKind::Progress => (Vec::new(), node.font_size * 1.3),
                 _ if !node.text.is_empty() => {
                     let (_, th) = measurer.measure_text_size("Mg", node.font_size);
                     (vec![node.text.clone()], th)
@@ -1435,7 +1532,7 @@ fn layout_node<M: TextMeasurer>(
             }
         }
         UiKind::Grid => {
-            let cols = node.style.grid_cols.max(1) as usize;
+            let cols = effective_grid_cols(node.style.grid_cols, box_w);
             let inner_w = (box_w - pl - pr).max(20.0);
             let col_w = ((inner_w - gx * (cols.saturating_sub(1) as f32)) / cols as f32).max(20.0);
             let mut cur_y = y + pt;

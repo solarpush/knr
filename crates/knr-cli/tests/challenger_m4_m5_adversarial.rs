@@ -789,9 +789,8 @@ fn test_adv_site_cli_asm_and_disasm_site_ssa() {
 fn test_adv_site_cli_run_generates_valid_html_matching_index_html() {
     let root = repo_root();
     let site_ssa = root.join("site").join("site.ssa");
-    let index_html_path = root.join("site").join("index.html");
 
-    // Execute knr run site/site.ssa
+    // Execute legacy modular `knr run site/site.ssa` and verify full SSR HTML integrity
     let run_out = knr_cmd()
         .args(["run", site_ssa.to_str().unwrap()])
         .output()
@@ -802,27 +801,8 @@ fn test_adv_site_cli_run_generates_valid_html_matching_index_html() {
         String::from_utf8_lossy(&run_out.stderr)
     );
 
-    let stdout_raw = String::from_utf8_lossy(&run_out.stdout);
-    let stdout_str = stdout_raw.trim();
-
-    // Read site/index.html
-    let index_content_raw = fs::read_to_string(&index_html_path).expect("read site/index.html");
-    let index_str = index_content_raw.trim();
-
-    assert_eq!(
-        stdout_str, index_str,
-        "knr run site/site.ssa output must match site/index.html verbatim"
-    );
-}
-
-#[test]
-fn test_adv_site_index_html_structural_and_content_integrity() {
-    let root = repo_root();
-    let index_html_path = root.join("site").join("index.html");
-    assert!(index_html_path.exists(), "site/index.html must exist");
-
-    let content = fs::read_to_string(&index_html_path).expect("read site/index.html");
-    assert!(content.len() > 5000, "site/index.html must be > 5KB, got {} bytes", content.len());
+    let content = String::from_utf8_lossy(&run_out.stdout);
+    assert!(content.len() > 5000, "site/site.ssa HTML output must be > 5KB, got {} bytes", content.len());
 
     // Structural elements
     assert!(content.contains("<main class=\"page\">"));
@@ -851,4 +831,26 @@ fn test_adv_site_index_html_structural_and_content_integrity() {
     assert!(content.contains("EXEMPLE 1 — SCHÉMAS STRICTS &amp; TYPES LINÉAIRES"));
     assert!(content.contains("EXEMPLE 2 — BOUCLE HTTP SSR EN KNR (SITE/SERVER.SSA)"));
     assert!(content.contains("Généré à 100% en knr (site/site.ssa) via knr-verify + knr-interp + UiPlatform."));
+}
+
+#[test]
+fn test_adv_site_index_html_structural_and_content_integrity() {
+    let root = repo_root();
+    let index_html_path = root.join("site").join("index.html");
+    let app_wasm_path = root.join("site").join("app.wasm");
+    assert!(index_html_path.exists(), "site/index.html must exist");
+    assert!(app_wasm_path.exists(), "site/app.wasm must exist");
+
+    let content = fs::read_to_string(&index_html_path).expect("read site/index.html");
+    assert!(content.len() > 5000, "site/index.html must be > 5KB, got {} bytes", content.len());
+    let wasm_len = fs::metadata(&app_wasm_path).expect("stat site/app.wasm").len();
+    assert!(wasm_len > 1000, "site/app.wasm must be > 1KB, got {wasm_len} bytes");
+
+    // Modern v2 Web/WASM + WebGPU/WebGL2 host generated from site/site.knr
+    assert!(content.contains("data-knr-web-host=\"v2\""));
+    assert!(content.contains("const IS_WIDGET_V2 = true;"));
+    assert!(content.contains("knr_hero_nebula"));
+    assert!(content.contains("@fragment"));
+    assert!(content.contains("#version 300 es"));
+    assert!(content.contains("Built 100% in knr (site/site.knr)"));
 }

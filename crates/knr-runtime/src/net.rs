@@ -279,6 +279,15 @@ impl HostPlatform for NetPlatform {
             return Err(RuntimeError::UnsupportedEffect(effect));
         }
 
+        if op.starts_with("http.") {
+            if let Some(res) = crate::sys::handle_http_client_op(op, payload)? {
+                return Ok(res);
+            }
+            return Err(RuntimeError::InvalidOperation(format!(
+                "Unknown net operation: {op}"
+            )));
+        }
+
         match op {
             "net.listen" => {
                 let port = std::env::var("KNR_PORT")
