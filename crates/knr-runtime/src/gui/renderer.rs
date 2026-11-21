@@ -1275,7 +1275,7 @@ pub fn pixmap_to_softbuffer_u32_scaled(
 /// Converts a `tiny_skia::Pixmap` (RGBA premultiplied) into `softbuffer` (`0x00RRGGBB`) pixels.
 pub fn pixmap_to_softbuffer_u32(pixmap: &Pixmap, dst: &mut [u32]) {
     let src = pixmap.data();
-    for (rgba, pixel) in src.chunks_exact(4).zip(dst.iter_mut()) {
+    for (rgba, pixel) in src.as_chunks::<4>().0.iter().zip(dst.iter_mut()) {
         *pixel = ((rgba[0] as u32) << 16) | ((rgba[1] as u32) << 8) | (rgba[2] as u32);
     }
 }
