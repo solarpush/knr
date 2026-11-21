@@ -26,8 +26,9 @@ pub use renderer::{
 };
 pub use style::{Color, Rect, Style};
 pub use ui_tree::{
-    compute_ui_layout, fill_to_css, hit_test, hit_test_box, parse_fill_spec, parse_hex_rgba_f32,
-    HitBox, LayoutNode, LayoutRect, ParsedFill, TextMeasurer, UiKind, UiNode, UiStyle,
+    compute_ui_layout, fill_to_css, fit_input_text_tail, hit_test, hit_test_box, parse_fill_spec,
+    parse_hex_rgba_f32, wrap_text_lines, HitBox, LayoutNode, LayoutRect, ParsedFill, TextMeasurer,
+    UiKind, UiNode, UiStyle,
 };
 pub use window::{
     has_display_server, launch_desktop_window, launch_desktop_window_for_graph,

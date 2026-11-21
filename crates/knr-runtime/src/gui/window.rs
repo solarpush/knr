@@ -211,12 +211,14 @@ where
     dragging_slider: Option<(String, LayoutRect)>,
     scroll_y: f32,
     content_height: f32,
-    window: Option<Arc<Window>>,
+    // Drop order matters on Wayland/Vulkan: GPU & softbuffer surfaces MUST drop BEFORE `window`!
     #[cfg(feature = "gpu")]
     gpu: Option<GpuUiEngine>,
     cpu_surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     cpu_pixmap: Option<tiny_skia::Pixmap>,
+    window: Option<Arc<Window>>,
     cpu_ui_dirty: bool,
+    closing: bool,
     active_backend: WindowBackend,
     start_time: Instant,
     last_frame: Instant,
@@ -247,7 +249,30 @@ where
         }
     }
 
+    fn cleanup_surfaces(&mut self) {
+        #[cfg(feature = "gpu")]
+        if let Some(gpu) = self.gpu.take() {
+            gpu.shutdown();
+            drop(gpu);
+        }
+        self.cpu_surface = None;
+        self.cpu_pixmap = None;
+        self.window = None;
+    }
+
+    fn shutdown_and_exit(&mut self, event_loop: &ActiveEventLoop) {
+        if self.closing {
+            return;
+        }
+        self.closing = true;
+        self.cleanup_surfaces();
+        event_loop.exit();
+    }
+
     fn redraw(&mut self) {
+        if self.closing {
+            return;
+        }
         let Some(window) = self.window.as_ref() else {
             return;
         };
@@ -492,6 +517,9 @@ where
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.closing {
+            return;
+        }
         let now = Instant::now();
         if self.has_reload && now.duration_since(self.last_reload_check) >= RELOAD_POLL_INTERVAL {
             self.last_reload_check = now;
@@ -517,14 +545,24 @@ where
         }
     }
 
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.closing = true;
+        self.cleanup_surfaces();
+    }
+
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        if self.closing {
+            return;
+        }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested | WindowEvent::Destroyed => {
+                self.shutdown_and_exit(event_loop);
+            }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = (scale_factor as f32).clamp(0.5, 4.0);
                 self.layout_dirty = true;
@@ -550,7 +588,7 @@ where
                             w.request_redraw();
                         }
                     } else {
-                        event_loop.exit();
+                        self.shutdown_and_exit(event_loop);
                     }
                 }
                 Key::Named(NamedKey::Enter) => {
@@ -812,12 +850,13 @@ where
                 dragging_slider: None,
                 scroll_y: 0.0,
                 content_height: 0.0,
-                window: None,
                 #[cfg(feature = "gpu")]
                 gpu: None,
                 cpu_surface: None,
                 cpu_pixmap: None,
+                window: None,
                 cpu_ui_dirty: true,
+                closing: false,
                 active_backend: WindowBackend::Headless,
                 start_time: now,
                 last_frame: now,
@@ -826,13 +865,15 @@ where
                 frames_rendered: 0,
                 final_pixel_hash: 0,
             };
-            if event_loop.run_app(&mut app).is_ok() && app.frames_rendered > 0 {
+            if event_loop.run_app(&mut app).is_ok() && (app.frames_rendered > 0 || app.closing) {
+                app.cleanup_surfaces();
                 return Ok(WindowLaunchResult {
                     backend: app.active_backend,
                     frames_rendered: app.frames_rendered,
                     final_pixel_hash: app.final_pixel_hash,
                 });
             }
+            app.cleanup_surfaces();
             let (pixmap, _) = app.renderer.render_ui(
                 &app.current_tree,
                 app.config.width,
@@ -917,14 +958,16 @@ where
 struct CanvasWindowApp {
     title: String,
     canvas: HeadlessCanvas,
-    window: Option<Arc<Window>>,
+    // Drop surface BEFORE window so Wayland/X11 teardown never crashes
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
+    window: Option<Arc<Window>>,
+    closing: bool,
     frames_rendered: usize,
 }
 
 impl ApplicationHandler for CanvasWindowApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_none() {
+        if self.window.is_none() && !self.closing {
             let (w, h) = self.canvas.canvas().dimensions();
             let attrs = Window::default_attributes()
                 .with_title(self.title.clone())
@@ -947,14 +990,28 @@ impl ApplicationHandler for CanvasWindowApp {
         }
     }
 
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.closing = true;
+        self.surface = None;
+        self.window = None;
+    }
+
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        if self.closing {
+            return;
+        }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested | WindowEvent::Destroyed => {
+                self.closing = true;
+                self.surface = None;
+                self.window = None;
+                event_loop.exit();
+            }
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -963,7 +1020,12 @@ impl ApplicationHandler for CanvasWindowApp {
                         ..
                     },
                 ..
-            } => event_loop.exit(),
+            } => {
+                self.closing = true;
+                self.surface = None;
+                self.window = None;
+                event_loop.exit();
+            }
             WindowEvent::RedrawRequested => {
                 if let (Some(win), Some(surface)) = (&self.window, &mut self.surface) {
                     let size = win.inner_size();
@@ -1016,8 +1078,9 @@ where
             let mut app = CanvasWindowApp {
                 title: config.title,
                 canvas: headless,
-                window: None,
                 surface: None,
+                window: None,
+                closing: false,
                 frames_rendered: 0,
             };
             if event_loop.run_app(&mut app).is_ok() && app.frames_rendered > 0 {

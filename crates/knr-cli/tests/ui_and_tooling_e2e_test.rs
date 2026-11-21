@@ -778,4 +778,54 @@ fn demo() -> i64 {
     );
     let comp_str = comp_res[0].to_string();
     assert!(comp_str.contains("backdrop_blur") && comp_str.contains("smoothstep"));
+
+    // 4. Verify multi-line text wrapping on site.knr ("Linear Safety" tab): NO line overflows its box!
+    use knr_runtime::gui::{compute_ui_layout, LayoutNode, TextMeasurer, UiKind};
+    let site_mod = knr_verify::verify_program_from_file(&site_knr).expect("verify site.knr");
+    let mut mock = MockPlatform::new();
+    let (mut st, _) =
+        knr_interp::execute_module(&site_mod, "init", vec![], &mut mock, 1_000_000, false).unwrap();
+    st = knr_interp::execute_module(
+        &site_mod,
+        "update",
+        vec![st, Value::Str("tab_safety".into())],
+        &mut mock,
+        1_000_000,
+        false,
+    )
+    .unwrap()
+    .0;
+    let (view_val, _) =
+        knr_interp::execute_module(&site_mod, "view", vec![st], &mut mock, 1_000_000, false)
+            .unwrap();
+    let site_ui = UiNode::from_value(&view_val).unwrap();
+    let renderer = UiRenderer::new();
+    let (laid, _) = compute_ui_layout(&site_ui, 1120.0, 800.0, &renderer);
+
+    fn assert_no_text_overflow(node: &LayoutNode, renderer: &UiRenderer, wrapped_count: &mut usize) {
+        if node.node.kind == UiKind::Text && !node.wrapped_lines.is_empty() {
+            if node.wrapped_lines.len() > 1 {
+                *wrapped_count += 1;
+            }
+            let [_, pr, _, pl] = node.node.effective_pad();
+            let max_allowed = (node.rect.w - pl - pr).max(16.0) + 2.0;
+            for line in &node.wrapped_lines {
+                let (lw, _) = renderer.measure_text_size(line, node.node.font_size);
+                assert!(
+                    lw <= max_allowed,
+                    "Text line overflowed container ({lw:.1}px > {max_allowed:.1}px): '{line}'"
+                );
+            }
+        }
+        for ch in &node.children {
+            assert_no_text_overflow(ch, renderer, wrapped_count);
+        }
+    }
+
+    let mut wrapped_count = 0usize;
+    assert_no_text_overflow(&laid, &renderer, &mut wrapped_count);
+    assert!(
+        wrapped_count >= 4,
+        "Expected long descriptions on Linear Safety tab to wrap across multiple lines, got {wrapped_count}"
+    );
 }

@@ -1023,17 +1023,132 @@ pub struct HitBox {
     pub text: String,
 }
 
-/// Laid-out UI tree node with exact screen-space coordinates.
+/// Laid-out UI tree node with exact screen-space coordinates and pre-wrapped text lines.
 #[derive(Debug, Clone)]
 pub struct LayoutNode {
     pub rect: LayoutRect,
     pub node: UiNode,
+    pub wrapped_lines: Vec<String>,
+    pub line_height: f32,
     pub children: Vec<LayoutNode>,
 }
 
 /// Trait abstracting text measurement so layout works identically with `ab_glyph` or bitmap fonts.
 pub trait TextMeasurer {
     fn measure_text_size(&self, text: &str, font_size: f32) -> (f32, f32);
+}
+
+/// Word-wraps `text` cleanly to fit within `max_w` logical pixels (preserving explicit `\n`,
+/// breaking long unspaced tokens by character so text NEVER overflows its container card).
+/// Returns `(lines, max_line_w, total_height, line_height)`.
+pub fn wrap_text_lines<M: TextMeasurer>(
+    text: &str,
+    font_size: f32,
+    max_w: f32,
+    measurer: &M,
+) -> (Vec<String>, f32, f32, f32) {
+    let (_, base_h) = measurer.measure_text_size("Mg", font_size);
+    let line_h = (base_h * 1.32).ceil().max(font_size * 1.28);
+    if text.is_empty() {
+        return (Vec::new(), 0.0, base_h, line_h);
+    }
+    let limit = max_w.max(16.0);
+    let mut lines: Vec<String> = Vec::new();
+    let mut max_line_w: f32 = 0.0;
+
+    for raw_para in text.split('\n') {
+        if raw_para.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let (full_w, _) = measurer.measure_text_size(raw_para, font_size);
+        if full_w <= limit {
+            max_line_w = max_line_w.max(full_w);
+            lines.push(raw_para.to_string());
+            continue;
+        }
+
+        let mut cur = String::new();
+        for word in raw_para.split_whitespace() {
+            let candidate = if cur.is_empty() {
+                word.to_string()
+            } else {
+                format!("{cur} {word}")
+            };
+            let (cw, _) = measurer.measure_text_size(&candidate, font_size);
+            if cw <= limit {
+                cur = candidate;
+            } else {
+                if !cur.is_empty() {
+                    let (w_cur, _) = measurer.measure_text_size(&cur, font_size);
+                    max_line_w = max_line_w.max(w_cur);
+                    lines.push(cur);
+                }
+                let (word_w, _) = measurer.measure_text_size(word, font_size);
+                if word_w <= limit {
+                    cur = word.to_string();
+                } else {
+                    // Break oversized unspaced token char-by-char so it never overflows
+                    let mut chunk = String::new();
+                    for ch in word.chars() {
+                        let mut next = chunk.clone();
+                        next.push(ch);
+                        let (nw, _) = measurer.measure_text_size(&next, font_size);
+                        if nw <= limit || chunk.is_empty() {
+                            chunk = next;
+                        } else {
+                            let (cw2, _) = measurer.measure_text_size(&chunk, font_size);
+                            max_line_w = max_line_w.max(cw2);
+                            lines.push(chunk);
+                            chunk = ch.to_string();
+                        }
+                    }
+                    cur = chunk;
+                }
+            }
+        }
+        if !cur.is_empty() {
+            let (w_cur, _) = measurer.measure_text_size(&cur, font_size);
+            max_line_w = max_line_w.max(w_cur);
+            lines.push(cur);
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    let total_h = if lines.len() == 1 {
+        base_h
+    } else {
+        base_h + ((lines.len() - 1) as f32) * line_h
+    };
+    (lines, max_line_w, total_h, line_h)
+}
+
+/// Keeps the visible suffix of a single-line text input that fits within `max_w`.
+pub fn fit_input_text_tail<M: TextMeasurer>(
+    text: &str,
+    font_size: f32,
+    max_w: f32,
+    measurer: &M,
+) -> String {
+    let limit = max_w.max(20.0);
+    if measurer.measure_text_size(text, font_size).0 <= limit {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut start = chars.len();
+    let mut cur = String::new();
+    while start > 0 {
+        start -= 1;
+        let cand: String = chars[start..].iter().collect();
+        if measurer.measure_text_size(&cand, font_size).0 <= limit {
+            cur = cand;
+        } else {
+            break;
+        }
+    }
+    cur
 }
 
 /// Computes a full two-pass Flexbox + CSS Grid + Stack layout for `root` inside `(viewport_w, viewport_h)`.
@@ -1070,8 +1185,10 @@ fn measure_intrinsic<M: TextMeasurer>(node: &UiNode, max_w: f32, measurer: &M) -
 
     let (raw_w, raw_h) = match node.kind {
         UiKind::Text => {
-            let (tw, th) = measurer.measure_text_size(&node.text, node.font_size);
-            ((tw + pl + pr).min(avail.max(tw + pl + pr)), th + pt + pb)
+            let inner_avail = (avail - pl - pr).max(16.0);
+            let (_, max_lw, total_h, _) =
+                wrap_text_lines(&node.text, node.font_size, inner_avail, measurer);
+            ((max_lw + pl + pr).min(avail), total_h + pt + pb)
         }
         UiKind::Button | UiKind::Badge => {
             let (tw, th) = measurer.measure_text_size(&node.text, node.font_size);
@@ -1100,7 +1217,8 @@ fn measure_intrinsic<M: TextMeasurer>(node: &UiNode, max_w: f32, measurer: &M) -
             let mut max_child_w: f32 = 0.0;
             let mut total_h: f32 = 0.0;
             if !node.text.is_empty() {
-                let (tw, th) = measurer.measure_text_size(&node.text, node.font_size);
+                let (_, tw, th, _) =
+                    wrap_text_lines(&node.text, node.font_size, inner_max, measurer);
                 max_child_w = max_child_w.max(tw);
                 total_h += th;
                 if !node.children.is_empty() {
@@ -1241,20 +1359,45 @@ fn layout_node<M: TextMeasurer>(
             };
             let h = min_h.map(|m| ih.max(m)).unwrap_or(ih);
             let rect = LayoutRect::new(x, y, w, h);
+            let (wrapped_lines, line_height) = match node.kind {
+                UiKind::Text if !node.text.is_empty() => {
+                    let inner_w = (box_w - pl - pr).max(16.0);
+                    let (lines, _, _, lh) =
+                        wrap_text_lines(&node.text, node.font_size, inner_w, measurer);
+                    (lines, lh)
+                }
+                UiKind::Input if !node.text.is_empty() => {
+                    let inner_w = (w - pl.max(12.0) - pr.max(12.0)).max(20.0);
+                    let fitted = fit_input_text_tail(&node.text, node.font_size, inner_w, measurer);
+                    let (_, th) = measurer.measure_text_size("Mg", node.font_size);
+                    (vec![fitted], th)
+                }
+                _ if !node.text.is_empty() => {
+                    let (_, th) = measurer.measure_text_size("Mg", node.font_size);
+                    (vec![node.text.clone()], th)
+                }
+                _ => (Vec::new(), node.font_size * 1.3),
+            };
             push_hit(rect, hit_boxes);
             LayoutNode {
                 rect,
                 node: node.clone(),
+                wrapped_lines,
+                line_height,
                 children: Vec::new(),
             }
         }
         UiKind::Col | UiKind::Card | UiKind::Scroll => {
             let inner_w = (box_w - pl - pr).max(20.0);
             let mut cur_y = y + pt;
-            if !node.text.is_empty() {
-                let (_, th) = measurer.measure_text_size(&node.text, node.font_size);
+            let (wrapped_lines, line_height) = if !node.text.is_empty() {
+                let (lines, _, th, lh) =
+                    wrap_text_lines(&node.text, node.font_size, inner_w, measurer);
                 cur_y += th + if node.children.is_empty() { 0.0 } else { gy };
-            }
+                (lines, lh)
+            } else {
+                (Vec::new(), node.font_size * 1.3)
+            };
             let mut laid_children = Vec::with_capacity(node.children.len());
             for (idx, child) in node.children.iter().enumerate() {
                 let (cw, _) = measure_intrinsic(child, inner_w, measurer);
@@ -1286,6 +1429,8 @@ fn layout_node<M: TextMeasurer>(
             LayoutNode {
                 rect,
                 node: node.clone(),
+                wrapped_lines,
+                line_height,
                 children: laid_children,
             }
         }
@@ -1323,6 +1468,8 @@ fn layout_node<M: TextMeasurer>(
             LayoutNode {
                 rect,
                 node: node.clone(),
+                wrapped_lines: Vec::new(),
+                line_height: node.font_size * 1.3,
                 children: laid_children,
             }
         }
@@ -1346,6 +1493,8 @@ fn layout_node<M: TextMeasurer>(
             LayoutNode {
                 rect,
                 node: node.clone(),
+                wrapped_lines: Vec::new(),
+                line_height: node.font_size * 1.3,
                 children: laid_children,
             }
         }
@@ -1411,6 +1560,8 @@ fn layout_node<M: TextMeasurer>(
             LayoutNode {
                 rect,
                 node: node.clone(),
+                wrapped_lines: Vec::new(),
+                line_height: node.font_size * 1.3,
                 children: laid_children,
             }
         }

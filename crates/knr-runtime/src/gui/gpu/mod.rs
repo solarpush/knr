@@ -694,27 +694,11 @@ struct OffscreenTargets {
 }
 
 pub struct GpuUiEngine {
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
-    scene_format: wgpu::TextureFormat,
-    max_tex_dim: u32,
-    uniform_align: u32,
-    linear_sampler: wgpu::Sampler,
-    screen_buf: wgpu::Buffer,
-    screen_bg: wgpu::BindGroup,
-    // Persistent dynamically-grown vertex buffers (zero allocation in steady state)
-    quad_vbuf: wgpu::Buffer,
-    quad_vbuf_cap: usize,
-    glyph_vbuf: wgpu::Buffer,
-    glyph_vbuf_cap: usize,
-    // Persistent dynamic-offset uniform buffers (zero allocation per frame)
-    blur_ubuf: wgpu::Buffer,
-    glass_ubuf: wgpu::Buffer,
-    shader_ubuf: wgpu::Buffer,
-    shader_bg: wgpu::BindGroup,
-    // Pipelines & layouts
+    // Drop order (top -> bottom): resources & offscreen targets -> surface -> queue -> device
+    targets: OffscreenTargets,
+    glyph_atlas: GlyphAtlas,
+    image_cache: HashMap<String, Option<wgpu::BindGroup>>,
+    custom_shaders: HashMap<String, wgpu::RenderPipeline>,
     quad_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
     blit_bgl: wgpu::BindGroupLayout,
@@ -724,10 +708,24 @@ pub struct GpuUiEngine {
     glass_bgl: wgpu::BindGroupLayout,
     glass_pipeline: wgpu::RenderPipeline,
     shader_bgl: wgpu::BindGroupLayout,
-    custom_shaders: HashMap<String, wgpu::RenderPipeline>,
-    glyph_atlas: GlyphAtlas,
-    image_cache: HashMap<String, Option<wgpu::BindGroup>>,
-    targets: OffscreenTargets,
+    screen_bg: wgpu::BindGroup,
+    screen_buf: wgpu::Buffer,
+    shader_bg: wgpu::BindGroup,
+    quad_vbuf: wgpu::Buffer,
+    quad_vbuf_cap: usize,
+    glyph_vbuf: wgpu::Buffer,
+    glyph_vbuf_cap: usize,
+    blur_ubuf: wgpu::Buffer,
+    glass_ubuf: wgpu::Buffer,
+    shader_ubuf: wgpu::Buffer,
+    linear_sampler: wgpu::Sampler,
+    config: wgpu::SurfaceConfiguration,
+    scene_format: wgpu::TextureFormat,
+    max_tex_dim: u32,
+    uniform_align: u32,
+    surface: wgpu::Surface<'static>,
+    queue: wgpu::Queue,
+    device: wgpu::Device,
 }
 
 impl GpuUiEngine {
@@ -1247,6 +1245,11 @@ impl GpuUiEngine {
         }
 
         Some(engine)
+    }
+
+    /// Drains all in-flight GPU work cleanly before tearing down the swapchain/surface on window close.
+    pub fn shutdown(&self) {
+        self.device.poll(wgpu::Maintain::Wait);
     }
 
     /// Registers & compiles a `.knr`-generated WGSL shader into a live GPU `RenderPipeline`.
@@ -2016,8 +2019,8 @@ impl GpuUiEngine {
             _ => {}
         }
 
-        // 4. Text via GPU GlyphAtlas
-        if !node.text.is_empty()
+        // 4. Text via GPU GlyphAtlas (uses pre-wrapped multi-line layout so text never overflows!)
+        if !laid.wrapped_lines.is_empty()
             && !matches!(node.kind, UiKind::Shader | UiKind::Image | UiKind::Slider)
         {
             let (tr, tg, tb, ta) = parse_hex_color(&node.color).unwrap_or((248, 250, 252, 255));
@@ -2027,8 +2030,9 @@ impl GpuUiEngine {
                 tb as f32 / 255.0,
                 (ta as f32 / 255.0) * opacity,
             ];
-            let (tw, th) = measurer.measure_text_size(&node.text, node.font_size);
             let [pt, _pr, _pb, pl] = node.effective_pad();
+            let first_line = &laid.wrapped_lines[0];
+            let (tw, th) = measurer.measure_text_size(first_line, node.font_size);
             let (tx, ty) = match node.kind {
                 UiKind::Button | UiKind::Badge => (
                     rect.x + ((rect.w - tw) * 0.5).max(0.0),
@@ -2046,16 +2050,21 @@ impl GpuUiEngine {
             };
             let tx_f = tx + node.style.translate_x;
             let ty_f = ty + node.style.translate_y;
-            self.push_text_glyphs(
-                staging,
-                measurer.font(),
-                &node.text,
-                tx_f,
-                ty_f,
-                node.font_size,
-                scale,
-                color,
-            );
+            for (line_idx, line) in laid.wrapped_lines.iter().enumerate() {
+                if !line.is_empty() {
+                    let ly = ty_f + (line_idx as f32) * laid.line_height;
+                    self.push_text_glyphs(
+                        staging,
+                        measurer.font(),
+                        line,
+                        tx_f,
+                        ly,
+                        node.font_size,
+                        scale,
+                        color,
+                    );
+                }
+            }
             if node.kind == UiKind::Input && is_focused {
                 staging.push_quad(simple_quad(
                     [tx_f + tw + 2.0, ty_f, 2.0, th.max(14.0)],

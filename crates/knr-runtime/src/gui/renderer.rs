@@ -454,12 +454,15 @@ impl UiRenderer {
             stroke_rounded_rect_corners(pixmap, rect, radii, (255, 255, 255, aa), 1.5, xform);
         }
 
-        // 5. Text rendering
-        if !node.text.is_empty() && !matches!(node.kind, UiKind::Shader | UiKind::Image | UiKind::Slider) {
+        // 5. Text rendering (uses pre-wrapped multi-line layout so text never overflows!)
+        if !laid.wrapped_lines.is_empty()
+            && !matches!(node.kind, UiKind::Shader | UiKind::Image | UiKind::Slider)
+        {
             let (tr, tg, tb, ta) = parse_hex_color(&node.color).unwrap_or((248, 250, 252, 255));
             let color = (tr, tg, tb, (ta as f32 * opacity).round().clamp(0.0, 255.0) as u8);
-            let (tw, th) = self.measure_text_size(&node.text, node.font_size);
             let [pt, _pr, _pb, pl] = node.effective_pad();
+            let first_line = &laid.wrapped_lines[0];
+            let (tw, th) = self.measure_text_size(first_line, node.font_size);
             let (tx, ty) = match node.kind {
                 UiKind::Button | UiKind::Badge => (
                     rect.x + ((rect.w - tw) * 0.5).max(0.0),
@@ -477,7 +480,12 @@ impl UiRenderer {
             };
             let tx_final = tx + node.style.translate_x;
             let ty_final = ty + node.style.translate_y;
-            self.draw_text(pixmap, &node.text, tx_final, ty_final, node.font_size, color);
+            for (line_idx, line) in laid.wrapped_lines.iter().enumerate() {
+                if !line.is_empty() {
+                    let ly = ty_final + (line_idx as f32) * laid.line_height;
+                    self.draw_text(pixmap, line, tx_final, ly, node.font_size, color);
+                }
+            }
 
             // Focused text input caret
             if node.kind == UiKind::Input && is_focused {
