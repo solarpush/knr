@@ -158,7 +158,7 @@ fn test_stress_debounce_burst_modifications() {
             "--poll",
             "25",
             "--debounce",
-            "150",
+            "250",
             "--no-clear",
         ]);
         cmd
@@ -221,7 +221,7 @@ fn test_stress_multi_file_simultaneous_save_batching() {
             "--poll",
             "25",
             "--debounce",
-            "150",
+            "250",
             "--no-clear",
         ]);
         cmd

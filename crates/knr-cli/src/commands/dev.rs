@@ -45,13 +45,38 @@ pub fn execute(
         std::thread::sleep(Duration::from_millis(poll_ms.max(20)));
         let current_snapshot = take_snapshot(&watch_root);
 
-        let changed_files = detect_changes(&last_snapshot, &current_snapshot);
+        let mut changed_files = detect_changes(&last_snapshot, &current_snapshot);
         if !changed_files.is_empty() {
-            // Debounce window to let editor finish writing buffers
+            // True trailing-edge debounce: wait until the filesystem stays quiet
+            // for `debounce_ms`, resetting the quiet timer on every burst write.
             if debounce_ms > 0 {
-                std::thread::sleep(Duration::from_millis(debounce_ms));
+                let mut settled_snapshot = current_snapshot;
+                let target_quiet = Duration::from_millis(debounce_ms);
+                let step = Duration::from_millis(poll_ms.min(debounce_ms).clamp(10, 40));
+                let mut last_change_at = std::time::Instant::now();
+                let max_wait_start = last_change_at;
+                let max_total_wait = Duration::from_millis(debounce_ms.saturating_mul(10).max(1500));
+
+                while last_change_at.elapsed() < target_quiet
+                    && max_wait_start.elapsed() < max_total_wait
+                {
+                    std::thread::sleep(step);
+                    let probe = take_snapshot(&watch_root);
+                    let more_changes = detect_changes(&settled_snapshot, &probe);
+                    if !more_changes.is_empty() {
+                        for p in more_changes {
+                            if !changed_files.contains(&p) {
+                                changed_files.push(p);
+                            }
+                        }
+                        settled_snapshot = probe;
+                        last_change_at = std::time::Instant::now();
+                    }
+                }
+                last_snapshot = settled_snapshot;
+            } else {
+                last_snapshot = take_snapshot(&watch_root);
             }
-            last_snapshot = take_snapshot(&watch_root);
 
             // If knr.toml changed, re-resolve entrypoint
             if changed_files.iter().any(|p| p.file_name().and_then(|n| n.to_str()) == Some("knr.toml")) {
@@ -201,16 +226,17 @@ fn run_cycle(entry: &Path, gas: u64, trace: bool) -> Result<(), String> {
 
     let module = if is_knr {
         let src = fs::read_to_string(entry).map_err(|e| format!("IO Error reading '{}': {e}", entry.display()))?;
-        let prog = knr_core::syntax::parse_knr(&src).map_err(|e| format!("Syntax Error: {e}"))?;
+        let _prog = knr_core::syntax::parse_knr(&src).map_err(|e| format!("Syntax Error: {e}"))?;
 
-        if let Err(diagnostics) = knr_verify::verify_program(&prog) {
-            for diag in &diagnostics {
-                eprintln!("{diag}");
+        match knr_verify::verify_program_from_file(entry) {
+            Ok(m) => m,
+            Err(diagnostics) => {
+                for diag in &diagnostics {
+                    eprintln!("{diag}");
+                }
+                return Err(format!("Verification failed with {} diagnostic(s)", diagnostics.len()));
             }
-            return Err(format!("Verification failed with {} diagnostic(s)", diagnostics.len()));
         }
-
-        knr_core::lower::lower_program_from_file(entry).map_err(|e| format!("Lowering Error: {e}"))?
     } else {
         let module = knr_core::load_module_from_path(entry).map_err(|e| format!("Parse Error: {e}"))?;
 
