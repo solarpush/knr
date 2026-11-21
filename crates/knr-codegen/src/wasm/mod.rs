@@ -303,12 +303,14 @@ impl WasmBackend {
                             needs = true;
                             break;
                         }
-                        Op::Free(r) => {
-                            // Only need external free import if freeing buf/map
-                            if func.params.iter().any(|(pr, t)| pr == r && matches!(t, Type::Buf | Type::Map(_, _))) {
-                                needs = true;
-                                break;
-                            }
+                        // Only need external free import if freeing buf/map
+                        Op::Free(r)
+                            if func.params.iter().any(|(pr, t)| {
+                                pr == r && matches!(t, Type::Buf | Type::Map(_, _))
+                            }) =>
+                        {
+                            needs = true;
+                            break;
                         }
                         _ => {}
                     }

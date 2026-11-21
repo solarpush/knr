@@ -30,10 +30,16 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Build Rust Runtime Staticlib
+        run: cargo build -p knr-runtime
+
       - name: Run Workspace Tests
         run: cargo test --workspace
 
-      - name: Verify Self-Hosted Site & SSR Server (.ssa)
+      - name: Verify Self-Hosted Site, Examples & Built-in Tests
         run: |
           cargo run -p knr-cli -- check site/site.ssa
           cargo run -p knr-cli -- check site/server.ssa
+          cargo run -p knr-cli -- check examples/http_server.knr
+          cargo run -p knr-cli -- check examples/counter_app.knr
+          cargo run -p knr-cli -- test examples/counter_app.knr

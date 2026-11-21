@@ -35,6 +35,9 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Build Rust Runtime Staticlib
+        run: cargo build -p knr-runtime
+
       - name: Run Workspace Tests
         run: cargo test --workspace
 
@@ -85,12 +88,12 @@ jobs:
             rm -f "${toml}.bak"
           done
 
-      - name: Build knr release binary
+      - name: Build knr release binary and runtime staticlib
         shell: bash
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
-          cargo build --release --target "${{ matrix.target }}" -p knr-cli --bin knr
+          cargo build --release --target "${{ matrix.target }}" -p knr-runtime -p knr-cli --bin knr
 
       - name: Package archive & SHA256 checksum
         shell: bash
@@ -98,9 +101,10 @@ jobs:
           mkdir -p dist/stage
           cp "target/${{ matrix.target }}/release/knr" dist/stage/knr
           chmod 755 dist/stage/knr
+          cp "target/${{ matrix.target }}/release/libknr_runtime.a" dist/stage/libknr_runtime.a
           cp README.md SPEC.md install.sh dist/stage/
           ARCHIVE="knr-${{ matrix.target }}.tar.gz"
-          tar -czf "dist/${ARCHIVE}" -C dist/stage knr README.md SPEC.md install.sh
+          tar -czf "dist/${ARCHIVE}" -C dist/stage knr libknr_runtime.a README.md SPEC.md install.sh
           cd dist
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"

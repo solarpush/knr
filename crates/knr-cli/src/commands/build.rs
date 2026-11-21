@@ -169,6 +169,19 @@ pub fn execute(file: &Path, target: BuildTarget, output: &Path) -> Result<(), Cl
                 .arg("-ldl")
                 .arg("-lm");
 
+            #[cfg(target_os = "macos")]
+            {
+                for fw in [
+                    "AppKit",
+                    "CoreFoundation",
+                    "CoreGraphics",
+                    "Foundation",
+                    "QuartzCore",
+                ] {
+                    cmd.arg("-framework").arg(fw);
+                }
+            }
+
             // If the module does not define `main`, wire ENTRY_FN to its first function
             if module.get_function("main").is_none() {
                 if let Some(entry_func) = module.functions.first() {

@@ -182,6 +182,19 @@ main() {
     chmod 755 "${DEST_BIN}.tmp.$$"
     mv -f "${DEST_BIN}.tmp.$$" "$DEST_BIN"
 
+    # Install companion Rust runtime staticlib (enables `knr build --target native` without Rust installed)
+    if [ -f "${EXTRACT_DIR}/libknr_runtime.a" ]; then
+        RT_SRC="${EXTRACT_DIR}/libknr_runtime.a"
+    else
+        RT_SRC="$(find "$EXTRACT_DIR" -type f -name libknr_runtime.a | head -n 1 || true)"
+    fi
+    if [ -n "${RT_SRC:-}" ] && [ -f "$RT_SRC" ]; then
+        DEST_RT="${INSTALL_DIR}/libknr_runtime.a"
+        cp "$RT_SRC" "${DEST_RT}.tmp.$$"
+        chmod 644 "${DEST_RT}.tmp.$$"
+        mv -f "${DEST_RT}.tmp.$$" "$DEST_RT"
+    fi
+
     INSTALLED_VER="$("$DEST_BIN" --version 2>/dev/null || echo "knr ${TAG}")"
     success "Installed ${INSTALLED_VER} to ${DEST_BIN}"
 

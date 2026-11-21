@@ -810,10 +810,20 @@ fn test_update_check_and_self_replacement_with_install_sh() {
         fs::set_permissions(&mock_bin, perms).unwrap();
     }
 
+    let mock_rt = stage_dir.join("libknr_runtime.a");
+    fs::write(&mock_rt, b"!<arch>\nmock-knr-runtime-v9.9.9\n").unwrap();
+
     let archive_name = format!("knr-{target}.tar.gz");
     let archive_path = work_dir.join(&archive_name);
     let tar_status = Command::new("tar")
-        .args(["-czf", archive_path.to_str().unwrap(), "-C", stage_dir.to_str().unwrap(), "knr"])
+        .args([
+            "-czf",
+            archive_path.to_str().unwrap(),
+            "-C",
+            stage_dir.to_str().unwrap(),
+            "knr",
+            "libknr_runtime.a",
+        ])
         .status()
         .expect("tar -czf");
     assert!(tar_status.success());
@@ -856,6 +866,11 @@ fn test_update_check_and_self_replacement_with_install_sh() {
         .output()
         .expect("run updated binary");
     assert_eq!(String::from_utf8_lossy(&ver_out.stdout).trim(), "knr 9.9.9");
+    let updated_rt = work_dir.join("libknr_runtime.a");
+    assert!(
+        updated_rt.is_file(),
+        "knr update must install companion libknr_runtime.a next to knr binary"
+    );
 
     // 4. Test `install.sh` end-to-end with local release URL
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -879,6 +894,10 @@ fn test_update_check_and_self_replacement_with_install_sh() {
 
     let installed_bin = install_dir.join("knr");
     assert!(installed_bin.is_file(), "install.sh must install knr binary");
+    assert!(
+        install_dir.join("libknr_runtime.a").is_file(),
+        "install.sh must install companion libknr_runtime.a next to knr binary"
+    );
     let installed_ver = Command::new(&installed_bin)
         .arg("--version")
         .output()

@@ -267,6 +267,17 @@ fn install_archive(download_url: &str, dest_bin: &Path) -> Result<(), CliError> 
             return Err(CliError::Io(e));
         }
 
+        // Also update companion Rust runtime staticlib if bundled in the release archive
+        if let Some(extracted_rt) = find_binary_in_dir(&extract_dir, "libknr_runtime.a") {
+            let staged_rt = parent_dir.join(format!(".libknr_runtime.a.new.{pid}"));
+            let dest_rt = parent_dir.join("libknr_runtime.a");
+            fs::copy(&extracted_rt, &staged_rt).map_err(CliError::Io)?;
+            if let Err(e) = fs::rename(&staged_rt, &dest_rt) {
+                let _ = fs::remove_file(&staged_rt);
+                return Err(CliError::Io(e));
+            }
+        }
+
         Ok(())
     })();
 

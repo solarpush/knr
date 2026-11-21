@@ -299,8 +299,8 @@ fn build_rounded_rect_path(rect: LayoutRect, radius: f32) -> Option<tiny_skia::P
         return pb.finish();
     }
 
-    // Standard cubic Bezier approximation for quarter-circle (k = 0.55228475)
-    let k = r * 0.55228475;
+    // Standard cubic Bezier approximation for quarter-circle (k = 0.5522848)
+    let k = r * 0.552_284_8;
     pb.move_to(x + r, y);
     pb.line_to(x + w - r, y);
     pb.cubic_to(x + w - r + k, y, x + w, y + r - k, x + w, y + r);
@@ -353,12 +353,12 @@ fn stroke_rounded_rect(
 pub fn pixmap_to_softbuffer_u32(pixmap: &Pixmap, dst: &mut [u32]) {
     let src = pixmap.data();
     let count = dst.len().min(src.len() / 4);
-    for i in 0..count {
+    for (i, pixel) in dst.iter_mut().enumerate().take(count) {
         let base = i * 4;
         let r = src[base] as u32;
         let g = src[base + 1] as u32;
         let b = src[base + 2] as u32;
-        dst[i] = (r << 16) | (g << 8) | b;
+        *pixel = (r << 16) | (g << 8) | b;
     }
 }
 
