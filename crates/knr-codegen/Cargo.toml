@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 knr-core = { path = "../knr-core" }
-knr-verify = { path = "../knr-verify" }
 knr-runtime = { path = "../knr-runtime" }
 cranelift = { workspace = true }
 cranelift-module = { workspace = true }
@@ -20,6 +19,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 knr-interp = { path = "../knr-interp" }
+knr-verify = { path = "../knr-verify" }
 proptest = { workspace = true }
 
 [[test]]
