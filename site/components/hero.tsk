@@ -1,0 +1,284 @@
+// ============================================================================
+// knr Official Showcase -- Editorial Hero & Cinema GPU Stage (`site/components/hero.tsk`)
+// ============================================================================
+
+import { Column, Row, Stack, Badge, Text, Button, Shader, Icon } from "std/ui";
+import { State, active_shader_fn_name, active_shader_label } from "../state.tsk";
+import { knr_hero_nebula, knr_sdf_crystal, knr_quantum_grid } from "../shaders.tsk";
+
+export function ShaderStage(s: readonly State, prefix: string, height: f64): Widget {
+    const fn_name = active_shader_fn_name(s.active_shader);
+    const label = active_shader_label(s.active_shader);
+    const e_pct = toInt(s.energy * 100.0);
+    const h_pct = toInt(s.hue_shift * 100.0);
+    const d_pct = toInt(s.depth * 100.0);
+
+    return (
+        <Stack
+            key={`${prefix}_stage_stack`}
+            w="full"
+            radius={16}
+            border="#ffffff18"
+            borderW={1}
+            overflow="hidden"
+            shadowY={18}
+            shadowBlur={42}
+            shadowColor="#00000080"
+        >
+            {s.active_shader === 1 ? (
+                <Shader
+                    key={`${prefix}_canvas_crystal`}
+                    fn={knr_sdf_crystal}
+                    h={height}
+                    radius={16}
+                    uniforms={[s.energy, s.hue_shift, s.depth]}
+                />
+            ) : s.active_shader === 2 ? (
+                <Shader
+                    key={`${prefix}_canvas_grid`}
+                    fn={knr_quantum_grid}
+                    h={height}
+                    radius={16}
+                    uniforms={[s.energy, s.hue_shift, s.depth]}
+                />
+            ) : (
+                <Shader
+                    key={`${prefix}_canvas_nebula`}
+                    fn={knr_hero_nebula}
+                    h={height}
+                    radius={16}
+                    uniforms={[s.energy, s.hue_shift, s.depth]}
+                />
+            )}
+
+            <Row
+                key={`${prefix}_stage_hud`}
+                w="full"
+                p={14}
+                justify="between"
+                align="start"
+                z={2}
+            >
+                <Badge bg="#06080fcc" color="#38bdf8" border="#ffffff1a">
+                    {`@shader ${fn_name}()`}
+                </Badge>
+                <Badge bg="#06080fcc" color="#cbd5e1" border="#ffffff16">
+                    {`${label} | E ${e_pct}% | H ${h_pct}% | D ${d_pct}%`}
+                </Badge>
+            </Row>
+        </Stack>
+    );
+}
+
+export function ShaderSwitcher(s: readonly State, prefix: string): Widget {
+    return (
+        <Row key={`${prefix}_switcher`} align="center" gap={8}>
+            <Button
+                key={`${prefix}_sw_nebula`}
+                onClick="shader_nebula"
+                bg={s.active_shader === 0 ? "#141f38" : "#0b0f1c"}
+                border={s.active_shader === 0 ? "#38bdf866" : "#ffffff14"}
+                hoverBg="#11182c"
+                hoverBorder="#38bdf855"
+                px={13}
+                py={8}
+                radius={9}
+                gap={7}
+                align="center"
+            >
+                <Icon
+                    name="sparkles"
+                    size={14}
+                    color={s.active_shader === 0 ? "#38bdf8" : "#64748b"}
+                />
+                <Text
+                    size={13}
+                    weight="semibold"
+                    color={s.active_shader === 0 ? "#f8fafc" : "#94a3b8"}
+                >
+                    Aurora Silk
+                </Text>
+            </Button>
+
+            <Button
+                key={`${prefix}_sw_crystal`}
+                onClick="shader_crystal"
+                bg={s.active_shader === 1 ? "#1a1936" : "#0b0f1c"}
+                border={s.active_shader === 1 ? "#818cf866" : "#ffffff14"}
+                hoverBg="#11182c"
+                hoverBorder="#818cf855"
+                px={13}
+                py={8}
+                radius={9}
+                gap={7}
+                align="center"
+            >
+                <Icon
+                    name="cube"
+                    size={14}
+                    color={s.active_shader === 1 ? "#818cf8" : "#64748b"}
+                />
+                <Text
+                    size={13}
+                    weight="semibold"
+                    color={s.active_shader === 1 ? "#f8fafc" : "#94a3b8"}
+                >
+                    3D SDF Crystal
+                </Text>
+            </Button>
+
+            <Button
+                key={`${prefix}_sw_grid`}
+                onClick="shader_grid"
+                bg={s.active_shader === 2 ? "#141f38" : "#0b0f1c"}
+                border={s.active_shader === 2 ? "#38bdf866" : "#ffffff14"}
+                hoverBg="#11182c"
+                hoverBorder="#38bdf855"
+                px={13}
+                py={8}
+                radius={9}
+                gap={7}
+                align="center"
+            >
+                <Icon
+                    name="layers"
+                    size={14}
+                    color={s.active_shader === 2 ? "#38bdf8" : "#64748b"}
+                />
+                <Text
+                    size={13}
+                    weight="semibold"
+                    color={s.active_shader === 2 ? "#f8fafc" : "#94a3b8"}
+                >
+                    Architectural Grid
+                </Text>
+            </Button>
+        </Row>
+    );
+}
+
+export function Hero(s: readonly State): Widget {
+    return (
+        <Column key="editorial_hero" w="full" pt={12} gap={22}>
+            <Column gap={14}>
+                <Row align="center" gap={8}>
+                    <Icon name="sparkles" size={14} color="#38bdf8" />
+                    <Text size={13} weight="semibold" color="#38bdf8">
+                        knr v0.3.0
+                    </Text>
+                    <Text size={13} color="#64748b">
+                        Strict .tsk TSX | Generics & Typed Actions | Unified GPU | Agentic Flow Audit
+                    </Text>
+                </Row>
+
+                <Text
+                    key="hero_headline"
+                    size={44}
+                    weight="extrabold"
+                    font="display"
+                    letterSpacing={-1.2}
+                    lineHeight={1.10}
+                    color="#f8fafc"
+                >
+                    {s.headline}
+                </Text>
+
+                <Text
+                    key="hero_lead"
+                    size={16}
+                    color="#94a3b8"
+                    lineHeight={1.55}
+                    maxW={760}
+                >
+                    One statically verified linear language compiled from Strict TSX to native Cranelift binaries, zero-import WebAssembly, and pixel-identical GPU UI across desktop, web, and headless visual audits.
+                </Text>
+
+                <Row align="center" gap={12} pt={4}>
+                    <Button
+                        key="hero_cta_studio"
+                        onClick="tab_shaders"
+                        bg="linear(135, #0ea5e9, #6366f1)"
+                        color="#ffffff"
+                        border="#38bdf866"
+                        hoverScale={1.02}
+                        px={18}
+                        py={11}
+                        radius={10}
+                        gap={8}
+                        align="center"
+                    >
+                        <Text size={14} weight="semibold" color="#ffffff">
+                            Open GPU Studio
+                        </Text>
+                        <Icon name="arrow-right" size={15} color="#ffffff" />
+                    </Button>
+
+                    <Button
+                        key="hero_cta_safety"
+                        onClick="tab_safety"
+                        bg="#0b0f1c"
+                        border="#ffffff18"
+                        hoverBg="#11182c"
+                        hoverBorder="#38bdf866"
+                        px={16}
+                        py={11}
+                        radius={10}
+                        gap={8}
+                        align="center"
+                    >
+                        <Icon name="shield" size={15} color="#94a3b8" />
+                        <Text size={14} weight="medium" color="#e2e8f0">
+                            Linear Safety
+                        </Text>
+                    </Button>
+
+                    <Button
+                        key="hero_cta_toolchain"
+                        onClick="tab_toolchain"
+                        bg="#0b0f1c"
+                        border="#ffffff18"
+                        hoverBg="#11182c"
+                        hoverBorder="#38bdf866"
+                        px={16}
+                        py={11}
+                        radius={10}
+                        gap={8}
+                        align="center"
+                    >
+                        <Icon name="terminal" size={15} color="#94a3b8" />
+                        <Text size={14} weight="medium" color="#e2e8f0">
+                            Toolchain
+                        </Text>
+                    </Button>
+                </Row>
+
+                <Row
+                    key="hero_install_bar"
+                    align="center"
+                    gap={10}
+                    bg="#0b0f1c"
+                    border="#ffffff14"
+                    radius={10}
+                    px={14}
+                    py={10}
+                    maxW={680}
+                >
+                    <Icon name="terminal" size={14} color="#38bdf8" />
+                    <Text size={13} font="mono" color="#cbd5e1">
+                        curl -fsSL https://raw.githubusercontent.com/solarpush/knr/main/install.sh | sh
+                    </Text>
+                </Row>
+            </Column>
+
+            <Column gap={12}>
+                <ShaderStage s={s} prefix="hero" height={340} />
+                <Row align="center" justify="between" gap={12}>
+                    <ShaderSwitcher s={s} prefix="hero" />
+                    <Text size={13} color="#64748b">
+                        Move pointer across viewport to steer light and 3D camera orbit
+                    </Text>
+                </Row>
+            </Column>
+        </Column>
+    );
+}

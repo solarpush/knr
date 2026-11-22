@@ -1,5 +1,5 @@
 // Error: ParseError
-fn broken() -> i64 {
-    let @#$ = 123;
+function broken(): i64 {
+    const @#$ = 123;
     return 0;
 }

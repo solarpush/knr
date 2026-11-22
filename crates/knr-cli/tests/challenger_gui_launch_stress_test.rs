@@ -128,15 +128,15 @@ bb4:
 
 #[test]
 fn test_gui_complex_cfg_while_loop_with_early_return_knr() {
-    let temp = TempFile::new("while_early_ret.knr");
+    let temp = TempFile::new("while_early_ret.tsk");
     fs::write(
         temp.path(),
         r#"
-fn main() -> i64 {
-    let target = 0;
-    let i = 0;
-    while i < 100 {
-        if i == target {
+export function main(): i64 {
+    const target: i64 = 0;
+    let i: i64 = 0;
+    while (i < 100) {
+        if (i === target) {
             return 42;
         }
         i = i + 1;
@@ -145,7 +145,7 @@ fn main() -> i64 {
 }
 "#,
     )
-    .expect("write while_early_ret.knr");
+    .expect("write while_early_ret.tsk");
 
     let out = knr_cmd()
         .args(["run", temp.path().to_str().unwrap(), "--gui"])
@@ -277,24 +277,24 @@ fn no_blocks() -> void {
 
 #[test]
 fn test_gui_empty_function_knr() {
-    let temp = TempFile::new("empty_fn.knr");
+    let temp = TempFile::new("empty_fn.tsk");
     fs::write(
         temp.path(),
         r#"
-fn main() {
+export function main(): void {
 }
 "#,
     )
-    .expect("write empty_fn.knr");
+    .expect("write empty_fn.tsk");
 
     let out = knr_cmd()
         .args(["run", temp.path().to_str().unwrap(), "--gui"])
         .output()
-        .expect("execute knr run empty_fn.knr --gui");
+        .expect("execute knr run empty_fn.tsk --gui");
 
     assert!(
         out.status.success(),
-        "Empty .knr function must lower to valid SSA and render GUI, stderr: {}",
+        "Empty .tsk function must lower to valid SSA and render GUI, stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -304,21 +304,21 @@ fn main() {
 
 #[test]
 fn test_gui_file_with_no_functions() {
-    let temp = TempFile::new("no_fn.knr");
+    let temp = TempFile::new("no_fn.tsk");
     fs::write(
         temp.path(),
         r#"
-struct EmptyRecord {
-    id: i64,
-}
+export type EmptyRecord = {
+    id: i64;
+};
 "#,
     )
-    .expect("write no_fn.knr");
+    .expect("write no_fn.tsk");
 
     let out = knr_cmd()
         .args(["run", temp.path().to_str().unwrap(), "--gui"])
         .output()
-        .expect("execute knr run no_fn.knr --gui");
+        .expect("execute knr run no_fn.tsk --gui");
 
     assert!(
         !out.status.success(),
@@ -337,17 +337,17 @@ struct EmptyRecord {
 
 #[test]
 fn test_gui_extreme_gas_zero() {
-    let temp = TempFile::new("gas_zero.knr");
+    let temp = TempFile::new("gas_zero.tsk");
     fs::write(
         temp.path(),
         r#"
-fn main() -> i64 {
-    let x = 42;
+export function main(): i64 {
+    const x: i64 = 42;
     return x;
 }
 "#,
     )
-    .expect("write gas_zero.knr");
+    .expect("write gas_zero.tsk");
 
     let out = knr_cmd()
         .args([
@@ -373,18 +373,18 @@ fn main() -> i64 {
 
 #[test]
 fn test_gui_extreme_gas_one_exhaustion() {
-    let temp = TempFile::new("gas_one.knr");
+    let temp = TempFile::new("gas_one.tsk");
     fs::write(
         temp.path(),
         r#"
-fn main() -> i64 {
-    let a = 1;
-    let b = 2;
+export function main(): i64 {
+    const a: i64 = 1;
+    const b: i64 = 2;
     return a + b;
 }
 "#,
     )
-    .expect("write gas_one.knr");
+    .expect("write gas_one.tsk");
 
     let out = knr_cmd()
         .args([
@@ -541,19 +541,19 @@ bb0:
 
 #[test]
 fn test_gui_simultaneous_trace_output() {
-    let temp = TempFile::new("simul_trace.knr");
+    let temp = TempFile::new("simul_trace.tsk");
     fs::write(
         temp.path(),
         r#"
-fn main() -> i64 {
-    let x = 10;
-    let y = 20;
-    let z = x + y;
+export function main(): i64 {
+    const x: i64 = 10;
+    const y: i64 = 20;
+    const z: i64 = x + y;
     return z;
 }
 "#,
     )
-    .expect("write simul_trace.knr");
+    .expect("write simul_trace.tsk");
 
     let out = knr_cmd()
         .args([
@@ -584,7 +584,7 @@ fn main() -> i64 {
 
     assert!(trace_value.is_array());
     let arr = trace_value.as_array().unwrap();
-    assert!(arr.len() >= 3, "trace should have records for let x, y, z, return");
+    assert!(arr.len() >= 3, "trace should have records for const x, y, z, return");
     let first = &arr[0];
     assert!(first.get("step").is_some());
     assert!(first.get("opcode").is_some());
@@ -592,16 +592,16 @@ fn main() -> i64 {
 
 #[test]
 fn test_gui_short_flag_g_with_trace() {
-    let temp = TempFile::new("short_g_trace.knr");
+    let temp = TempFile::new("short_g_trace.tsk");
     fs::write(
         temp.path(),
         r#"
-fn main() -> i64 {
+export function main(): i64 {
     return 999;
 }
 "#,
     )
-    .expect("write short_g_trace.knr");
+    .expect("write short_g_trace.tsk");
 
     let out = knr_cmd()
         .args([
@@ -628,22 +628,22 @@ fn main() -> i64 {
 
 #[test]
 fn test_gui_fallback_single_function_no_main() {
-    let temp = TempFile::new("no_main_single.knr");
+    let temp = TempFile::new("no_main_single.tsk");
     fs::write(
         temp.path(),
         r#"
-fn calculate_metric(factor: i64) -> i64 {
-    let base = 100;
+export function calculate_metric(factor: i64): i64 {
+    const base: i64 = 100;
     return base + factor;
 }
 "#,
     )
-    .expect("write no_main_single.knr");
+    .expect("write no_main_single.tsk");
 
     let out = knr_cmd()
         .args(["run", temp.path().to_str().unwrap(), "--gui"])
         .output()
-        .expect("execute knr run no_main_single.knr --gui");
+        .expect("execute knr run no_main_single.tsk --gui");
 
     assert!(
         out.status.success(),
@@ -657,26 +657,26 @@ fn calculate_metric(factor: i64) -> i64 {
 
 #[test]
 fn test_gui_fallback_multiple_functions_no_main() {
-    let temp = TempFile::new("no_main_multi.knr");
+    let temp = TempFile::new("no_main_multi.tsk");
     fs::write(
         temp.path(),
         r#"
-fn first_entry(x: i64) -> i64 {
-    let doubled = x * 2;
+export function first_entry(x: i64): i64 {
+    const doubled: i64 = x * 2;
     return doubled;
 }
 
-fn secondary_fn(y: i64) -> i64 {
+export function secondary_fn(y: i64): i64 {
     return y + 10;
 }
 "#,
     )
-    .expect("write no_main_multi.knr");
+    .expect("write no_main_multi.tsk");
 
     let out = knr_cmd()
         .args(["run", temp.path().to_str().unwrap(), "--gui"])
         .output()
-        .expect("execute knr run no_main_multi.knr --gui");
+        .expect("execute knr run no_main_multi.tsk --gui");
 
     assert!(
         out.status.success(),

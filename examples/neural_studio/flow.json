@@ -1,0 +1,31 @@
+{
+  "width": 1280,
+  "height": 900,
+  "scale": 1.5,
+  "time": 1.25,
+  "steps": [
+    { "type": "assert_text", "contains": "Neural Studio" },
+    { "type": "assert_audit", "max_errors": 0, "max_warnings": 0 },
+    { "type": "click", "key": "btn_nav_pipeline" },
+    { "type": "assert_text", "contains": "Compute Job Pipeline" },
+    { "type": "input", "key": "input_new_job", "value": "Compile WGSL Attention" },
+    { "type": "click", "key": "btn_add_job" },
+    { "type": "assert_text", "contains": "Compile WGSL Attention" },
+    { "type": "click", "key": "btn_complete_next" },
+    { "type": "click", "key": "btn_cycle_theme" },
+    { "type": "assert_text", "contains": "Theme: Light" },
+    { "type": "assert_audit", "max_errors": 0, "max_warnings": 0 },
+    { "type": "click", "key": "btn_nav_shaders" },
+    { "type": "click", "key": "btn_shader_orb" },
+    { "type": "slider", "key": "sl_energy", "value": 0.85 },
+    { "type": "tick", "dt": 0.5 },
+    { "type": "assert_text", "contains": "3D SDF Neural Core" },
+    { "type": "assert_audit", "max_errors": 0, "max_warnings": 0 },
+    { "type": "click", "key": "btn_cycle_theme" },
+    { "type": "assert_text", "contains": "Theme: Nord" },
+    { "type": "assert_audit", "max_errors": 0, "max_warnings": 0 },
+    { "type": "click", "key": "btn_cycle_theme" },
+    { "type": "assert_text", "contains": "Theme: Solar" },
+    { "type": "assert_audit", "max_errors": 0, "max_warnings": 0 }
+  ]
+}

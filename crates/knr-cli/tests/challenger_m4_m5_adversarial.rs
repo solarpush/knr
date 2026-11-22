@@ -86,7 +86,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn test_adv_site_site_ssa_diamond_dependency_resolution() {
-    let site_ssa = repo_root().join("site").join("site.ssa");
+    let site_ssa = repo_root().join("tests/fixtures/legacy_site").join("site.ssa");
     assert!(site_ssa.exists(), "site/site.ssa must exist");
 
     // Load via multi-file loader
@@ -119,7 +119,7 @@ fn test_adv_site_site_ssa_diamond_dependency_resolution() {
 
 #[test]
 fn test_adv_site_server_ssa_diamond_and_schemas_resolution() {
-    let server_ssa = repo_root().join("site").join("server.ssa");
+    let server_ssa = repo_root().join("tests/fixtures/legacy_site").join("server.ssa");
     assert!(server_ssa.exists(), "site/server.ssa must exist");
 
     let module = load_module_from_path(&server_ssa).expect("load site/server.ssa with schemas & diamond imports");
@@ -348,11 +348,11 @@ bb0:
 #[test]
 fn test_adv_topology_injected_schema_into_site_component_rejected() {
     let td = TempDir::new("inject_site_schema");
-    let vdom_orig = fs::read_to_string(repo_root().join("site").join("schemas").join("vdom.ssa.schema")).unwrap();
+    let vdom_orig = fs::read_to_string(repo_root().join("tests/fixtures/legacy_site").join("schemas").join("vdom.ssa.schema")).unwrap();
     td.write_file("schemas/vdom.ssa.schema", &vdom_orig);
 
     // Copy site/components/nav.ssa and inject an inline schema
-    let nav_orig = fs::read_to_string(repo_root().join("site").join("components").join("nav.ssa")).unwrap();
+    let nav_orig = fs::read_to_string(repo_root().join("tests/fixtures/legacy_site").join("components").join("nav.ssa")).unwrap();
     let corrupted = format!("{nav_orig}\nschema InjectedSchema {{\n    0: bad i64,\n}}\n");
     let corrupted_path = td.write_file("components/nav_bad.ssa", &corrupted);
 
@@ -402,7 +402,7 @@ bb0:
 #[test]
 fn test_adv_topology_injected_function_into_site_schema_rejected() {
     let td = TempDir::new("inject_site_fn");
-    let vdom_orig = fs::read_to_string(repo_root().join("site").join("schemas").join("vdom.ssa.schema")).unwrap();
+    let vdom_orig = fs::read_to_string(repo_root().join("tests/fixtures/legacy_site").join("schemas").join("vdom.ssa.schema")).unwrap();
     let corrupted = format!("{vdom_orig}\nfn bad_helper() -> void {{\nbb0:\n    ret\n}}\n");
     let corrupted_path = td.write_file("vdom_bad.ssa.schema", &corrupted);
 
@@ -692,8 +692,8 @@ bb0:
 #[test]
 fn test_adv_site_cli_check_site_and_server() {
     let root = repo_root();
-    let site_ssa = root.join("site").join("site.ssa");
-    let server_ssa = root.join("site").join("server.ssa");
+    let site_ssa = root.join("tests/fixtures/legacy_site").join("site.ssa");
+    let server_ssa = root.join("tests/fixtures/legacy_site").join("server.ssa");
 
     // 1. Check site.ssa
     let out_site = knr_cmd()
@@ -739,7 +739,7 @@ fn test_adv_site_cli_check_site_and_server() {
 #[test]
 fn test_adv_site_cli_asm_and_disasm_site_ssa() {
     let root = repo_root();
-    let site_ssa = root.join("site").join("site.ssa");
+    let site_ssa = root.join("tests/fixtures/legacy_site").join("site.ssa");
 
     let td = TempDir::new("site_asm");
     let out_knrbin = td.path().join("test_site.knrbin");
@@ -788,7 +788,7 @@ fn test_adv_site_cli_asm_and_disasm_site_ssa() {
 #[test]
 fn test_adv_site_cli_run_generates_valid_html_matching_index_html() {
     let root = repo_root();
-    let site_ssa = root.join("site").join("site.ssa");
+    let site_ssa = root.join("tests/fixtures/legacy_site").join("site.ssa");
 
     // Execute legacy modular `knr run site/site.ssa` and verify full SSR HTML integrity
     let run_out = knr_cmd()
@@ -846,11 +846,16 @@ fn test_adv_site_index_html_structural_and_content_integrity() {
     let wasm_len = fs::metadata(&app_wasm_path).expect("stat site/app.wasm").len();
     assert!(wasm_len > 1000, "site/app.wasm must be > 1KB, got {wasm_len} bytes");
 
-    // Modern v2 Web/WASM + WebGPU/WebGL2 host generated from site/site.knr
-    assert!(content.contains("data-knr-web-host=\"v2\""));
+    // Unified Flutter-style v3-canvas Canvas+WebGPU/WebGL2 Web Host generated from site/app.tsk
+    assert!(content.contains("data-knr-web-host=\"v3-canvas\""));
+    assert!(content.contains("<canvas id=\"knr-surface\"></canvas>"));
+    assert!(content.contains("id=\"knr-ime-input\""));
     assert!(content.contains("const IS_WIDGET_V2 = true;"));
+    assert!(content.contains("const STYLE_FIELDS = 45;"));
+    assert!(content.contains("__knr_heap"));
     assert!(content.contains("knr_hero_nebula"));
+    assert!(content.contains("knr_sdf_crystal"));
+    assert!(content.contains("knr_quantum_grid"));
     assert!(content.contains("@fragment"));
     assert!(content.contains("#version 300 es"));
-    assert!(content.contains("Built 100% in knr (site/site.knr)"));
 }

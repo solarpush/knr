@@ -25,9 +25,13 @@ use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
 use crate::gui::font::get_glyph;
-use crate::gui::renderer::{parse_hex_color, RenderInteractionState, UiRenderer};
+use crate::gui::renderer::{
+    decode_image_rgba, paint_vector_icon, parse_hex_color, tokenize_code_line,
+    RenderInteractionState, UiRenderer,
+};
 use crate::gui::ui_tree::{
-    parse_fill_spec, LayoutNode, LayoutRect, ParsedFill, TextMeasurer, UiKind,
+    apply_scroll_offsets, children_need_z_sort, layout_needs_scroll_offsets, parse_fill_spec,
+    sorted_child_indices_by_z, LayoutNode, LayoutRect, ParsedFill, TextMeasurer, UiKind,
 };
 
 // ============================================================================
@@ -79,6 +83,7 @@ struct GlassCompositeUniform {
     use_local_uv: f32,
     rect: [f32; 4],
     radii: [f32; 4],
+    uv_rect: [f32; 4],
 }
 
 /// 128-byte uniform layout matching `knr-codegen::wgsl` `KnrUniforms` byte-for-byte!
@@ -372,6 +377,7 @@ struct GlassUniform {
     use_local_uv: f32,
     rect: vec4<f32>,
     radii: vec4<f32>,
+    uv_rect: vec4<f32>,
 };
 @group(0) @binding(0) var blur_tex: texture_2d<f32>;
 @group(0) @binding(1) var blur_samp: sampler;
@@ -398,7 +404,8 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
     var out: VsOut;
     out.pos = vec4<f32>(ndc, 0.0, 1.0);
     out.local_pos = (q - vec2<f32>(0.5, 0.5)) * gu.rect.zw;
-    out.sample_uv = select(px / gu.viewport, q, gu.use_local_uv > 0.5);
+    let local_uv = mix(gu.uv_rect.xy, gu.uv_rect.zw, q);
+    out.sample_uv = select(px / gu.viewport, local_uv, gu.use_local_uv > 0.5);
     return out;
 }
 
@@ -441,6 +448,12 @@ struct AtlasEntry {
     off_y: f32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum AtlasKey {
+    Glyph(u8, char, u32),
+    Icon(String, u32),
+}
+
 struct GlyphAtlas {
     size: u32,
     texture: wgpu::Texture,
@@ -448,7 +461,7 @@ struct GlyphAtlas {
     cursor_x: u32,
     cursor_y: u32,
     row_h: u32,
-    cache: HashMap<(char, u32), AtlasEntry>,
+    cache: HashMap<AtlasKey, AtlasEntry>,
 }
 
 impl GlyphAtlas {
@@ -498,14 +511,77 @@ impl GlyphAtlas {
         }
     }
 
+    fn upload_coverage(
+        &mut self,
+        queue: &wgpu::Queue,
+        key: AtlasKey,
+        size: (u32, u32),
+        offset: (f32, f32),
+        pixels: &[u8],
+    ) -> AtlasEntry {
+        let (gw, gh) = size;
+        let (off_x, off_y) = offset;
+        if self.cursor_x + gw + 2 >= self.size {
+            self.cursor_x = 1;
+            self.cursor_y += self.row_h + 2;
+            self.row_h = 0;
+        }
+        if self.cursor_y + gh + 2 >= self.size {
+            self.cache.clear();
+            self.cursor_x = 1;
+            self.cursor_y = 1;
+            self.row_h = 0;
+        }
+
+        let ax = self.cursor_x;
+        let ay = self.cursor_y;
+        self.cursor_x += gw + 2;
+        self.row_h = self.row_h.max(gh);
+
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: ax, y: ay, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(gw),
+                rows_per_image: Some(gh),
+            },
+            wgpu::Extent3d {
+                width: gw,
+                height: gh,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let inv = 1.0 / self.size as f32;
+        let entry = AtlasEntry {
+            u0: ax as f32 * inv,
+            v0: ay as f32 * inv,
+            u1: (ax + gw) as f32 * inv,
+            v1: (ay + gh) as f32 * inv,
+            w: gw as f32,
+            h: gh as f32,
+            off_x,
+            off_y,
+        };
+        self.cache.insert(key, entry);
+        entry
+    }
+
     fn get_or_upload(
         &mut self,
         queue: &wgpu::Queue,
+        font_id: u8,
         font: Option<&FontVec>,
         ch: char,
         px_size: u32,
     ) -> Option<AtlasEntry> {
-        let key = (ch, px_size);
+        let key = AtlasKey::Glyph(font_id, ch, px_size);
         if let Some(&entry) = self.cache.get(&key) {
             return Some(entry);
         }
@@ -548,56 +624,30 @@ impl GlyphAtlas {
             (w, h, 0.0, 0.0, buf)
         };
 
-        if self.cursor_x + gw + 2 >= self.size {
-            self.cursor_x = 1;
-            self.cursor_y += self.row_h + 2;
-            self.row_h = 0;
-        }
-        if self.cursor_y + gh + 2 >= self.size {
-            self.cache.clear();
-            self.cursor_x = 1;
-            self.cursor_y = 1;
-            self.row_h = 0;
-        }
+        Some(self.upload_coverage(queue, key, (gw, gh), (off_x, off_y), &pixels))
+    }
 
-        let ax = self.cursor_x;
-        let ay = self.cursor_y;
-        self.cursor_x += gw + 2;
-        self.row_h = self.row_h.max(gh);
-
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x: ax, y: ay, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            &pixels,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(gw),
-                rows_per_image: Some(gh),
-            },
-            wgpu::Extent3d {
-                width: gw,
-                height: gh,
-                depth_or_array_layers: 1,
-            },
+    fn get_or_upload_icon(
+        &mut self,
+        queue: &wgpu::Queue,
+        icon_name: &str,
+        px_size: u32,
+    ) -> Option<AtlasEntry> {
+        let sz = px_size.clamp(8, 256);
+        let key = AtlasKey::Icon(icon_name.to_string(), sz);
+        if let Some(&entry) = self.cache.get(&key) {
+            return Some(entry);
+        }
+        let mut pm = tiny_skia::Pixmap::new(sz, sz)?;
+        paint_vector_icon(
+            &mut pm,
+            LayoutRect::new(0.0, 0.0, sz as f32, sz as f32),
+            icon_name,
+            (255, 255, 255, 255),
+            tiny_skia::Transform::identity(),
         );
-
-        let inv = 1.0 / self.size as f32;
-        let entry = AtlasEntry {
-            u0: ax as f32 * inv,
-            v0: ay as f32 * inv,
-            u1: (ax + gw) as f32 * inv,
-            v1: (ay + gh) as f32 * inv,
-            w: gw as f32,
-            h: gh as f32,
-            off_x,
-            off_y,
-        };
-        self.cache.insert(key, entry);
-        Some(entry)
+        let alpha_buf: Vec<u8> = pm.data().as_chunks::<4>().0.iter().map(|px| px[3]).collect();
+        Some(self.upload_coverage(queue, key, (sz, sz), (0.0, 0.0), &alpha_buf))
     }
 }
 
@@ -605,7 +655,24 @@ impl GlyphAtlas {
 // Ordered Frame Draw Batching (single upload per frame, zero transient allocs)
 // ============================================================================
 
+fn intersect_scissor(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
+    let ax1 = a[0].saturating_add(a[2]);
+    let ay1 = a[1].saturating_add(a[3]);
+    let bx1 = b[0].saturating_add(b[2]);
+    let by1 = b[1].saturating_add(b[3]);
+    let x0 = a[0].max(b[0]);
+    let y0 = a[1].max(b[1]);
+    let x1 = ax1.min(bx1);
+    let y1 = ay1.min(by1);
+    if x1 > x0 && y1 > y0 {
+        [x0, y0, x1 - x0, y1 - y0]
+    } else {
+        [x0, y0, 0, 0]
+    }
+}
+
 enum DrawCmd {
+    SetScissor([u32; 4]),
     Quads(Range<usize>),
     Glyphs(Range<usize>),
     BackdropBlur {
@@ -631,10 +698,13 @@ struct FrameStaging {
     glasses: Vec<GlassCompositeUniform>,
     shaders: Vec<KnrShaderUniforms>,
     cmds: Vec<DrawCmd>,
+    active_scissor: [u32; 4],
+    emitted_scissor: [u32; 4],
 }
 
 impl FrameStaging {
-    fn new() -> Self {
+    fn new(fb_w: u32, fb_h: u32) -> Self {
+        let full = [0, 0, fb_w, fb_h];
         Self {
             quads: Vec::with_capacity(256),
             glyphs: Vec::with_capacity(512),
@@ -642,10 +712,30 @@ impl FrameStaging {
             glasses: Vec::with_capacity(16),
             shaders: Vec::with_capacity(8),
             cmds: Vec::with_capacity(64),
+            active_scissor: full,
+            emitted_scissor: full,
         }
     }
 
+    fn set_scissor(&mut self, rect: [u32; 4]) {
+        self.active_scissor = rect;
+    }
+
+    fn sync_scissor(&mut self) -> bool {
+        if self.active_scissor[2] == 0 || self.active_scissor[3] == 0 {
+            return false;
+        }
+        if self.active_scissor != self.emitted_scissor {
+            self.cmds.push(DrawCmd::SetScissor(self.active_scissor));
+            self.emitted_scissor = self.active_scissor;
+        }
+        true
+    }
+
     fn push_quad(&mut self, q: QuadInstance) {
+        if !self.sync_scissor() {
+            return;
+        }
         let idx = self.quads.len();
         self.quads.push(q);
         if let Some(DrawCmd::Quads(r)) = self.cmds.last_mut() {
@@ -658,7 +748,7 @@ impl FrameStaging {
     }
 
     fn push_glyphs(&mut self, list: Vec<GlyphInstance>) {
-        if list.is_empty() {
+        if list.is_empty() || !self.sync_scissor() {
             return;
         }
         let start = self.glyphs.len();
@@ -672,6 +762,12 @@ impl FrameStaging {
         }
         self.cmds.push(DrawCmd::Glyphs(start..end));
     }
+}
+
+struct CachedGpuImage {
+    bind_group: wgpu::BindGroup,
+    width: u32,
+    height: u32,
 }
 
 // ============================================================================
@@ -697,7 +793,7 @@ pub struct GpuUiEngine {
     // Drop order (top -> bottom): resources & offscreen targets -> surface -> queue -> device
     targets: OffscreenTargets,
     glyph_atlas: GlyphAtlas,
-    image_cache: HashMap<String, Option<wgpu::BindGroup>>,
+    image_cache: HashMap<String, Option<CachedGpuImage>>,
     custom_shaders: HashMap<String, wgpu::RenderPipeline>,
     quad_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
@@ -1350,9 +1446,23 @@ impl GpuUiEngine {
             .write_buffer(&self.screen_buf, 0, bytemuck::bytes_of(&screen));
 
         // 1. Collect all draw calls & upload vertex/uniform buffers ONCE before recording passes
-        let mut staging = FrameStaging::new();
+        let scrolled_owned;
+        let active_root = if let Some(offsets) = state.scroll_offsets {
+            if !offsets.is_empty() && layout_needs_scroll_offsets(layout_root, offsets) {
+                let mut cloned = layout_root.clone();
+                apply_scroll_offsets(&mut cloned, offsets);
+                scrolled_owned = cloned;
+                &scrolled_owned
+            } else {
+                layout_root
+            }
+        } else {
+            layout_root
+        };
+        let mut staging = FrameStaging::new(w, h);
+        let mut scissor_stack: Vec<[u32; 4]> = vec![[0, 0, w, h]];
         self.collect_draw_cmds(
-            layout_root,
+            active_root,
             measurer,
             state,
             cursor_pos,
@@ -1364,10 +1474,12 @@ impl GpuUiEngine {
             scale,
             1.0,
             input_selected_all,
+            &mut scissor_stack,
             &mut staging,
         );
 
-        // Optional translucent vertical pill scrollbar along the right edge
+        // Optional translucent vertical pill scrollbar along the right edge (unclipped to viewport)
+        staging.set_scissor([0, 0, w, h]);
         if let Some((scroll_y, content_height)) = scroll_state {
             if content_height > lh + 2.0 && lh > 24.0 && lw > 16.0 {
                 let max_thumb = (lh - 16.0).max(4.0);
@@ -1486,10 +1598,17 @@ impl GpuUiEngine {
         // Execute ordered GPU draw commands using ONLY persistent buffers & pre-built bind groups
         let quad_stride = std::mem::size_of::<QuadInstance>() as u64;
         let glyph_stride = std::mem::size_of::<GlyphInstance>() as u64;
+        let mut cur_scissor: [u32; 4] = [0, 0, w, h];
 
         for cmd in staging.cmds {
             match cmd {
+                DrawCmd::SetScissor(s) => {
+                    cur_scissor = s;
+                }
                 DrawCmd::Quads(range) if !range.is_empty() => {
+                    if cur_scissor[2] == 0 || cur_scissor[3] == 0 {
+                        continue;
+                    }
                     let count = (range.end - range.start) as u32;
                     let byte_start = (range.start as u64) * quad_stride;
                     let byte_end = (range.end as u64) * quad_stride;
@@ -1507,12 +1626,21 @@ impl GpuUiEngine {
                         occlusion_query_set: None,
                         timestamp_writes: None,
                     });
+                    pass.set_scissor_rect(
+                        cur_scissor[0],
+                        cur_scissor[1],
+                        cur_scissor[2],
+                        cur_scissor[3],
+                    );
                     pass.set_pipeline(&self.quad_pipeline);
                     pass.set_bind_group(0, &self.screen_bg, &[]);
                     pass.set_vertex_buffer(0, self.quad_vbuf.slice(byte_start..byte_end));
                     pass.draw(0..6, 0..count);
                 }
                 DrawCmd::Glyphs(range) if !range.is_empty() => {
+                    if cur_scissor[2] == 0 || cur_scissor[3] == 0 {
+                        continue;
+                    }
                     let count = (range.end - range.start) as u32;
                     let byte_start = (range.start as u64) * glyph_stride;
                     let byte_end = (range.end as u64) * glyph_stride;
@@ -1530,6 +1658,12 @@ impl GpuUiEngine {
                         occlusion_query_set: None,
                         timestamp_writes: None,
                     });
+                    pass.set_scissor_rect(
+                        cur_scissor[0],
+                        cur_scissor[1],
+                        cur_scissor[2],
+                        cur_scissor[3],
+                    );
                     pass.set_pipeline(&self.text_pipeline);
                     pass.set_bind_group(0, &self.screen_bg, &[]);
                     pass.set_bind_group(1, &self.glyph_atlas.bind_group, &[]);
@@ -1541,6 +1675,9 @@ impl GpuUiEngine {
                     blur_slot_2,
                     glass_slot,
                 } => {
+                    if cur_scissor[2] == 0 || cur_scissor[3] == 0 {
+                        continue;
+                    }
                     let off1 = blur_slot_1 * self.uniform_align;
                     let off2 = blur_slot_2 * self.uniform_align;
                     let goff = glass_slot * self.uniform_align;
@@ -1603,6 +1740,12 @@ impl GpuUiEngine {
                             occlusion_query_set: None,
                             timestamp_writes: None,
                         });
+                        p.set_scissor_rect(
+                            cur_scissor[0],
+                            cur_scissor[1],
+                            cur_scissor[2],
+                            cur_scissor[3],
+                        );
                         p.set_pipeline(&self.glass_pipeline);
                         p.set_bind_group(0, &self.targets.glass_blur_bg, &[goff]);
                         p.draw(0..6, 0..1);
@@ -1623,6 +1766,10 @@ impl GpuUiEngine {
                     }
                     let sw = x1 - x0;
                     let sh = y1 - y0;
+                    let sc = intersect_scissor(cur_scissor, [x0, y0, sw, sh]);
+                    if sc[2] == 0 || sc[3] == 0 {
+                        continue;
+                    }
 
                     if let Some(pipe) = self.custom_shaders.get(&name) {
                         let dyn_off = shader_slot * self.uniform_align;
@@ -1641,15 +1788,18 @@ impl GpuUiEngine {
                             timestamp_writes: None,
                         });
                         pass.set_viewport(x0 as f32, y0 as f32, sw as f32, sh as f32, 0.0, 1.0);
-                        pass.set_scissor_rect(x0, y0, sw, sh);
+                        pass.set_scissor_rect(sc[0], sc[1], sc[2], sc[3]);
                         pass.set_pipeline(pipe);
                         pass.set_bind_group(0, &self.shader_bg, &[dyn_off]);
                         pass.draw(0..6, 0..1);
                     }
                 }
                 DrawCmd::Image { path, glass_slot } => {
+                    if cur_scissor[2] == 0 || cur_scissor[3] == 0 {
+                        continue;
+                    }
                     self.ensure_image_loaded(&path);
-                    if let Some(Some(img_bg)) = self.image_cache.get(&path) {
+                    if let Some(Some(cached)) = self.image_cache.get(&path) {
                         let goff = glass_slot * self.uniform_align;
                         let mut p = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("knr_img_pass"),
@@ -1665,8 +1815,14 @@ impl GpuUiEngine {
                             occlusion_query_set: None,
                             timestamp_writes: None,
                         });
+                        p.set_scissor_rect(
+                            cur_scissor[0],
+                            cur_scissor[1],
+                            cur_scissor[2],
+                            cur_scissor[3],
+                        );
                         p.set_pipeline(&self.glass_pipeline);
-                        p.set_bind_group(0, img_bg, &[goff]);
+                        p.set_bind_group(0, &cached.bind_group, &[goff]);
                         p.draw(0..6, 0..1);
                     }
                 }
@@ -1701,15 +1857,13 @@ impl GpuUiEngine {
         Ok(())
     }
 
-    fn ensure_image_loaded(&mut self, path: &str) {
-        if self.image_cache.contains_key(path) {
+    fn ensure_image_loaded(&mut self, src: &str) {
+        if self.image_cache.contains_key(src) {
             return;
         }
-        let loaded = image::open(path).ok().map(|img| {
-            let rgba = img.to_rgba8();
-            let (iw, ih) = rgba.dimensions();
+        let loaded = decode_image_rgba(src).map(|(iw, ih, rgba)| {
             let tex = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(path),
+                label: Some("knr_ui_image"),
                 size: wgpu::Extent3d {
                     width: iw.max(1),
                     height: ih.max(1),
@@ -1718,7 +1872,7 @@ impl GpuUiEngine {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -1742,7 +1896,7 @@ impl GpuUiEngine {
                 },
             );
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("knr_img_draw_bg_cached"),
                 layout: &self.glass_bgl,
                 entries: &[
@@ -1765,9 +1919,14 @@ impl GpuUiEngine {
                         }),
                     },
                 ],
-            })
+            });
+            CachedGpuImage {
+                bind_group,
+                width: iw,
+                height: ih,
+            }
         });
-        self.image_cache.insert(path.to_string(), loaded);
+        self.image_cache.insert(src.to_string(), loaded);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1785,6 +1944,7 @@ impl GpuUiEngine {
         scale: f32,
         parent_opacity: f32,
         input_selected_all: bool,
+        scissor_stack: &mut Vec<[u32; 4]>,
         staging: &mut FrameStaging,
     ) {
         let node = &laid.node;
@@ -1797,11 +1957,21 @@ impl GpuUiEngine {
         if rect.y + rect.h < -64.0 || rect.y > lh + 64.0 {
             return;
         }
+        let parent_scissor = *scissor_stack.last().unwrap_or(&[0, 0, w, h]);
+        if parent_scissor[2] == 0 || parent_scissor[3] == 0 {
+            return;
+        }
 
         let is_hovered =
             !node.action.is_empty() && state.hovered_action == Some(node.action.as_str());
+        let is_key_focused = state.focused_widget_key.as_deref().is_some_and(|fk| {
+            !fk.is_empty()
+                && ((!node.key.is_empty() && node.key == fk)
+                    || (!node.action.is_empty() && node.action == fk))
+        });
         let is_focused =
-            !node.action.is_empty() && state.focused_action == Some(node.action.as_str());
+            (!node.action.is_empty() && state.focused_action == Some(node.action.as_str()))
+                || is_key_focused;
         let raw_radii = node.effective_radii();
         let radii = if raw_radii.iter().all(|&r| r <= 0.0) {
             match node.kind {
@@ -1817,6 +1987,7 @@ impl GpuUiEngine {
         if node.style.backdrop_blur > 0.0
             && staging.blurs.len() + 2 <= MAX_BLUR_SLOTS
             && staging.glasses.len() < MAX_GLASS_SLOTS
+            && staging.sync_scissor()
         {
             let bw = (self.targets.width / 2).max(1) as f32;
             let bh = (self.targets.height / 2).max(1) as f32;
@@ -1841,6 +2012,7 @@ impl GpuUiEngine {
                 use_local_uv: 0.0,
                 rect: [rect.x, rect.y, rect.w, rect.h],
                 radii,
+                uv_rect: [0.0, 0.0, 1.0, 1.0],
             });
             staging.cmds.push(DrawCmd::BackdropBlur {
                 blur_slot_1,
@@ -1866,6 +2038,8 @@ impl GpuUiEngine {
             ParsedFill::None => {
                 if node.kind == UiKind::Input {
                     (0.0, [0.06, 0.09, 0.16, 0.92], [0.06, 0.09, 0.16, 0.92], 0.0)
+                } else if node.kind == UiKind::Code {
+                    (0.0, [7.0 / 255.0, 11.0 / 255.0, 20.0 / 255.0, 0.96], [7.0 / 255.0, 11.0 / 255.0, 20.0 / 255.0, 0.96], 0.0)
                 } else {
                     (3.0, [0.0; 4], [0.0; 4], 0.0)
                 }
@@ -1877,8 +2051,11 @@ impl GpuUiEngine {
             color_start[2] = (color_start[2] + 0.08).min(1.0);
         }
 
+        let has_input_sel = is_focused
+            && node.kind == UiKind::Input
+            && (input_selected_all || state.input_selection.is_some_and(|(a, b)| a != b));
         let active_border = if is_focused {
-            if input_selected_all && node.kind == UiKind::Input {
+            if has_input_sel {
                 "#7dd3fc"
             } else {
                 "#38bdf8"
@@ -1892,7 +2069,7 @@ impl GpuUiEngine {
             ([0.0; 4], 0.0)
         } else if let Some((r, g, b, a)) = parse_hex_color(active_border) {
             let bw = if is_focused {
-                if input_selected_all && node.kind == UiKind::Input {
+                if has_input_sel {
                     2.25
                 } else {
                     2.0
@@ -1959,11 +2136,88 @@ impl GpuUiEngine {
                     0.0,
                 ],
             });
+            // Subtle 1px top inner specular highlight on bordered Cards
+            if node.kind == UiKind::Card && border_w > 0.0 && rect.w > 4.0 && rect.h > 4.0 {
+                let left_in = radii[0].min(rect.w * 0.4).max(1.0);
+                let right_in = radii[1].min(rect.w * 0.4).max(1.0);
+                let hw = (rect.w - left_in - right_in).max(0.0);
+                if hw > 1.0 {
+                    staging.push_quad(simple_quad(
+                        [rect.x + left_in + node.style.translate_x, rect.y + 1.0 + node.style.translate_y, hw, 1.0],
+                        [0.0; 4],
+                        [1.0, 1.0, 1.0, 0.08],
+                        [0.0; 4],
+                        0.0,
+                        opacity,
+                    ));
+                }
+            }
         }
 
         // 3. Specialized interactive widgets & custom GPU shaders
         match node.kind {
-            UiKind::Shader if staging.shaders.len() < MAX_SHADER_SLOTS => {
+            UiKind::Icon => {
+                let (ir, ig, ib, ia) = parse_hex_color(&node.color).unwrap_or((148, 163, 184, 255));
+                let col = [
+                    ir as f32 / 255.0,
+                    ig as f32 / 255.0,
+                    ib as f32 / 255.0,
+                    (ia as f32 / 255.0) * opacity,
+                ];
+                let [pt, pr, pb, pl] = node.effective_pad();
+                let inner_w = (rect.w - pl - pr).max(1.0);
+                let inner_h = (rect.h - pt - pb).max(1.0);
+                let sz = inner_w.min(inner_h);
+                let ix = rect.x + pl + (inner_w - sz) * 0.5 + node.style.translate_x;
+                let iy = rect.y + pt + (inner_h - sz) * 0.5 + node.style.translate_y;
+                let phys_sz = (sz * scale).round().clamp(8.0, 256.0) as u32;
+                if let Some(entry) = self
+                    .glyph_atlas
+                    .get_or_upload_icon(&self.queue, &node.text, phys_sz)
+                {
+                    staging.push_glyphs(vec![GlyphInstance {
+                        rect: [ix, iy, sz, sz],
+                        uv_rect: [entry.u0, entry.v0, entry.u1, entry.v1],
+                        color: col,
+                    }]);
+                }
+            }
+            UiKind::Code => {
+                let [pt, pr, _pb, pl] = node.effective_pad();
+                let start_x = rect.x + pl + node.style.translate_x;
+                let start_y = rect.y + pt + node.style.translate_y;
+                let clip_max_x = Some(rect.x + rect.w - pr);
+                let (font_id, font_opt) = measurer.font_for("mono", node.style.font_weight);
+                for (line_idx, line) in laid.wrapped_lines.iter().enumerate() {
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let ly = start_y + (line_idx as f32) * laid.line_height;
+                    let mut cx = start_x;
+                    for (span, (r, g, b)) in tokenize_code_line(line) {
+                        let col = [
+                            r as f32 / 255.0,
+                            g as f32 / 255.0,
+                            b as f32 / 255.0,
+                            opacity,
+                        ];
+                        cx = self.push_text_glyphs(
+                            staging,
+                            font_id,
+                            font_opt,
+                            span,
+                            cx,
+                            ly,
+                            node.font_size,
+                            node.style.letter_spacing,
+                            scale,
+                            col,
+                            clip_max_x,
+                        );
+                    }
+                }
+            }
+            UiKind::Shader if staging.shaders.len() < MAX_SHADER_SLOTS && staging.sync_scissor() => {
                 let mut u16 = [0.0f32; 16];
                 for (i, &v) in node.uniforms.iter().take(16).enumerate() {
                     u16[i] = v as f32;
@@ -1991,18 +2245,45 @@ impl GpuUiEngine {
                 });
             }
             UiKind::Image if staging.glasses.len() < MAX_GLASS_SLOTS => {
-                let glass_slot = staging.glasses.len() as u32;
-                staging.glasses.push(GlassCompositeUniform {
-                    viewport: [lw, lh],
-                    opacity,
-                    use_local_uv: 1.0,
-                    rect: [rect.x, rect.y, rect.w, rect.h],
-                    radii,
-                });
-                staging.cmds.push(DrawCmd::Image {
-                    path: node.text.clone(),
-                    glass_slot,
-                });
+                self.ensure_image_loaded(&node.text);
+                if let Some(Some(cached)) = self.image_cache.get(&node.text) {
+                    if staging.sync_scissor() {
+                        let img_aspect = (cached.width as f32) / (cached.height.max(1) as f32);
+                        let box_aspect = rect.w.max(1.0) / rect.h.max(1.0);
+                        let uv_rect = if img_aspect > box_aspect {
+                            let frac = (box_aspect / img_aspect).clamp(0.0, 1.0);
+                            let pad = (1.0 - frac) * 0.5;
+                            [pad, 0.0, 1.0 - pad, 1.0]
+                        } else {
+                            let frac = (img_aspect / box_aspect).clamp(0.0, 1.0);
+                            let pad = (1.0 - frac) * 0.5;
+                            [0.0, pad, 1.0, 1.0 - pad]
+                        };
+                        let glass_slot = staging.glasses.len() as u32;
+                        staging.glasses.push(GlassCompositeUniform {
+                            viewport: [lw, lh],
+                            opacity,
+                            use_local_uv: 1.0,
+                            rect: [rect.x, rect.y, rect.w, rect.h],
+                            radii,
+                            uv_rect,
+                        });
+                        staging.cmds.push(DrawCmd::Image {
+                            path: node.text.clone(),
+                            glass_slot,
+                        });
+                    }
+                } else {
+                    // Subtle broken-image placeholder frame
+                    staging.push_quad(simple_quad(
+                        [rect.x, rect.y, rect.w, rect.h],
+                        radii,
+                        [30.0 / 255.0, 41.0 / 255.0, 59.0 / 255.0, 0.55],
+                        [71.0 / 255.0, 85.0 / 255.0, 105.0 / 255.0, 0.72],
+                        1.25,
+                        opacity,
+                    ));
+                }
             }
             UiKind::Slider => {
                 let t = node.value.clamp(0.0, 1.0) as f32;
@@ -2121,8 +2402,180 @@ impl GpuUiEngine {
             _ => {}
         }
 
-        // 4. Text via GPU GlyphAtlas (uses pre-wrapped multi-line layout so text never overflows!)
-        if !laid.wrapped_lines.is_empty()
+        // 3b. Crisp 2px rounded `#38bdf8` accessibility focus ring when keyboard-focused
+        if is_key_focused {
+            let ring_radii = [
+                if radii[0] > 0.0 { radii[0] + 2.5 } else { 6.0 },
+                if radii[1] > 0.0 { radii[1] + 2.5 } else { 6.0 },
+                if radii[2] > 0.0 { radii[2] + 2.5 } else { 6.0 },
+                if radii[3] > 0.0 { radii[3] + 2.5 } else { 6.0 },
+            ];
+            staging.push_quad(QuadInstance {
+                rect: [rect.x - 2.5, rect.y - 2.5, rect.w + 5.0, rect.h + 5.0],
+                radii: ring_radii,
+                color_start: [0.0; 4],
+                color_end: [0.0; 4],
+                border_color: [56.0 / 255.0, 189.0 / 255.0, 248.0 / 255.0, 1.0],
+                shadow_color: [0.0; 4],
+                params0: [2.0, 3.0, 0.0, opacity],
+                params1: [0.0, 0.0, 0.0, node.style.rotate_deg.to_radians()],
+                params2: [
+                    node.style.scale,
+                    node.style.translate_x,
+                    node.style.translate_y,
+                    0.0,
+                ],
+            });
+        }
+
+        // Push physical scissor rect for clipped containers (`<Scroll>` / `overflow="hidden"|"scroll"|"scroll-x"`)
+        let pushed_scissor = if node.clips_children() {
+            let cx0 = (rect.x * scale).floor().clamp(0.0, w as f32) as u32;
+            let cy0 = (rect.y * scale).floor().clamp(0.0, h as f32) as u32;
+            let cx1 = ((rect.x + rect.w) * scale).ceil().clamp(0.0, w as f32) as u32;
+            let cy1 = ((rect.y + rect.h) * scale).ceil().clamp(0.0, h as f32) as u32;
+            let next = intersect_scissor(
+                parent_scissor,
+                [cx0, cy0, cx1.saturating_sub(cx0), cy1.saturating_sub(cy0)],
+            );
+            scissor_stack.push(next);
+            staging.set_scissor(next);
+            true
+        } else {
+            false
+        };
+
+        // 4. Text via GPU GlyphAtlas (uses pre-wrapped multi-line layout + 4 faces + text_align)
+        if node.kind == UiKind::Input {
+            let (tr, tg, tb, ta) = parse_hex_color(&node.color).unwrap_or((248, 250, 252, 255));
+            let color = [
+                tr as f32 / 255.0,
+                tg as f32 / 255.0,
+                tb as f32 / 255.0,
+                (ta as f32 / 255.0) * opacity,
+            ];
+            let [_, pr, _, pl] = node.effective_pad();
+            let pad_l = pl.max(12.0);
+            let pad_r = pr.max(12.0);
+            let inner_w = (rect.w - pad_l - pad_r).max(20.0);
+            let (_, th) = measurer.measure_text_styled(
+                "Mg",
+                node.font_size,
+                &node.style.font_family,
+                node.style.font_weight,
+            );
+            let tx_f = rect.x + pad_l + node.style.translate_x;
+            let ty_f = rect.y + ((rect.h - th) * 0.5).max(0.0) + node.style.translate_y;
+            let fallback_line = laid
+                .wrapped_lines
+                .first()
+                .map(String::as_str)
+                .unwrap_or("");
+            let full_len = node.text.chars().count();
+            let caret_opt = if is_focused {
+                Some(state.input_caret.unwrap_or(full_len).min(full_len))
+            } else {
+                None
+            };
+            let (vis_text, vis_start) = measurer.compute_visible_input_window(
+                &node.text,
+                fallback_line,
+                caret_opt,
+                node.font_size,
+                &node.style.font_family,
+                node.style.font_weight,
+                node.style.letter_spacing,
+                inner_w,
+            );
+            let vis_len = vis_text.chars().count();
+
+            // Selection highlight behind selected characters (`#38bdf844`)
+            if is_focused && full_len > 0 {
+                let eff_sel = state
+                    .input_selection
+                    .map(|(a, b)| if a <= b { (a, b) } else { (b, a) })
+                    .filter(|(a, b)| a < b)
+                    .or_else(|| input_selected_all.then_some((0, full_len)));
+                if let Some((sel_s, sel_e)) = eff_sel {
+                    let vs = sel_s.saturating_sub(vis_start).min(vis_len);
+                    let ve = sel_e.saturating_sub(vis_start).min(vis_len);
+                    if ve > vs {
+                        let x0 = tx_f
+                            + measurer.measure_text_prefix_x(
+                                &vis_text,
+                                vs,
+                                node.font_size,
+                                &node.style.font_family,
+                                node.style.font_weight,
+                                node.style.letter_spacing,
+                            );
+                        let x1 = tx_f
+                            + measurer.measure_text_prefix_x(
+                                &vis_text,
+                                ve,
+                                node.font_size,
+                                &node.style.font_family,
+                                node.style.font_weight,
+                                node.style.letter_spacing,
+                            );
+                        let max_x = rect.x + rect.w - pad_r.min(8.0);
+                        let sx0 = x0.clamp(tx_f - 2.0, max_x);
+                        let sx1 = x1.clamp(sx0, max_x);
+                        if sx1 > sx0 + 0.5 {
+                            staging.push_quad(simple_quad(
+                                [sx0, ty_f - 2.0, sx1 - sx0, th.max(14.0) + 4.0],
+                                [3.0; 4],
+                                [56.0 / 255.0, 189.0 / 255.0, 248.0 / 255.0, 68.0 / 255.0],
+                                [0.0; 4],
+                                0.0,
+                                opacity,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            if !vis_text.is_empty() {
+                let (font_id, font_opt) =
+                    measurer.font_for(&node.style.font_family, node.style.font_weight);
+                let clip_max_x = Some(rect.x + rect.w - pad_r.min(8.0));
+                self.push_text_glyphs(
+                    staging,
+                    font_id,
+                    font_opt,
+                    &vis_text,
+                    tx_f,
+                    ty_f,
+                    node.font_size,
+                    node.style.letter_spacing,
+                    scale,
+                    color,
+                    clip_max_x,
+                );
+            }
+
+            if let Some(caret_idx) = caret_opt {
+                let vis_caret = caret_idx.saturating_sub(vis_start).min(vis_len);
+                let caret_off = measurer.measure_text_prefix_x(
+                    &vis_text,
+                    vis_caret,
+                    node.font_size,
+                    &node.style.font_family,
+                    node.style.font_weight,
+                    node.style.letter_spacing,
+                );
+                let max_caret_x = (rect.x + rect.w - pad_r.min(8.0) - 2.0).max(tx_f);
+                let cx = (tx_f + caret_off).min(max_caret_x);
+                staging.push_quad(simple_quad(
+                    [cx, ty_f, 2.0, th.max(14.0)],
+                    [1.0; 4],
+                    [0.22, 0.74, 0.97, 1.0],
+                    [0.0; 4],
+                    0.0,
+                    opacity,
+                ));
+            }
+        } else if !laid.wrapped_lines.is_empty()
             && !matches!(
                 node.kind,
                 UiKind::Shader
@@ -2130,6 +2583,8 @@ impl GpuUiEngine {
                     | UiKind::Slider
                     | UiKind::Divider
                     | UiKind::Progress
+                    | UiKind::Code
+                    | UiKind::Icon
             )
         {
             let (tr, tg, tb, ta) = parse_hex_color(&node.color).unwrap_or((248, 250, 252, 255));
@@ -2139,16 +2594,17 @@ impl GpuUiEngine {
                 tb as f32 / 255.0,
                 (ta as f32 / 255.0) * opacity,
             ];
-            let [pt, _pr, _pb, pl] = node.effective_pad();
+            let [pt, pr, _pb, pl] = node.effective_pad();
             let first_line = &laid.wrapped_lines[0];
-            let (tw, th) = measurer.measure_text_size(first_line, node.font_size);
+            let (tw, th) = measurer.measure_text_styled(
+                first_line,
+                node.font_size,
+                &node.style.font_family,
+                node.style.font_weight,
+            );
             let (tx, ty) = match node.kind {
                 UiKind::Button | UiKind::Badge => (
                     rect.x + ((rect.w - tw) * 0.5).max(0.0),
-                    rect.y + ((rect.h - th) * 0.5).max(0.0),
-                ),
-                UiKind::Input => (
-                    rect.x + pl.max(12.0),
                     rect.y + ((rect.h - th) * 0.5).max(0.0),
                 ),
                 UiKind::Toggle => (
@@ -2160,86 +2616,163 @@ impl GpuUiEngine {
             let tx_f = tx + node.style.translate_x;
             let ty_f = ty + node.style.translate_y;
 
-            // Subtle cyan selection highlight behind input text when Ctrl+A is active
-            if node.kind == UiKind::Input && is_focused && input_selected_all && tw > 0.0 {
-                let sel_pad_x = 3.0f32;
-                let sel_pad_y = 2.0f32;
-                let max_sel_w = (rect.w - (tx_f - rect.x) - 8.0).max(0.0);
-                let sel_w = (tw + sel_pad_x * 2.0).min(max_sel_w);
-                if sel_w > 0.0 {
+            let (font_id, font_opt) =
+                measurer.font_for(&node.style.font_family, node.style.font_weight);
+            let inner_w = (rect.w - pl - pr).max(0.0);
+            for (line_idx, line) in laid.wrapped_lines.iter().enumerate() {
+                if !line.is_empty() {
+                    let ly = ty_f + (line_idx as f32) * laid.line_height;
+                    let lx = if matches!(
+                        node.kind,
+                        UiKind::Text | UiKind::Col | UiKind::Card | UiKind::Scroll
+                    ) {
+                        match node.style.text_align.as_str() {
+                            "center" => {
+                                let (line_w, _) = measurer.measure_text_styled(
+                                    line,
+                                    node.font_size,
+                                    &node.style.font_family,
+                                    node.style.font_weight,
+                                );
+                                rect.x + pl + ((inner_w - line_w) * 0.5).max(0.0)
+                                    + node.style.translate_x
+                            }
+                            "right" => {
+                                let (line_w, _) = measurer.measure_text_styled(
+                                    line,
+                                    node.font_size,
+                                    &node.style.font_family,
+                                    node.style.font_weight,
+                                );
+                                rect.x + pl + (inner_w - line_w).max(0.0) + node.style.translate_x
+                            }
+                            _ => tx_f,
+                        }
+                    } else {
+                        tx_f
+                    };
+                    self.push_text_glyphs(
+                        staging,
+                        font_id,
+                        font_opt,
+                        line,
+                        lx,
+                        ly,
+                        node.font_size,
+                        node.style.letter_spacing,
+                        scale,
+                        color,
+                        None,
+                    );
+                }
+            }
+        }
+
+        // 5. Children (painted in ascending z_index order, stable on ties)
+        let cur_sc = *scissor_stack.last().unwrap_or(&[0, 0, w, h]);
+        if cur_sc[2] > 0 && cur_sc[3] > 0 {
+            if children_need_z_sort(&laid.children) {
+                for idx in sorted_child_indices_by_z(&laid.children) {
+                    self.collect_draw_cmds(
+                        &laid.children[idx],
+                        measurer,
+                        state,
+                        cursor_pos,
+                        dt_sec,
+                        w,
+                        h,
+                        lw,
+                        lh,
+                        scale,
+                        opacity,
+                        input_selected_all,
+                        scissor_stack,
+                        staging,
+                    );
+                }
+            } else {
+                for child in &laid.children {
+                    self.collect_draw_cmds(
+                        child,
+                        measurer,
+                        state,
+                        cursor_pos,
+                        dt_sec,
+                        w,
+                        h,
+                        lw,
+                        lh,
+                        scale,
+                        opacity,
+                        input_selected_all,
+                        scissor_stack,
+                        staging,
+                    );
+                }
+            }
+            // Sleek rounded vertical & horizontal scrollbar thumbs (`#94a3b855` idle, `#38bdf888` active)
+            let has_v_scroll = node.is_scrollable_y()
+                && laid.content_height > rect.h + 2.0
+                && rect.h > 24.0
+                && rect.w > 16.0;
+            let has_h_scroll = node.is_scrollable_x()
+                && laid.content_width > rect.w + 2.0
+                && rect.w > 24.0
+                && rect.h > 16.0;
+            if has_v_scroll || has_h_scroll {
+                let is_scroll_active = is_hovered
+                    || is_focused
+                    || state.active_scroll_id.is_some_and(|aid| {
+                        !aid.is_empty() && (aid == node.key || aid == node.action)
+                    });
+                let thumb_col = if is_scroll_active {
+                    [56.0 / 255.0, 189.0 / 255.0, 248.0 / 255.0, 136.0 / 255.0]
+                } else {
+                    [148.0 / 255.0, 163.0 / 255.0, 184.0 / 255.0, 85.0 / 255.0]
+                };
+                if has_v_scroll {
+                    let corner_reserve = if has_h_scroll { 8.0 } else { 0.0 };
+                    let track_h = (rect.h - 8.0 - corner_reserve).max(4.0);
+                    let max_thumb = (track_h - 4.0).max(4.0);
+                    let min_thumb = 20.0f32.min(max_thumb);
+                    let thumb_h = (rect.h / laid.content_height * track_h).clamp(min_thumb, max_thumb);
+                    let max_scroll = (laid.content_height - rect.h).max(1.0);
+                    let ratio = (laid.scroll_offset_y / max_scroll).clamp(0.0, 1.0);
+                    let thumb_y = rect.y + 4.0 + ratio * (track_h - thumb_h).max(0.0);
                     staging.push_quad(simple_quad(
-                        [
-                            tx_f - sel_pad_x,
-                            ty_f - sel_pad_y,
-                            sel_w,
-                            th.max(14.0) + sel_pad_y * 2.0,
-                        ],
-                        [4.0; 4],
-                        [0.22, 0.74, 0.97, 0.32],
+                        [rect.x + rect.w - 7.0, thumb_y, 5.0, thumb_h],
+                        [2.5; 4],
+                        thumb_col,
+                        [0.0; 4],
+                        0.0,
+                        opacity,
+                    ));
+                }
+                if has_h_scroll {
+                    let corner_reserve = if has_v_scroll { 8.0 } else { 0.0 };
+                    let track_w = (rect.w - 8.0 - corner_reserve).max(4.0);
+                    let max_thumb = (track_w - 4.0).max(4.0);
+                    let min_thumb = 20.0f32.min(max_thumb);
+                    let thumb_w = (rect.w / laid.content_width * track_w).clamp(min_thumb, max_thumb);
+                    let max_scroll = (laid.content_width - rect.w).max(1.0);
+                    let ratio = (laid.scroll_offset_x / max_scroll).clamp(0.0, 1.0);
+                    let thumb_x = rect.x + 4.0 + ratio * (track_w - thumb_w).max(0.0);
+                    staging.push_quad(simple_quad(
+                        [thumb_x, rect.y + rect.h - 7.0, thumb_w, 5.0],
+                        [2.5; 4],
+                        thumb_col,
                         [0.0; 4],
                         0.0,
                         opacity,
                     ));
                 }
             }
-
-            for (line_idx, line) in laid.wrapped_lines.iter().enumerate() {
-                if !line.is_empty() {
-                    let ly = ty_f + (line_idx as f32) * laid.line_height;
-                    self.push_text_glyphs(
-                        staging,
-                        measurer.font(),
-                        line,
-                        tx_f,
-                        ly,
-                        node.font_size,
-                        scale,
-                        color,
-                    );
-                }
-            }
-            if node.kind == UiKind::Input && is_focused {
-                staging.push_quad(simple_quad(
-                    [tx_f + tw + 2.0, ty_f, 2.0, th.max(14.0)],
-                    [1.0; 4],
-                    [0.22, 0.74, 0.97, 1.0],
-                    [0.0; 4],
-                    0.0,
-                    opacity,
-                ));
-            }
-        } else if node.kind == UiKind::Input && is_focused {
-            let [_, _, _, pl] = node.effective_pad();
-            let (_, th) = measurer.measure_text_size("Mg", node.font_size);
-            let tx_f = rect.x + pl.max(12.0) + node.style.translate_x;
-            let ty_f = rect.y + ((rect.h - th) * 0.5).max(0.0) + node.style.translate_y;
-            staging.push_quad(simple_quad(
-                [tx_f, ty_f, 2.0, th.max(14.0)],
-                [1.0; 4],
-                [0.22, 0.74, 0.97, 1.0],
-                [0.0; 4],
-                0.0,
-                opacity,
-            ));
         }
 
-        // 5. Children
-        for child in &laid.children {
-            self.collect_draw_cmds(
-                child,
-                measurer,
-                state,
-                cursor_pos,
-                dt_sec,
-                w,
-                h,
-                lw,
-                lh,
-                scale,
-                opacity,
-                input_selected_all,
-                staging,
-            );
+        if pushed_scissor {
+            scissor_stack.pop();
+            let restored = *scissor_stack.last().unwrap_or(&[0, 0, w, h]);
+            staging.set_scissor(restored);
         }
     }
 
@@ -2247,14 +2780,17 @@ impl GpuUiEngine {
     fn push_text_glyphs(
         &mut self,
         staging: &mut FrameStaging,
+        font_id: u8,
         font: Option<&FontVec>,
         text: &str,
         x: f32,
         y: f32,
         font_size: f32,
+        letter_spacing: f32,
         scale: f32,
         color: [f32; 4],
-    ) {
+        clip_max_x: Option<f32>,
+    ) -> f32 {
         let logical_px = font_size.clamp(8.0, 96.0);
         let phys_px = ((logical_px * scale).round() as u32).clamp(8, 128);
         let inv_scale = 1.0 / scale.max(0.5);
@@ -2269,37 +2805,44 @@ impl GpuUiEngine {
                 if let Some(prev) = prev_gid {
                     caret_x += sc.kern(prev, gid);
                 }
-                if let Some(entry) = self.glyph_atlas.get_or_upload(&self.queue, font, ch, phys_px)
+                if let Some(entry) =
+                    self.glyph_atlas
+                        .get_or_upload(&self.queue, font_id, font, ch, phys_px)
                 {
-                    glyphs.push(GlyphInstance {
-                        rect: [
-                            caret_x + entry.off_x * inv_scale,
-                            y + entry.off_y * inv_scale,
-                            entry.w * inv_scale,
-                            entry.h * inv_scale,
-                        ],
-                        uv_rect: [entry.u0, entry.v0, entry.u1, entry.v1],
-                        color,
-                    });
+                    let gx = caret_x + entry.off_x * inv_scale;
+                    let gw = entry.w * inv_scale;
+                    if clip_max_x.is_none_or(|mx| gx + gw <= mx + 1.0) {
+                        glyphs.push(GlyphInstance {
+                            rect: [gx, y + entry.off_y * inv_scale, gw, entry.h * inv_scale],
+                            uv_rect: [entry.u0, entry.v0, entry.u1, entry.v1],
+                            color,
+                        });
+                    }
                 }
-                caret_x += sc.h_advance(gid);
+                caret_x += sc.h_advance(gid) + letter_spacing;
                 prev_gid = Some(gid);
             } else {
                 let s = (logical_px / 8.0).round().max(1.0);
-                if let Some(entry) = self
-                    .glyph_atlas
-                    .get_or_upload(&self.queue, None, ch, logical_px.round() as u32)
-                {
-                    glyphs.push(GlyphInstance {
-                        rect: [caret_x, y, entry.w, entry.h],
-                        uv_rect: [entry.u0, entry.v0, entry.u1, entry.v1],
-                        color,
-                    });
+                if let Some(entry) = self.glyph_atlas.get_or_upload(
+                    &self.queue,
+                    font_id,
+                    None,
+                    ch,
+                    logical_px.round() as u32,
+                ) {
+                    if clip_max_x.is_none_or(|mx| caret_x + entry.w <= mx + 1.0) {
+                        glyphs.push(GlyphInstance {
+                            rect: [caret_x, y, entry.w, entry.h],
+                            uv_rect: [entry.u0, entry.v0, entry.u1, entry.v1],
+                            color,
+                        });
+                    }
                 }
-                caret_x += 8.0 * s;
+                caret_x += 8.0 * s + letter_spacing;
             }
         }
         staging.push_glyphs(glyphs);
+        caret_x
     }
 }
 

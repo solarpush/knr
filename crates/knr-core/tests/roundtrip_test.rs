@@ -175,18 +175,19 @@ bb2:
 
 #[test]
 fn test_linear_types_predicate() {
-    // Scalars are Copy (is_linear == false)
+    // Scalars and immutable strings are Copy (is_linear == false)
     assert!(!Type::I64.is_linear());
     assert!(!Type::F64.is_linear());
     assert!(!Type::Bool.is_linear());
+    assert!(!Type::Str.is_linear());
     assert!(!Type::Void.is_linear());
 
     // Linear types are Move (is_linear == true)
-    assert!(Type::Str.is_linear());
     assert!(Type::Buf.is_linear());
     assert!(Type::Vec(Box::new(Type::I64)).is_linear());
     assert!(Type::Map(Box::new(Type::Str), Box::new(Type::I64)).is_linear());
     assert!(Type::Chan(Box::new(Type::I64)).is_linear());
+    assert!(Type::Struct("Record".to_string()).is_linear());
 }
 
 #[test]

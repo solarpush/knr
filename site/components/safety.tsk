@@ -1,0 +1,328 @@
+// ============================================================================
+// knr Official Showcase -- Linear Safety & Verifier Explorer (`site/components/safety.tsk`)
+// ============================================================================
+
+import {
+    Column,
+    Row,
+    Grid,
+    Card,
+    Badge,
+    Text,
+    Code,
+    Button,
+    Icon,
+    Divider,
+} from "std/ui";
+import { State } from "../state.tsk";
+
+export function diag_broken_code(case_id: i64): string {
+    if (case_id === 1) {
+        return "export function open_buffer(): i64 {\n"
+            + "    const raw = buf_alloc(4096);\n"
+            + "    // Unmanaged Buffer not freed or returned\n"
+            + "    return 0;\n"
+            + "}";
+    }
+    if (case_id === 2) {
+        return "export function leak_ref(s: readonly State): State {\n"
+            + "    // Second-class borrow cannot escape caller scope\n"
+            + "    return s;\n"
+            + "}";
+    }
+    if (case_id === 3) {
+        return "@shader\n"
+            + "export function bad_fx(uv: Vec2, time: f64): Color {\n"
+            + "    const arr: f64[] = [uv.x, uv.y]; // Heap alloc\n"
+            + "    return { r: uv.x, g: uv.y, b: 1.0, a: 1.0 };\n"
+            + "}";
+    }
+    return "export function consume_twice(s: State): i64 {\n"
+        + "    const next = update(s, \"tab_safety\"); // s moved here\n"
+        + "    return s.active_tab;                  // Use after move\n"
+        + "}";
+}
+
+export function diag_json_output(case_id: i64): string {
+    if (case_id === 1) {
+        return "[\n"
+            + "  {\n"
+            + "    \"code\": \"LinearLeak\",\n"
+            + "    \"source_variable\": \"raw\",\n"
+            + "    \"fix_hint\": \"Consume, free, or return `raw` before scope exit.\"\n"
+            + "  }\n"
+            + "]";
+    }
+    if (case_id === 2) {
+        return "[\n"
+            + "  {\n"
+            + "    \"code\": \"BorrowEscape\",\n"
+            + "    \"source_variable\": \"s\",\n"
+            + "    \"fix_hint\": \"Borrowed `readonly State` cannot be returned or stored.\"\n"
+            + "  }\n"
+            + "]";
+    }
+    if (case_id === 3) {
+        return "[\n"
+            + "  {\n"
+            + "    \"code\": \"ShaderImpureOp\",\n"
+            + "    \"source_variable\": \"arr\",\n"
+            + "    \"fix_hint\": \"Use flat value structs and scalar f64 math inside @shader.\"\n"
+            + "  }\n"
+            + "]";
+    }
+    return "[\n"
+        + "  {\n"
+        + "    \"code\": \"UseAfterMove\",\n"
+        + "    \"source_variable\": \"s\",\n"
+        + "    \"fix_hint\": \"Use `readonly State` borrow or read `next.active_tab`.\"\n"
+        + "  }\n"
+        + "]";
+}
+
+export function diag_fixed_code(case_id: i64): string {
+    if (case_id === 1) {
+        return "export function open_buffer(): Buffer {\n"
+            + "    const raw = buf_alloc(4096);\n"
+            + "    // Ownership transferred cleanly to caller\n"
+            + "    return raw;\n"
+            + "}";
+    }
+    if (case_id === 2) {
+        return "export function read_tab(s: readonly State): i64 {\n"
+            + "    // Read-only borrow stays strictly lexical\n"
+            + "    return s.active_tab;\n"
+            + "}";
+    }
+    if (case_id === 3) {
+        return "@shader\n"
+            + "export function pure_fx(uv: Vec2, time: f64): Color {\n"
+            + "    const w = 0.5 + 0.5 * sin(uv.x * 6.0 + time);\n"
+            + "    return { r: w, g: 0.45, b: 0.95, a: 1.0 };\n"
+            + "}";
+    }
+    return "export function consume_safely(s: State): i64 {\n"
+        + "    const next = update(s, \"tab_safety\");\n"
+        + "    return next.active_tab; // Owned and alive\n"
+        + "}";
+}
+
+export function Safety(s: readonly State): Widget {
+    return (
+        <Column key="tab_view_safety" w="full" gap={22}>
+            <Column gap={8} pt={4}>
+                <Row align="center" gap={8}>
+                    <Icon name="shield" size={15} color="#38bdf8" />
+                    <Text size={13} weight="semibold" color="#38bdf8">
+                        LINEAR SAFETY
+                    </Text>
+                    <Text size={13} color="#64748b">
+                        Zero Garbage Collection | Zero Lifetime Annotations
+                    </Text>
+                </Row>
+                <Text
+                    size={32}
+                    weight="extrabold"
+                    font="display"
+                    letterSpacing={-0.8}
+                    color="#f8fafc"
+                >
+                    Compile-Time Memory & GPU Purity Guarantees
+                </Text>
+                <Text size={15} color="#94a3b8" lineHeight={1.55} maxW={820}>
+                    Every linear value in knr has a single owner tracked across the SSA control-flow graph. Declarative structs and arrays auto-drop deterministically at scope exit while second-class readonly borrows stay zero-copy. Even this view reads your headline ({s.headline}) via readonly State.
+                </Text>
+            </Column>
+
+            <Card
+                key="safety_verifier_explorer"
+                bg="#0b0f1c"
+                border="#ffffff14"
+                radius={16}
+                p={24}
+                gap={16}
+            >
+                <Row align="center" justify="between">
+                    <Text size={18} weight="bold" font="display" color="#f8fafc">
+                        Static Verifier Inspector
+                    </Text>
+                    <Badge bg="#0e1424" color="#38bdf8" border="#38bdf833">
+                        {"Verified < 100 us"}
+                    </Badge>
+                </Row>
+                <Text size={13} color="#94a3b8">
+                    Select a safety rule to inspect rejected TSX, structured knr check --json diagnostics, and the verified fix.
+                </Text>
+
+                <Row gap={8}>
+                    <Button
+                        key="btn_diag_uam"
+                        onClick="diag_uam"
+                        bg={s.diag_case === 0 ? "#141f38" : "#0e1322"}
+                        border={s.diag_case === 0 ? "#38bdf866" : "#ffffff14"}
+                        hoverBorder="#38bdf855"
+                        px={13}
+                        py={8}
+                        radius={9}
+                        gap={7}
+                        align="center"
+                    >
+                        <Icon name="alert" size={14} color={s.diag_case === 0 ? "#38bdf8" : "#64748b"} />
+                        <Text size={13} weight="semibold" color={s.diag_case === 0 ? "#f8fafc" : "#94a3b8"}>
+                            UseAfterMove
+                        </Text>
+                    </Button>
+                    <Button
+                        key="btn_diag_leak"
+                        onClick="diag_leak"
+                        bg={s.diag_case === 1 ? "#141f38" : "#0e1322"}
+                        border={s.diag_case === 1 ? "#38bdf866" : "#ffffff14"}
+                        hoverBorder="#38bdf855"
+                        px={13}
+                        py={8}
+                        radius={9}
+                        gap={7}
+                        align="center"
+                    >
+                        <Icon name="lock" size={14} color={s.diag_case === 1 ? "#38bdf8" : "#64748b"} />
+                        <Text size={13} weight="semibold" color={s.diag_case === 1 ? "#f8fafc" : "#94a3b8"}>
+                            LinearLeak
+                        </Text>
+                    </Button>
+                    <Button
+                        key="btn_diag_escape"
+                        onClick="diag_escape"
+                        bg={s.diag_case === 2 ? "#1a1936" : "#0e1322"}
+                        border={s.diag_case === 2 ? "#818cf866" : "#ffffff14"}
+                        hoverBorder="#818cf855"
+                        px={13}
+                        py={8}
+                        radius={9}
+                        gap={7}
+                        align="center"
+                    >
+                        <Icon name="shield" size={14} color={s.diag_case === 2 ? "#818cf8" : "#64748b"} />
+                        <Text size={13} weight="semibold" color={s.diag_case === 2 ? "#f8fafc" : "#94a3b8"}>
+                            BorrowEscape
+                        </Text>
+                    </Button>
+                    <Button
+                        key="btn_diag_shader"
+                        onClick="diag_shader"
+                        bg={s.diag_case === 3 ? "#1a1936" : "#0e1322"}
+                        border={s.diag_case === 3 ? "#818cf866" : "#ffffff14"}
+                        hoverBorder="#818cf855"
+                        px={13}
+                        py={8}
+                        radius={9}
+                        gap={7}
+                        align="center"
+                    >
+                        <Icon name="cpu" size={14} color={s.diag_case === 3 ? "#818cf8" : "#64748b"} />
+                        <Text size={13} weight="semibold" color={s.diag_case === 3 ? "#f8fafc" : "#94a3b8"}>
+                            ShaderImpureOp
+                        </Text>
+                    </Button>
+                </Row>
+
+                <Grid cols={2} gap={16}>
+                    <Column gap={12}>
+                        <Row justify="between" align="center">
+                            <Text size={12} font="mono" color="#94a3b8">
+                                rejected.tsk
+                            </Text>
+                            <Badge bg="#26131c" color="#fda4af" border="#f43f5e44">
+                                REJECTED
+                            </Badge>
+                        </Row>
+                        <Code lang="tsx">{diag_broken_code(s.diag_case)}</Code>
+
+                        <Row justify="between" align="center" pt={4}>
+                            <Text size={12} font="mono" color="#94a3b8">
+                                knr check --json
+                            </Text>
+                            <Badge bg="#1e1b10" color="#fcd34d" border="#f59e0b44">
+                                DIAGNOSTIC
+                            </Badge>
+                        </Row>
+                        <Code lang="json">{diag_json_output(s.diag_case)}</Code>
+                    </Column>
+
+                    <Column gap={12}>
+                        <Row justify="between" align="center">
+                            <Text size={12} font="mono" color="#94a3b8">
+                                verified.tsk
+                            </Text>
+                            <Badge bg="#0c1d2e" color="#38bdf8" border="#38bdf844">
+                                0 DIAGNOSTICS | PASS
+                            </Badge>
+                        </Row>
+                        <Code lang="tsx">{diag_fixed_code(s.diag_case)}</Code>
+
+                        <Card bg="#0e1322" border="#ffffff14" radius={12} p={16} gap={10}>
+                            <Row align="center" gap={8}>
+                                <Icon name="check" size={15} color="#38bdf8" />
+                                <Text size={13} weight="semibold" color="#f8fafc">
+                                    Structured Diagnostics for Humans & AI Agents
+                                </Text>
+                            </Row>
+                            <Text size={13} color="#94a3b8" lineHeight={1.55}>
+                                Every rejection reports the exact source variable name, live linear register set, and deterministic fix hint via knr check --json before any native, WASM, or GPU shader codegen runs.
+                            </Text>
+                        </Card>
+                    </Column>
+                </Grid>
+            </Card>
+
+            <Grid key="safety_pillars_grid" cols={2} gap={16}>
+                <Card bg="#0b0f1c" border="#ffffff14" hoverBorder="#38bdf866" radius={16} p={22} gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="shield" size={15} color="#38bdf8" />
+                        <Text size={16} weight="bold" color="#f8fafc">
+                            Second-Class readonly Borrows
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.55}>
+                        Pass readonly State into view(s) and nested components without cloning or moving ownership. Borrows cannot escape the call frame, eliminating lifetime annotations completely.
+                    </Text>
+                </Card>
+
+                <Card bg="#0b0f1c" border="#ffffff14" hoverBorder="#38bdf866" radius={16} p={22} gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="git-branch" size={15} color="#818cf8" />
+                        <Text size={16} weight="bold" color="#f8fafc">
+                            Exhaustive Tagged Enums & switch
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.55}>
+                        Algebraic enum types lower to compact tagged linear schemas with discriminant slot 0. Every switch over an enum is statically verified exhaustive at compile time.
+                    </Text>
+                </Card>
+
+                <Card bg="#0b0f1c" border="#ffffff14" hoverBorder="#38bdf866" radius={16} p={22} gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="lock" size={15} color="#38bdf8" />
+                        <Text size={16} weight="bold" color="#f8fafc">
+                            Transitive @effects Isolation
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.55}>
+                        Functions are pure by default. Host capabilities (net, ui, hw, async) propagate across every call edge so MVU reducers, tests, and GPU shaders remain side-effect free.
+                    </Text>
+                </Card>
+
+                <Card bg="#0b0f1c" border="#ffffff14" hoverBorder="#38bdf866" radius={16} p={22} gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="cpu" size={15} color="#818cf8" />
+                        <Text size={16} weight="bold" color="#f8fafc">
+                            Static GPU Shader Purity
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.55}>
+                        Every @shader kernel is checked free of effects, heap allocations, and recursion, then lowered and validated via naga into both WGSL and GLSL ES 3.00.
+                    </Text>
+                </Card>
+            </Grid>
+        </Column>
+    );
+}

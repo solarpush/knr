@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use crate::ast::{Effect, Instruction, Op, RegId, Terminator, Type};
-use crate::lower::context::{FnLoweringContext, LoopContext};
+use crate::lower::context::{FnLoweringContext, LinearState, LoopContext};
 use crate::lower::error::LowerError;
-use crate::syntax::ast::{Block, Expr, ExprKind, Span, Stmt, StmtKind};
+use crate::syntax::ast::{Block, DestructPattern, Expr, ExprKind, Span, Stmt, StmtKind};
 
 impl<'a> FnLoweringContext<'a> {
     /// Lowers a top-level function body block (tail expression returns from the function).
@@ -91,7 +91,13 @@ impl<'a> FnLoweringContext<'a> {
     pub fn lower_stmt(&mut self, stmt: &Stmt) -> Result<(), LowerError> {
         let line = stmt.span.line;
         match &stmt.kind {
-            StmtKind::Let { name, ty, init } => {
+            StmtKind::Let {
+                name,
+                ty,
+                init,
+                is_const: _,
+                destruct,
+            } => {
                 let expected_ty = if let Some(t_expr) = ty {
                     Some(
                         t_expr
@@ -114,7 +120,27 @@ impl<'a> FnLoweringContext<'a> {
                     }
                 }
 
-                self.bind_var(&name.name, r_val, ty_val, true, name.span);
+                if let Some(pat) = destruct {
+                    self.lower_destruct_binding(pat, r_val, &ty_val, line)?;
+                } else {
+                    // Container reads (`VecGet`, `StructGet`, `MapGet`) return non-owning borrowed
+                    // views into the parent container (matching `knr-verify::linear`), so they must
+                    // NEVER emit `Op::Free` at scope exit (which would free elements still held by
+                    // the parent Vec/Struct/Map in native Cranelift & WASM codegen).
+                    let is_non_owning_view = self
+                        .current_block
+                        .instructions
+                        .iter()
+                        .rev()
+                        .find(|inst| inst.dst == Some(r_val))
+                        .is_some_and(|inst| {
+                            matches!(
+                                inst.op,
+                                Op::VecGet(_, _) | Op::StructGet(_, _) | Op::MapGet(_, _)
+                            )
+                        });
+                    self.bind_var(&name.name, r_val, ty_val, !is_non_owning_view, name.span);
+                }
                 Ok(())
             }
             StmtKind::Return { value } => self.lower_return(value.as_ref(), line),
@@ -160,12 +186,229 @@ impl<'a> FnLoweringContext<'a> {
         }
     }
 
+    pub fn lower_destruct_binding(
+        &mut self,
+        pat: &DestructPattern,
+        src_reg: RegId,
+        src_ty: &Type,
+        line: usize,
+    ) -> Result<(), LowerError> {
+        let src_is_temp_owned = !self.is_reg_bound_to_var(src_reg)
+            && matches!(
+                self.linear_tracker.states.get(&src_reg),
+                Some(LinearState::Alive {
+                    local_alloc: true,
+                    borrowed: false,
+                    ..
+                })
+            );
+
+        match pat {
+            DestructPattern::Object(fields) => {
+                let schema_name = match src_ty {
+                    Type::Struct(s) => s.clone(),
+                    other => {
+                        return Err(LowerError::TypeMismatch {
+                            line,
+                            expected: "struct[...]".to_string(),
+                            actual: other.to_string(),
+                        });
+                    }
+                };
+                let schema = self
+                    .schemas
+                    .get(&schema_name)
+                    .cloned()
+                    .ok_or_else(|| LowerError::UnknownSchema {
+                        line,
+                        name: schema_name.clone(),
+                    })?;
+
+                let mut any_linear_field = false;
+                for (field_ident, alias_opt) in fields {
+                    let field_def = schema
+                        .get_field_by_name(&field_ident.name)
+                        .ok_or_else(|| LowerError::UndeclaredField {
+                            line: field_ident.span.line,
+                            schema: schema_name.clone(),
+                            field: field_ident.name.clone(),
+                        })?;
+                    let dst = self.alloc_reg();
+                    let bind_ident = alias_opt.as_ref().unwrap_or(field_ident);
+                    self.record_span(dst, bind_ident.span);
+                    self.emit(Instruction::new(
+                        Some(dst),
+                        field_def.ty.clone(),
+                        Op::StructGet(src_reg, field_def.index),
+                        bind_ident.span.line,
+                    ));
+                    if field_def.ty.is_linear() {
+                        any_linear_field = true;
+                        // Borrow linear field non-consumingly so destructuring never moves `src_reg`
+                        // and never double-frees the parent struct's field at scope exit.
+                        self.bind_borrowed_param(
+                            &bind_ident.name,
+                            dst,
+                            field_def.ty.clone(),
+                            bind_ident.span,
+                        );
+                    } else {
+                        self.bind_var(
+                            &bind_ident.name,
+                            dst,
+                            field_def.ty.clone(),
+                            false,
+                            bind_ident.span,
+                        );
+                    }
+                }
+
+                if src_is_temp_owned {
+                    if !any_linear_field {
+                        self.emit(Instruction::new(None, Type::Void, Op::Free(src_reg), line));
+                        self.linear_tracker.mark_moved(src_reg, line)?;
+                    } else if let Some(scope) = self.scopes.last_mut() {
+                        scope.declared_linear_regs.push(src_reg);
+                    }
+                }
+                Ok(())
+            }
+            DestructPattern::Array(elems) => {
+                let elem_ty = match src_ty {
+                    Type::Vec(inner) => (**inner).clone(),
+                    other => {
+                        return Err(LowerError::TypeMismatch {
+                            line,
+                            expected: "vec[...]".to_string(),
+                            actual: other.to_string(),
+                        });
+                    }
+                };
+
+                let any_linear_elem = elem_ty.is_linear() && !elems.is_empty();
+                for (idx, elem_ident) in elems.iter().enumerate() {
+                    let idx_reg = self.alloc_reg();
+                    self.emit(Instruction::new(
+                        Some(idx_reg),
+                        Type::I64,
+                        Op::ConstI64(idx as i64),
+                        elem_ident.span.line,
+                    ));
+                    let dst = self.alloc_reg();
+                    self.record_span(dst, elem_ident.span);
+                    self.emit(Instruction::new(
+                        Some(dst),
+                        elem_ty.clone(),
+                        Op::VecGet(src_reg, idx_reg),
+                        elem_ident.span.line,
+                    ));
+                    if elem_ty.is_linear() {
+                        self.bind_borrowed_param(
+                            &elem_ident.name,
+                            dst,
+                            elem_ty.clone(),
+                            elem_ident.span,
+                        );
+                    } else {
+                        self.bind_var(
+                            &elem_ident.name,
+                            dst,
+                            elem_ty.clone(),
+                            false,
+                            elem_ident.span,
+                        );
+                    }
+                }
+
+                if src_is_temp_owned {
+                    if !any_linear_elem {
+                        self.emit(Instruction::new(None, Type::Void, Op::Free(src_reg), line));
+                        self.linear_tracker.mark_moved(src_reg, line)?;
+                    } else if let Some(scope) = self.scopes.last_mut() {
+                        scope.declared_linear_regs.push(src_reg);
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
     pub fn lower_return(
         &mut self,
         val_expr: Option<&Expr>,
         line: usize,
     ) -> Result<(), LowerError> {
         if self.is_terminated {
+            return Ok(());
+        }
+
+        // Inside an arrow block body (e.g. `.map((x) => { ... return expr; })`),
+        // `return` yields to the arrow merge block instead of returning from the outer function.
+        if let Some(arrow_ctx) = self.arrow_ret_stack.last().cloned() {
+            let expr = val_expr.ok_or_else(|| LowerError::InvalidConstruct {
+                line,
+                msg: "Arrow function block body must return a value".to_string(),
+            })?;
+            let exp = arrow_ctx
+                .inferred_ty
+                .as_ref()
+                .or(arrow_ctx.expected_ty.as_ref());
+            let (ret_reg, ret_ty) = self.lower_expr_with_expected(expr, exp)?;
+            if ret_ty == Type::Void {
+                return Err(LowerError::InvalidConstruct {
+                    line,
+                    msg: "Arrow function callback cannot return void".to_string(),
+                });
+            }
+            if let Some(ref prev) = arrow_ctx.inferred_ty {
+                if prev != &ret_ty {
+                    return Err(LowerError::TypeMismatch {
+                        line,
+                        expected: prev.to_string(),
+                        actual: ret_ty.to_string(),
+                    });
+                }
+            }
+            if let Some(ref exp_ty) = arrow_ctx.expected_ty {
+                if exp_ty != &ret_ty {
+                    return Err(LowerError::TypeMismatch {
+                        line,
+                        expected: exp_ty.to_string(),
+                        actual: ret_ty.to_string(),
+                    });
+                }
+            }
+            if self.linear_tracker.is_borrowed(ret_reg) {
+                return Err(LowerError::InvalidConstruct {
+                    line,
+                    msg: "Cannot return borrowed element directly from arrow callback".to_string(),
+                });
+            }
+
+            // Auto-drop ONLY allocations created inside this arrow body (never outer loop/parent regs)
+            let leakables = self.linear_tracker.get_alive_local_allocations(self.schemas);
+            for (reg, _) in leakables {
+                if reg != ret_reg && !arrow_ctx.pre_linear_regs.contains(&reg) {
+                    self.emit(Instruction::new(None, Type::Void, Op::Free(reg), line));
+                    self.linear_tracker.mark_moved(reg, line)?;
+                }
+            }
+
+            if ret_ty.is_linear() {
+                self.linear_tracker.mark_moved(ret_reg, line)?;
+            }
+
+            if let Some(top) = self.arrow_ret_stack.last_mut() {
+                top.inferred_ty = Some(ret_ty);
+                top.reached_merge = true;
+            }
+
+            self.current_block.terminator = Terminator::BrArgs {
+                target: arrow_ctx.merge_bb,
+                args: vec![ret_reg],
+            };
+            self.finalize_current_block();
+            self.is_terminated = true;
             return Ok(());
         }
 
@@ -678,9 +921,29 @@ fn collect_assigned_vars_in_stmt(
     out: &mut Vec<String>,
 ) {
     match &stmt.kind {
-        StmtKind::Let { name, init, .. } => {
+        StmtKind::Let {
+            name,
+            init,
+            destruct,
+            ..
+        } => {
             collect_assigned_vars_in_expr(init, shadowed, out);
-            shadowed.insert(name.name.clone());
+            match destruct {
+                Some(DestructPattern::Object(fields)) => {
+                    for (f, alias) in fields {
+                        let local_name = alias.as_ref().unwrap_or(f);
+                        shadowed.insert(local_name.name.clone());
+                    }
+                }
+                Some(DestructPattern::Array(elems)) => {
+                    for e in elems {
+                        shadowed.insert(e.name.clone());
+                    }
+                }
+                None => {
+                    shadowed.insert(name.name.clone());
+                }
+            }
         }
         StmtKind::Assign { target, value } => {
             collect_assigned_vars_in_expr(value, shadowed, out);
@@ -754,6 +1017,26 @@ pub(crate) fn collect_assigned_vars_in_expr(
                 collect_assigned_vars_in_expr(a, shadowed, out);
             }
         }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            collect_assigned_vars_in_expr(receiver, shadowed, out);
+            for a in args {
+                collect_assigned_vars_in_expr(a, shadowed, out);
+            }
+        }
+        ExprKind::Arrow { params, body } => {
+            let mut arrow_shadowed = shadowed.clone();
+            for p in params {
+                arrow_shadowed.insert(p.name.clone());
+            }
+            match body {
+                crate::syntax::ast::ArrowBody::Expr(e) => {
+                    collect_assigned_vars_in_expr(e, &arrow_shadowed, out);
+                }
+                crate::syntax::ast::ArrowBody::Block(blk) => {
+                    collect_assigned_vars_in_block(blk, &arrow_shadowed, out);
+                }
+            }
+        }
         ExprKind::StructLit { fields, spread, .. } => {
             for f in fields {
                 collect_assigned_vars_in_expr(&f.value, shadowed, out);
@@ -767,6 +1050,29 @@ pub(crate) fn collect_assigned_vars_in_expr(
         ExprKind::Index { target, index } => {
             collect_assigned_vars_in_expr(target, shadowed, out);
             collect_assigned_vars_in_expr(index, shadowed, out);
+        }
+        ExprKind::TemplateStr(parts) => {
+            for part in parts {
+                if let crate::syntax::ast::TemplatePart::Expr(e) = part {
+                    collect_assigned_vars_in_expr(e, shadowed, out);
+                }
+            }
+        }
+        ExprKind::Jsx { props, children, .. } => {
+            for p in props {
+                if let Some(ref e) = p.value {
+                    collect_assigned_vars_in_expr(e, shadowed, out);
+                }
+            }
+            for c in children {
+                match c {
+                    crate::syntax::ast::JsxChild::Expr(e)
+                    | crate::syntax::ast::JsxChild::Element(e) => {
+                        collect_assigned_vars_in_expr(e, shadowed, out);
+                    }
+                    crate::syntax::ast::JsxChild::Text(_, _) => {}
+                }
+            }
         }
         ExprKind::Int(_)
         | ExprKind::Float(_)

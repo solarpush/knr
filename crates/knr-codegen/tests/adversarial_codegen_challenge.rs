@@ -196,19 +196,63 @@ fn test_wasm_single_block_loop_converted_to_return_defect() {
     let backend = WasmBackend::new();
     let wasm_bytes = backend.compile_function(&func).expect("Wasm compile failed");
 
-    // In Wasm, the code section should contain the dispatch loop.
+    // Extract the Code Section (id = 10) and first function body (`infinite_self_loop`)
+    let mut off = 8;
+    let mut first_fn_body: Option<&[u8]> = None;
+    while off < wasm_bytes.len() {
+        let sec_id = wasm_bytes[off];
+        off += 1;
+        let mut sec_len: usize = 0;
+        let mut shift = 0;
+        loop {
+            let b = wasm_bytes[off];
+            off += 1;
+            sec_len |= ((b & 0x7F) as usize) << shift;
+            if b & 0x80 == 0 {
+                break;
+            }
+            shift += 7;
+        }
+        if sec_id == 10 {
+            let sec = &wasm_bytes[off..off + sec_len];
+            // Skip function count LEB128
+            let mut p = 0;
+            while sec[p] & 0x80 != 0 {
+                p += 1;
+            }
+            p += 1;
+            // Read body length LEB128 for function 0
+            let mut body_len: usize = 0;
+            let mut bshift = 0;
+            loop {
+                let b = sec[p];
+                p += 1;
+                body_len |= ((b & 0x7F) as usize) << bshift;
+                if b & 0x80 == 0 {
+                    break;
+                }
+                bshift += 7;
+            }
+            first_fn_body = Some(&sec[p..p + body_len]);
+            break;
+        }
+        off += sec_len;
+    }
+    let body = first_fn_body.expect("Wasm binary must contain a Code section with function 0");
+
+    // In Wasm, the code section for `infinite_self_loop` should contain the dispatch loop.
     // Single-block branch must NOT be compiled to Return (0x0F).
     assert!(
-        !wasm_bytes.contains(&0x0F),
+        !body.contains(&0x0F),
         "Single-block branch 'br bb0' must NOT be compiled to Return (0x0F)"
     );
     // 0x03 is Loop opcode, 0x0C is Br opcode
     assert!(
-        wasm_bytes.contains(&0x03),
+        body.contains(&0x03),
         "Single-block branch 'br bb0' must contain Loop instruction (0x03)"
     );
     assert!(
-        wasm_bytes.contains(&0x0C),
+        body.contains(&0x0C),
         "Single-block branch 'br bb0' must contain Br instruction (0x0C)"
     );
 }

@@ -307,6 +307,16 @@ fn http_request(method: &str, url: &str, body: Option<&str>) -> Option<String> {
     }
 }
 
+/// Pure-Rust HTTP/1.1 GET helper returning the response body (or empty string on failure).
+pub fn http_get(url: &str) -> String {
+    http_request("GET", url, None).unwrap_or_default()
+}
+
+/// Pure-Rust HTTP/1.1 POST helper returning the response body (or empty string on failure).
+pub fn http_post(url: &str, body: &str) -> String {
+    http_request("POST", url, Some(body)).unwrap_or_default()
+}
+
 /// Handles pure-Rust HTTP/1.1 client operations (`http.get`, `http.post`) under the `Net` capability.
 ///
 /// Returns `Ok(None)` if `op` is not a recognized HTTP client operation.
@@ -321,12 +331,12 @@ pub fn handle_http_client_op(op: &str, payload: Value) -> Result<Option<Value>, 
                     ));
                 }
             };
-            let body = http_request("GET", &url, None).unwrap_or_default();
+            let body = http_get(&url);
             Ok(Some(Value::Str(body)))
         }
         "http.post" => {
             let (url, body) = extract_two_strs(payload, op, "url", "body")?;
-            let resp = http_request("POST", &url, Some(&body)).unwrap_or_default();
+            let resp = http_post(&url, &body);
             Ok(Some(Value::Str(resp)))
         }
         _ => Ok(None),

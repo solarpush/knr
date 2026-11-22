@@ -5,8 +5,8 @@ use knr_core::Op;
 #[test]
 fn test_lower_arithmetic() {
     let src = r#"
-        fn calc(a: i64) -> i64 {
-            let y = (a + 2) * 3;
+        function calc(a: i64): i64 {
+            const y = (a + 2) * 3;
             return y;
         }
     "#;
@@ -32,12 +32,12 @@ fn test_lower_arithmetic() {
 #[test]
 fn test_lower_struct_literal_threading() {
     let src = r#"
-        schema Point {
-            0: x i64,
-            1: y i64,
-        }
-        fn make() -> Point {
-            let p = Point {
+        type Point = {
+            x: i64,
+            y: i64,
+        };
+        function make(): Point {
+            const p: Point = {
                 x: 100,
                 y: 200,
             };
@@ -61,7 +61,7 @@ fn test_lower_struct_literal_threading() {
 #[test]
 fn test_lower_array_literal_threading() {
     let src = r#"
-        fn list() -> vec[i64] {
+        function list(): i64[] {
             return [10, 20, 30];
         }
     "#;
@@ -81,12 +81,12 @@ fn test_lower_array_literal_threading() {
 #[test]
 fn test_auto_drop_unreturned_linear_values() {
     let src = r#"
-        schema Box {
-            0: val i64,
-        }
-        fn drop_me() -> i64 {
-            let b = Box { val: 42 };
-            let numbers = [1, 2, 3];
+        type Box = {
+            val: i64,
+        };
+        function drop_me(): i64 {
+            const b: Box = { val: 42 };
+            const numbers = [1, 2, 3];
             return 999;
         }
     "#;
@@ -109,8 +109,8 @@ fn test_auto_drop_unreturned_linear_values() {
 #[test]
 fn test_lower_branching() {
     let src = r#"
-        fn branch(a: i64, b: i64) -> i64 {
-            if a > b {
+        function branch(a: i64, b: i64): i64 {
+            if (a > b) {
                 return a;
             } else {
                 return b;

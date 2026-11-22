@@ -1,8 +1,8 @@
 //! Comprehensive end-to-end parity test suite proving:
 //!   VM (knr-interp) == Cranelift JIT (knr-codegen) == WebAssembly (executed in Node.js!)
-//! plus static verification of second-class borrows (&T), exhaustive enum match,
+//! plus static verification of second-class borrows (readonly T), exhaustive enum switch,
 //! block-parameter loops (while/break/continue), strings, structs, vectors,
-//! multi-file .knr imports, and 1:1 .knrbin roundtrip bijection.
+//! multi-file imports, and 1:1 .knrbin roundtrip bijection.
 
 use knr_codegen::{CraneliftBackend, WasmBackend};
 use knr_core::syntax::parse_knr;
@@ -12,7 +12,7 @@ use knr_runtime::mock::MockPlatform;
 use knr_verify::{verify_module, verify_program, verify_program_from_file};
 use std::process::Command;
 
-/// Compile and verify `.knr` source, assert `.ssa` text + `.knrbin` binary 1:1 roundtrip,
+/// Compile and verify Strict TS source, assert `.ssa` text + `.knrbin` binary 1:1 roundtrip,
 /// execute `entry` in VM, execute `entry` in Cranelift JIT, AND execute `entry` in real
 /// WebAssembly via Node.js (with ZERO external JS imports!).
 fn assert_full_triple_parity_i64(src: &str, entry: &str, expected: i64) {
@@ -112,18 +112,18 @@ fn run_wasm_in_node_i64(wasm_bytes: &[u8], entry: &str) -> Option<i64> {
 #[test]
 fn test_parity_while_loop_break_continue_modulo_short_circuit() {
     let src = r#"
-        fn main() -> i64 {
+        function main(): i64 {
             let i = 0;
             let sum = 0;
-            while i < 30 {
+            while (i < 30) {
                 i = i + 1;
-                if i % 2 == 0 {
+                if (i % 2 === 0) {
                     continue;
                 }
-                if i > 20 && sum > 50 {
+                if (i > 20 && sum > 50) {
                     break;
                 }
-                if i == 3 || i == 7 {
+                if (i === 3 || i === 7) {
                     sum = sum + i * 10;
                 } else {
                     sum = sum + i;
@@ -149,22 +149,31 @@ fn test_parity_enum_and_exhaustive_match_expr_and_stmt() {
             Reset,
         }
 
-        fn apply(state: i64, act: Action) -> i64 {
-            let next = match act {
-                Action::Inc(n) => state + n,
-                Action::Dec(n) => state - n,
-                Action::Double => state * 2,
-                Action::Reset => 0,
-            };
+        function apply(state: i64, act: Action): i64 {
+            let next = 0;
+            switch (act) {
+                case Action.Inc(n):
+                    next = state + n;
+                    break;
+                case Action.Dec(n):
+                    next = state - n;
+                    break;
+                case Action.Double:
+                    next = state * 2;
+                    break;
+                case Action.Reset:
+                    next = 0;
+                    break;
+            }
             return next;
         }
 
-        fn main() -> i64 {
+        function main(): i64 {
             let s = 10;
-            s = apply(s, Action::Inc(5));
-            s = apply(s, Action::Double);
-            s = apply(s, Action::Dec(8));
-            let bonus = if s > 20 { 100 } else { 0 };
+            s = apply(s, Action.Inc(5));
+            s = apply(s, Action.Double);
+            s = apply(s, Action.Dec(8));
+            const bonus = s > 20 ? 100 : 0;
             return s + bonus;
         }
     "#;
@@ -174,42 +183,42 @@ fn test_parity_enum_and_exhaustive_match_expr_and_stmt() {
 #[test]
 fn test_parity_second_class_borrows_structs_vectors_strings_and_recursion() {
     let src = r#"
-        struct Point {
-            0: x i64,
-            1: y i64,
-            2: label str,
-        }
+        type Point = {
+            x: i64,
+            y: i64,
+            label: string,
+        };
 
-        fn manhattan(p: &Point) -> i64 {
+        function manhattan(p: readonly Point): i64 {
             return p.x + p.y + str_len(p.label);
         }
 
-        fn fact(n: i64) -> i64 {
-            if n <= 1 {
+        function fact(n: i64): i64 {
+            if (n <= 1) {
                 return 1;
             }
             return n * fact(n - 1);
         }
 
-        fn main() -> i64 {
-            let tag = "pt-" + to_str(42);
-            let p = Point { x: 10, y: 25, label: tag };
+        function main(): i64 {
+            const tag = "pt-" + to_str(42);
+            const p: Point = { x: 10, y: 25, label: tag };
             // Borrow p twice without moving ownership!
-            let d1 = manhattan(&p);
-            let d2 = manhattan(&p);
-            let eq_bonus = if p.label == "pt-42" { 1000 } else { 0 };
+            const d1 = manhattan(p);
+            const d2 = manhattan(p);
+            const eq_bonus = p.label === "pt-42" ? 1000 : 0;
 
             // Build a vector dynamically inside a while loop
-            let v: vec[i64] = vec_new();
+            let v: i64[] = vec_new();
             let k = 1;
-            while k <= 5 {
+            while (k <= 5) {
                 v = vec_push(v, k * k);
                 k = k + 1;
             }
             let total = 0;
             let idx = 0;
-            let n = vec_len(v);
-            while idx < n {
+            const n = vec_len(v);
+            while (idx < n) {
                 total = total + v[idx];
                 idx = idx + 1;
             }
@@ -232,11 +241,13 @@ fn test_static_rejects_non_exhaustive_enum_match() {
             Blue,
         }
 
-        fn score(c: Color) -> i64 {
-            return match c {
-                Color::Red => 1,
-                Color::Green => 2,
-            };
+        function score(c: Color): i64 {
+            switch (c) {
+                case Color.Red:
+                    return 1;
+                case Color.Green:
+                    return 2;
+            }
         }
     "#;
     let prog = parse_knr(src).expect("parse");
@@ -251,16 +262,16 @@ fn test_static_rejects_non_exhaustive_enum_match() {
 #[test]
 fn test_static_rejects_second_class_borrow_escape() {
     let src = r#"
-        struct Boxed {
-            0: v i64,
-        }
+        type Boxed = {
+            v: i64,
+        };
 
-        fn leak_borrow(b: &Boxed) -> Boxed {
+        function leak_borrow(b: readonly Boxed): Boxed {
             return b;
         }
     "#;
     let prog = parse_knr(src).expect("parse");
-    let err = verify_program(&prog).expect_err("Returning a borrowed &T parameter must be rejected");
+    let err = verify_program(&prog).expect_err("Returning a borrowed readonly T parameter must be rejected");
     let combined: String = err
         .iter()
         .map(|d| format!("{}: {}", d.error_kind, d))
@@ -284,11 +295,11 @@ fn test_multifile_knr_import_resolution_and_parity() {
     std::fs::write(
         &helper_path,
         r#"
-        struct Acc {
-            0: val i64,
-        }
+        export type Acc = {
+            val: i64,
+        };
 
-        fn peek(a: &Acc) -> i64 {
+        export function peek(a: readonly Acc): i64 {
             return a.val * 3;
         }
         "#,
@@ -298,11 +309,11 @@ fn test_multifile_knr_import_resolution_and_parity() {
     std::fs::write(
         &main_path,
         r#"
-        import "./math_lib.knr";
+        import { Acc, peek } from "./math_lib.knr";
 
-        fn main() -> i64 {
-            let a = Acc { val: 14 };
-            return peek(&a);
+        export function main(): i64 {
+            const a: Acc = { val: 14 };
+            return peek(a);
         }
         "#,
     )
@@ -331,22 +342,22 @@ fn test_multifile_knr_import_resolution_and_parity() {
 #[test]
 fn test_parity_math_intrinsics_hex_colors_and_struct_spread() {
     let src = r##"
-        schema Color {
-            0: r f64,
-            1: g f64,
-            2: b f64,
-            3: a f64,
-        }
+        type Color = {
+            r: f64,
+            g: f64,
+            b: f64,
+            a: f64,
+        };
 
-        schema StyleBox {
-            0: w f64,
-            1: h f64,
-            2: bg str,
-            3: radius f64,
-        }
+        type StyleBox = {
+            w: f64,
+            h: f64,
+            bg: string,
+            radius: f64,
+        };
 
-        fn base_box() -> StyleBox {
-            return StyleBox {
+        function base_box(): StyleBox {
+            return {
                 w: 100.0,
                 h: 50.0,
                 bg: #0f172a,
@@ -354,32 +365,32 @@ fn test_parity_math_intrinsics_hex_colors_and_struct_spread() {
             };
         }
 
-        fn main() -> i64 {
+        function main(): i64 {
             // Math intrinsics (pure zero-import WASM + Cranelift + VM parity!)
-            let s = sin(1.0);
-            let c = cos(1.0);
-            let pyth = s * s + c * c; // ~1.0
-            let t = tan(0.5); // ~0.5463
-            let sq = sqrt(16.0); // 4.0
-            let ab = abs(-7.5); // 7.5
-            let fl = floor(3.9); // 3.0
-            let cl = ceil(3.1); // 4.0
-            let fr = fract(3.25); // 0.25
-            let pw = pow(2.0, 5.0); // 32.0
-            let at = atan2(1.0, 1.0); // pi/4 ~0.7854
-            let mn = min(9.0, 4.0); // 4.0
-            let mx = max(9.0, 4.0); // 9.0
-            let cm = clamp(15.0, 0.0, 10.0); // 10.0
-            let lr = lerp(10.0, 20.0, 0.25); // 12.5
-            let sm = smoothstep(0.0, 1.0, 0.5); // 0.5
+            const s = sin(1.0);
+            const c = cos(1.0);
+            const pyth = s * s + c * c; // ~1.0
+            const t = tan(0.5); // ~0.5463
+            const sq = sqrt(16.0); // 4.0
+            const ab = abs(-7.5); // 7.5
+            const fl = floor(3.9); // 3.0
+            const cl = ceil(3.1); // 4.0
+            const fr = fract(3.25); // 0.25
+            const pw = pow(2.0, 5.0); // 32.0
+            const at = atan2(1.0, 1.0); // pi/4 ~0.7854
+            const mn = min(9.0, 4.0); // 4.0
+            const mx = max(9.0, 4.0); // 9.0
+            const cm = clamp(15.0, 0.0, 10.0); // 10.0
+            const lr = lerp(10.0, 20.0, 0.25); // 12.5
+            const sm = smoothstep(0.0, 1.0, 0.5); // 0.5
 
-            // Hex color literal -> typed Color struct & str literal
-            let sky: Color = #38bdf8;
-            let box1 = StyleBox { w: 240.0, bg: #38bdf8, ..base_box() };
-            let bg_ok = if box1.bg == "#38bdf8" { 100.0 } else { 0.0 };
+            // Hex color literal -> typed Color struct & string literal
+            const sky: Color = #38bdf8;
+            const box1: StyleBox = { ...base_box(), w: 240.0, bg: #38bdf8 };
+            const bg_ok = box1.bg === "#38bdf8" ? 100.0 : 0.0;
 
             // Combine into deterministic scaled integer to check exact cross-backend parity
-            let sum = pyth * 100.0
+            const sum = pyth * 100.0
                 + t * 100.0
                 + sq
                 + ab

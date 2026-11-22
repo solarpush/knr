@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::{BasicBlock, BlockId, Effect, Instruction, Op, RegId, Schema, Terminator, Type};
 use crate::lower::error::LowerError;
@@ -25,13 +25,15 @@ impl EnumMeta {
     }
 }
 
-/// Function signature tracked during lowering (including second-class borrow flags).
+/// Function signature tracked during lowering (including second-class borrow flags & JSX param names).
 #[derive(Debug, Clone)]
 pub struct FnSig {
+    pub param_names: Vec<String>,
     pub param_types: Vec<Type>,
     pub param_borrows: Vec<bool>,
     pub ret_ty: Type,
     pub effects: Vec<Effect>,
+    pub is_shader: bool,
 }
 
 impl FnSig {
@@ -46,6 +48,16 @@ pub struct LoopContext {
     pub header_bb: BlockId,
     pub exit_bb: BlockId,
     pub loop_vars: Vec<String>,
+}
+
+/// Active arrow-function block return context (used by `.map(...)` / `.filter(...)` block bodies).
+#[derive(Debug, Clone)]
+pub struct ArrowReturnCtx {
+    pub merge_bb: BlockId,
+    pub expected_ty: Option<Type>,
+    pub inferred_ty: Option<Type>,
+    pub pre_linear_regs: HashSet<RegId>,
+    pub reached_merge: bool,
 }
 
 /// Source map tracking lowered registers and spans back to source code.
@@ -344,6 +356,7 @@ pub struct FnLoweringContext<'a> {
     pub schemas: &'a HashMap<String, Schema>,
     pub enums: &'a HashMap<String, EnumMeta>,
     pub fn_sigs: &'a HashMap<String, FnSig>,
+    pub const_exprs: &'a HashMap<String, crate::syntax::ast::Expr>,
     pub next_reg: RegId,
     pub next_block: BlockId,
     pub scopes: Vec<Scope>,
@@ -353,9 +366,11 @@ pub struct FnLoweringContext<'a> {
     pub completed_blocks: Vec<BasicBlock>,
     pub is_terminated: bool,
     pub loop_stack: Vec<LoopContext>,
+    pub arrow_ret_stack: Vec<ArrowReturnCtx>,
 }
 
 impl<'a> FnLoweringContext<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         fn_name: String,
         fn_ret_ty: Type,
@@ -364,6 +379,7 @@ impl<'a> FnLoweringContext<'a> {
         schemas: &'a HashMap<String, Schema>,
         enums: &'a HashMap<String, EnumMeta>,
         fn_sigs: &'a HashMap<String, FnSig>,
+        const_exprs: &'a HashMap<String, crate::syntax::ast::Expr>,
     ) -> Self {
         Self {
             fn_name,
@@ -372,6 +388,7 @@ impl<'a> FnLoweringContext<'a> {
             schemas,
             enums,
             fn_sigs,
+            const_exprs,
             next_reg: param_count as RegId,
             next_block: 1,
             scopes: vec![Scope::default()],
@@ -381,7 +398,15 @@ impl<'a> FnLoweringContext<'a> {
             completed_blocks: Vec::new(),
             is_terminated: false,
             loop_stack: Vec::new(),
+            arrow_ret_stack: Vec::new(),
         }
+    }
+
+    /// Returns true if `reg` is currently bound to any live variable in any active scope.
+    pub fn is_reg_bound_to_var(&self, reg: RegId) -> bool {
+        self.scopes
+            .iter()
+            .any(|s| s.variables.values().any(|b| b.reg == reg))
     }
 
     pub fn alloc_reg(&mut self) -> RegId {

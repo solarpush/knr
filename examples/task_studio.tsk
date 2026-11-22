@@ -1,0 +1,530 @@
+// knr v0.3.0 Flagship Showcase -- Task & Command Studio (`examples/task_studio.tsk`)
+// Demonstrates ALL v0.3.0 Agentic Flutter capabilities in one statically verified file:
+//   1. Dynamic JSX lists via `.map((task, idx) => <Card ... />)` + `Widget[]` flattening
+//   2. Conditional JSX rendering `{cond && <Badge ... />}`
+//   3. Compile-time validated typed `enum Action` + exhaustive `update(s: State, act: Action)`
+//   4. Generic `Option<i64>` monomorphization from `"std/core"`
+//   5. Non-blocking async MVU `effect(s: readonly State, act: string): Cmd` from `"std/cmd"`
+//   6. Clipped `<Scroll>` viewport + real decoded `<Image>` + live `@shader` ribbon
+//
+// Verify, test, format, and simulate full user flows headlessly:
+//   knr check examples/task_studio.tsk --json
+//   knr test examples/task_studio.tsk
+//   knr fmt --check examples/task_studio.tsk
+//   knr render examples/task_studio.tsk --input task_draft_input="Ship v0.3.0" --click btn_add_task --click btn_filter_open -o /tmp/tasks.png --assert-audit
+
+import {
+    Column,
+    Row,
+    Grid,
+    Stack,
+    Card,
+    Scroll,
+    Badge,
+    Text,
+    Button,
+    Input,
+    Shader,
+    Icon,
+    Image,
+    Divider,
+    Progress,
+    Vec2,
+    Color,
+} from "std/ui";
+import { Option } from "std/core";
+import { Cmd, cmd_none, cmd_timer, cmd_storage_save } from "std/cmd";
+
+export const STUDIO_ICON_PNG: string =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAABY0lEQVR42rXUR07DQBTGce9TSNxNnJA4iBB67x0uAEKgIAQCITgVvcOVOATLYfUx47FFFDlkbMeLJ3nh+f1X70kpeQB8akgpNaSVQTp1pNU6MuoQMtqwO1ltBFl9lI8xhh5jnI85gZw5iZzFZgp5axr5XjYzkAuzkJLEvUByuFyYo4EEcdmmgTD49w++2Ijiij3PAuL47ifB3gdxv0VwxV6ggZD4/jvBwRuPdMKVIg1EwQ9fCRovPPIfrhYXaSAifvRMcPzkR4JxtbTEA1Hxk0eC0wceCcLdQFz87J7g/M6LtOBaaZkGuoBf3BJc3vBIM671rXiBpiViP0XBr67/Aj7OAwEbyn7sBq6VVyG1W3/2IC6ul9e8QJvbwh7GwXmgw+FiQFRcr6xDEjlcDIqCG5UNGhC8igwMixuOGxC7imyJ/HMtihvOJiRRvHVDRXDT2aKBBHGz6gaSw83qNqQkcat/B7+u0BYQxR/JFgAAAABJRU5ErkJggg==";
+
+export type TaskItem = {
+    id: i64;
+    title: string;
+    tag: string;
+    done: bool;
+};
+
+export enum Action {
+    FilterAll,
+    FilterOpen,
+    FilterDone,
+    AddTask,
+    CompleteNext,
+    TriggerSync,
+    ClearToast,
+    ResetBoard,
+}
+
+export type State = {
+    tasks: TaskItem[];
+    next_id: i64;
+    filter_mode: i64;
+    draft: string;
+    toast_visible: bool;
+    toast_msg: string;
+    sync_count: i64;
+};
+
+@shader
+export function knr_studio_ribbon(uv: Vec2, time: f64, mouse: Vec2): Color {
+    const t = time * 0.35;
+    const wave = 0.5 + 0.5 * sin(uv.x * 5.2 + t + cos(uv.y * 3.1 - t * 0.7) * 0.65);
+    const mdx = uv.x - mouse.x;
+    const mdy = uv.y - mouse.y;
+    const bloom = 0.24 / (1.0 + (mdx * mdx + mdy * mdy) * 7.5);
+    const r = clamp(0.04 + wave * 0.14 + bloom * 0.32, 0.0, 1.0);
+    const g = clamp(0.09 + wave * 0.26 + bloom * 0.62, 0.0, 1.0);
+    const b = clamp(0.22 + wave * 0.44 + bloom * 0.95, 0.0, 1.0);
+    return { r, g, b, a: 1.0 };
+}
+
+export function init(): State {
+    const initial: TaskItem[] = [
+        { id: 1, title: "Lower dynamic .map() JSX lists to monotonic SSA", tag: "core", done: true },
+        { id: 2, title: "Compile-time typed enum Action & exhaustive switch", tag: "verify", done: true },
+        { id: 3, title: "Enable scissor clipping for nested <Scroll> views", tag: "gpu", done: false },
+        { id: 4, title: "Wire async Cmd effects (timer, fetch, storage)", tag: "runtime", done: false },
+        { id: 5, title: "Run headless knr render --click --assert-audit", tag: "agent", done: false },
+    ];
+    return {
+        tasks: initial,
+        next_id: 6,
+        filter_mode: 0,
+        draft: "Verify WebGPU + Desktop pixel parity",
+        toast_visible: true,
+        toast_msg: "v0.3.0 Linear Engine Ready",
+        sync_count: 1,
+    };
+}
+
+export function find_first_open_id(s: readonly State): Option<i64> {
+    const n = s.tasks.length;
+    for (let i = 0; i < n; i += 1) {
+        const item = s.tasks[i];
+        if (!item.done) {
+            return Option<i64>.Some(item.id);
+        }
+    }
+    return Option<i64>.None;
+}
+
+export function count_done(s: readonly State): i64 {
+    let done = 0;
+    const n = s.tasks.length;
+    for (let i = 0; i < n; i += 1) {
+        if (s.tasks[i].done) {
+            done += 1;
+        }
+    }
+    return done;
+}
+
+export function clone_tasks_and_append(
+    src: readonly TaskItem[],
+    new_id: i64,
+    new_title: string,
+): TaskItem[] {
+    let out: TaskItem[] = [];
+    const n = src.length;
+    for (let i = 0; i < n; i += 1) {
+        const t = src[i];
+        out = vec_push(out, {
+            id: t.id,
+            title: t.title,
+            tag: t.tag,
+            done: t.done,
+        });
+    }
+    out = vec_push(out, {
+        id: new_id,
+        title: new_title,
+        tag: "new",
+        done: false,
+    });
+    return out;
+}
+
+export function clone_tasks_complete_id(src: readonly TaskItem[], target_id: i64): TaskItem[] {
+    let out: TaskItem[] = [];
+    const n = src.length;
+    for (let i = 0; i < n; i += 1) {
+        const t = src[i];
+        const is_done = t.id === target_id ? true : t.done;
+        out = vec_push(out, {
+            id: t.id,
+            title: t.title,
+            tag: t.tag,
+            done: is_done,
+        });
+    }
+    return out;
+}
+
+export function on_input(s: State, action: string, val: string): State {
+    if (action === "draft_input") {
+        return { ...s, draft: val };
+    }
+    return s;
+}
+
+export function update(s: State, act: Action): State {
+    switch (act) {
+        case Action.FilterAll:
+            return { ...s, filter_mode: 0 };
+        case Action.FilterOpen:
+            return { ...s, filter_mode: 1 };
+        case Action.FilterDone:
+            return { ...s, filter_mode: 2 };
+        case Action.AddTask: {
+            const label = str_len(s.draft) > 0 ? s.draft : "Untitled verified task";
+            const updated_tasks = clone_tasks_and_append(s.tasks, s.next_id, label);
+            return {
+                ...s,
+                tasks: updated_tasks,
+                next_id: s.next_id + 1,
+                draft: "",
+                toast_visible: true,
+                toast_msg: `Added task #${s.next_id}`,
+            };
+        }
+        case Action.CompleteNext: {
+            const next_open = find_first_open_id(s);
+            switch (next_open) {
+                case Option.Some(target_id): {
+                    const updated_tasks = clone_tasks_complete_id(s.tasks, target_id);
+                    return {
+                        ...s,
+                        tasks: updated_tasks,
+                        toast_visible: true,
+                        toast_msg: `Completed task #${target_id}`,
+                    };
+                }
+                case Option.None:
+                    return {
+                        ...s,
+                        toast_visible: true,
+                        toast_msg: "All tasks completed!",
+                    };
+            }
+        }
+        case Action.TriggerSync:
+            return {
+                ...s,
+                sync_count: s.sync_count + 1,
+                toast_visible: true,
+                toast_msg: `Synced snapshot #${s.sync_count + 1}`,
+            };
+        case Action.ClearToast:
+            return { ...s, toast_visible: false };
+        case Action.ResetBoard:
+            return init();
+    }
+}
+
+export function effect(s: readonly State, act: string): Cmd {
+    if (act === "TriggerSync") {
+        return cmd_storage_save("knr_task_studio_draft", s.draft);
+    }
+    if (act === "AddTask" || act === "CompleteNext") {
+        return cmd_timer(2400.0, "ClearToast");
+    }
+    return cmd_none();
+}
+
+export function filter_visible_tasks(s: readonly State): TaskItem[] {
+    let out: TaskItem[] = [];
+    const n = s.tasks.length;
+    for (let i = 0; i < n; i += 1) {
+        const t = s.tasks[i];
+        const include =
+            s.filter_mode === 0
+                || (s.filter_mode === 1 && !t.done)
+                || (s.filter_mode === 2 && t.done);
+        if (include) {
+            out = vec_push(out, {
+                id: t.id,
+                title: t.title,
+                tag: t.tag,
+                done: t.done,
+            });
+        }
+    }
+    return out;
+}
+
+export function view(s: readonly State): Widget {
+    const total = s.tasks.length;
+    const done = count_done(s);
+    const open = total - done;
+    const progress = total > 0 ? toFloat(done) / toFloat(total) : 1.0;
+    const visible = filter_visible_tasks(s);
+    const next_open = find_first_open_id(s);
+    let next_hint = "All milestones complete";
+    switch (next_open) {
+        case Option.Some(id):
+            next_hint = `Next open: #${id}`;
+        case Option.None:
+            next_hint = "All milestones complete";
+    }
+
+    return (
+        <Column key="studio_root" w="full" h="full" bg="#06080f" align="center" p={28}>
+            <Column key="studio_shell" w="full" maxW={1060} gap={18}>
+                <Stack key="studio_header_stack" w="full" radius={16} border="#ffffff18" overflow="hidden">
+                    <Shader key="studio_ribbon_shader" fn={knr_studio_ribbon} h={86} radius={16} />
+                    <Row key="studio_header_bar" w="full" h={86} px={22} align="center" justify="between" z={2}>
+                        <Row align="center" gap={12}>
+                            <Image key="studio_logo" src={STUDIO_ICON_PNG} w={36} h={36} radius={9} />
+                            <Column w={520} gap={2}>
+                                <Text size={20} weight="extrabold" font="display" color="#f8fafc">
+                                    knr Task & Command Studio
+                                </Text>
+                                <Text size={12} color="#cbd5e1">
+                                    Dynamic .map() Lists | Typed enum Action | Generic Option | Async Cmd
+                                </Text>
+                            </Column>
+                        </Row>
+                        <Row align="center" gap={8}>
+                            {s.toast_visible && (
+                                <Badge key="studio_toast" bg="#060d1ce6" color="#38bdf8" border="#38bdf855">
+                                    {s.toast_msg}
+                                </Badge>
+                            )}
+                            <Badge bg="#06080fe6" color="#e2e8f0" border="#ffffff26">
+                                {`${done}/${total} done`}
+                            </Badge>
+                        </Row>
+                    </Row>
+                </Stack>
+
+                <Grid key="studio_metrics" cols={3} gap={14}>
+                    <Card bg="#0b0f1c" border="#ffffff14" radius={14} p={16} gap={6}>
+                        <Row align="center" justify="between">
+                            <Text size={12} weight="semibold" color="#94a3b8">
+                                COMPLETION
+                            </Text>
+                            <Icon name="check" size={14} color="#38bdf8" />
+                        </Row>
+                        <Text size={26} weight="extrabold" font="display" color="#f8fafc">
+                            {`${toInt(progress * 100.0)}%`}
+                        </Text>
+                        <Progress value={progress} h={6} color="linear(90, #38bdf8, #818cf8)" />
+                    </Card>
+
+                    <Card bg="#0b0f1c" border="#ffffff14" radius={14} p={16} gap={6}>
+                        <Row align="center" justify="between">
+                            <Text size={12} weight="semibold" color="#94a3b8">
+                                OPEN QUEUE
+                            </Text>
+                            <Icon name="layers" size={14} color="#818cf8" />
+                        </Row>
+                        <Text size={26} weight="extrabold" font="display" color="#f8fafc">
+                            {`${open} open`}
+                        </Text>
+                        <Text size={12} font="mono" color="#64748b">
+                            {next_hint}
+                        </Text>
+                    </Card>
+
+                    <Card bg="#0b0f1c" border="#ffffff14" radius={14} p={16} gap={6}>
+                        <Row align="center" justify="between">
+                            <Text size={12} weight="semibold" color="#94a3b8">
+                                ASYNC SYNC
+                            </Text>
+                            <Icon name="zap" size={14} color="#38bdf8" />
+                        </Row>
+                        <Text size={26} weight="extrabold" font="display" color="#f8fafc">
+                            {`${s.sync_count} saves`}
+                        </Text>
+                        <Text size={12} font="mono" color="#64748b">
+                            std/cmd non-blocking runtime
+                        </Text>
+                    </Card>
+                </Grid>
+
+                <Card key="studio_board" bg="#0b0f1c" border="#ffffff14" radius={16} p={20} gap={14}>
+                    <Row align="center" justify="between" gap={12}>
+                        <Row align="center" gap={8}>
+                            <Button
+                                key="btn_filter_all"
+                                onClick={Action.FilterAll}
+                                bg={s.filter_mode === 0 ? "#141f38" : "#0e1322"}
+                                border={s.filter_mode === 0 ? "#38bdf866" : "#ffffff14"}
+                                px={12}
+                                py={7}
+                                radius={8}
+                            >
+                                {`All (${total})`}
+                            </Button>
+                            <Button
+                                key="btn_filter_open"
+                                onClick={Action.FilterOpen}
+                                bg={s.filter_mode === 1 ? "#141f38" : "#0e1322"}
+                                border={s.filter_mode === 1 ? "#38bdf866" : "#ffffff14"}
+                                px={12}
+                                py={7}
+                                radius={8}
+                            >
+                                {`Open (${open})`}
+                            </Button>
+                            <Button
+                                key="btn_filter_done"
+                                onClick={Action.FilterDone}
+                                bg={s.filter_mode === 2 ? "#1a1936" : "#0e1322"}
+                                border={s.filter_mode === 2 ? "#818cf866" : "#ffffff14"}
+                                px={12}
+                                py={7}
+                                radius={8}
+                            >
+                                {`Done (${done})`}
+                            </Button>
+                        </Row>
+
+                        <Row align="center" gap={8}>
+                            <Button
+                                key="btn_complete_next"
+                                onClick={Action.CompleteNext}
+                                bg="#0e1322"
+                                border="#38bdf844"
+                                px={12}
+                                py={7}
+                                radius={8}
+                                gap={6}
+                                align="center"
+                            >
+                                <Icon name="check" size={13} color="#38bdf8" />
+                                <Text size={13} weight="semibold" color="#e2e8f0">
+                                    Complete Next
+                                </Text>
+                            </Button>
+                            <Button
+                                key="btn_sync"
+                                onClick={Action.TriggerSync}
+                                bg="#0e1322"
+                                border="#ffffff18"
+                                px={12}
+                                py={7}
+                                radius={8}
+                                gap={6}
+                                align="center"
+                            >
+                                <Icon name="rocket" size={13} color="#818cf8" />
+                                <Text size={13} weight="medium" color="#cbd5e1">
+                                    Sync
+                                </Text>
+                            </Button>
+                            <Button
+                                key="btn_reset_board"
+                                onClick={Action.ResetBoard}
+                                bg="#0e1322"
+                                border="#ffffff14"
+                                px={10}
+                                py={7}
+                                radius={8}
+                                align="center"
+                            >
+                                <Icon name="refresh" size={13} color="#94a3b8" />
+                            </Button>
+                        </Row>
+                    </Row>
+
+                    <Row align="center" gap={10}>
+                        <Input key="task_draft_input" value={s.draft} onInput="draft_input" grow={1} />
+                        <Button
+                            key="btn_add_task"
+                            onClick={Action.AddTask}
+                            bg="linear(135, #0ea5e9, #6366f1)"
+                            color="#ffffff"
+                            border="#38bdf866"
+                            px={16}
+                            py={10}
+                            radius={10}
+                            gap={6}
+                            align="center"
+                        >
+                            <Icon name="plus" size={14} color="#ffffff" />
+                            <Text size={13} weight="semibold" color="#ffffff">
+                                Add Task
+                            </Text>
+                        </Button>
+                    </Row>
+
+                    <Divider />
+
+                    <Scroll key="task_list_scroll" w="full" h={290} gap={8} overflow="scroll">
+                        {visible.map((task, idx) => (
+                            <Card
+                                key={`task_row_${idx}`}
+                                bg={task.done ? "#080d18" : "#0e1424"}
+                                border={task.done ? "#ffffff0d" : "#ffffff18"}
+                                radius={11}
+                                px={16}
+                                py={12}
+                            >
+                                <Row align="center" justify="between" gap={12}>
+                                    <Row align="center" gap={10}>
+                                        <Icon
+                                            name={task.done ? "check" : "sparkles"}
+                                            size={14}
+                                            color={task.done ? "#38bdf8" : "#818cf8"}
+                                        />
+                                        <Text
+                                            size={14}
+                                            weight={task.done ? 400 : 600}
+                                            color={task.done ? "#64748b" : "#f8fafc"}
+                                        >
+                                            {`#${task.id}  ${task.title}`}
+                                        </Text>
+                                    </Row>
+                                    <Badge
+                                        bg={task.done ? "#0c1d2e" : "#171730"}
+                                        color={task.done ? "#38bdf8" : "#a5b4fc"}
+                                        border={task.done ? "#38bdf833" : "#818cf833"}
+                                    >
+                                        {task.done ? "DONE" : task.tag}
+                                    </Badge>
+                                </Row>
+                            </Card>
+                        ))}
+                    </Scroll>
+                </Card>
+            </Column>
+        </Column>
+    );
+}
+
+// ============================================================================
+// Deterministic Built-in Unit Tests (`knr test examples/task_studio.tsk`)
+// ============================================================================
+
+export function test_task_studio_typed_actions_and_option(): bool {
+    let s = init();
+    const first_before = find_first_open_id(s);
+    let saw_three = false;
+    switch (first_before) {
+        case Option.Some(id):
+            saw_three = id === 3;
+        case Option.None:
+            saw_three = false;
+    }
+    s = update(s, Action.CompleteNext);
+    s = update(s, Action.FilterOpen);
+    const open_after = filter_visible_tasks(s);
+    return saw_three && count_done(s) === 3 && open_after.length === 2;
+}
+
+export function test_task_studio_dynamic_list_and_cmd(): bool {
+    let s = init();
+    s = on_input(s, "draft_input", "Ship Agentic Flutter v0.3.0");
+    s = update(s, Action.AddTask);
+    const tree = view(s);
+    const cmd_sync = effect(s, "TriggerSync");
+    const cmd_add = effect(s, "AddTask");
+    return (
+        s.tasks.length === 6
+        && tree.kind === "col"
+        && cmd_sync.kind === "storage_save"
+        && cmd_add.kind === "timer"
+    );
+}

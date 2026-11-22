@@ -11,7 +11,7 @@ use crate::parser::{
 /// Loads a `.knr`, `.ssa`, or `.ssa.schema` compilation unit from disk, recursively resolving
 /// imports, enforcing file topology rules, deduplicating diamond imports, and detecting cycles.
 pub fn load_module_from_path(path: &Path) -> Result<Module, ParseError> {
-    if path.to_string_lossy().ends_with(".knr") {
+    if crate::is_source_file(path) {
         return crate::lower::lower_program_from_file(path).map_err(|e| ParseError::InvalidSyntax {
             line: e.line(),
             msg: e.to_string(),

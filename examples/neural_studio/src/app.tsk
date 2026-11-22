@@ -1,0 +1,147 @@
+// ============================================================================
+// knr Neural Studio v0.4.0 -- Flagship Multi-File Entrypoint (`src/app.tsk`)
+// ============================================================================
+
+import { Column, Text } from "std/ui";
+import { assert_eq_i64, assert_str_eq, assert_true } from "std/testing";
+import {
+    Action,
+    State,
+    init,
+    tick,
+    update,
+    on_input,
+    on_slider,
+    on_key,
+    on_resize,
+    effect,
+    active_theme,
+    theme_label,
+    studio_pad,
+    is_route_studio,
+    is_route_pipeline,
+    is_route_shaders,
+    count_done_jobs,
+    count_active_jobs,
+    has_active_jobs,
+    total_epochs,
+    fast_latency_count,
+    job_summary_labels,
+    next_active_id_or_zero,
+} from "./state";
+import { neural_aurora_field, neural_sdf_orb } from "./shaders";
+import { TopBar, StudioView, PipelineView, ShaderDeck } from "./components";
+
+export function view(s: readonly State): Widget {
+    const t = active_theme(s);
+    const pad = studio_pad(s);
+    const on_studio = is_route_studio(s);
+    const on_pipeline = is_route_pipeline(s);
+    const on_shaders = is_route_shaders(s);
+    return (
+        <Column
+            key="ns_root"
+            w="full"
+            h="full"
+            bg={t.bg}
+            align="center"
+            p={pad}
+        >
+            <Column key="ns_shell" w="full" maxW={1100} gap={16}>
+                <TopBar s={s} />
+                {on_studio && <StudioView s={s} />}
+                {on_pipeline && <PipelineView s={s} />}
+                {on_shaders && <ShaderDeck s={s} />}
+                <Text size={11} font="mono" color={t.text_muted} textAlign="center">
+                    {`knr v0.4.0 Neural Studio | Theme: ${theme_label(s.theme_idx)} | Route: ${s.route.current}`}
+                </Text>
+            </Column>
+        </Column>
+    );
+}
+
+export function main(): i64 {
+    const s0 = init();
+    const s1 = update(s0, Action.CompleteNext);
+    return count_done_jobs(s1);
+}
+
+export function test_init_and_aggregates(): bool {
+    const s = init();
+    const labels = job_summary_labels(s);
+    return assert_eq_i64(s.jobs.length, 5) && assert_eq_i64(count_done_jobs(s), 2) && assert_eq_i64(count_active_jobs(s), 3) && assert_true(has_active_jobs(s)) && assert_eq_i64(total_epochs(s), 100) && assert_eq_i64(fast_latency_count(s), 4) && assert_eq_i64(next_active_id_or_zero(s), 3) && assert_eq_i64(labels.length, 5) && assert_str_eq(s.route.current, "/studio");
+}
+
+export function test_routing_and_back(): bool {
+    let s = init();
+    s = update(s, Action.RoutePipeline);
+    const at_pipe = assert_str_eq(s.route.current, "/pipeline") && assert_eq_i64(s.route.depth, 1);
+    s = update(s, Action.RouteShaders);
+    const at_sh = assert_str_eq(s.route.current, "/shaders") && assert_eq_i64(s.route.depth, 2);
+    s = update(s, Action.RouteBack);
+    const back_ok = assert_str_eq(s.route.current, "/pipeline") && assert_eq_i64(s.route.depth, 1);
+    return at_pipe && at_sh && back_ok;
+}
+
+export function test_theme_cycling(): bool {
+    let s = init();
+    const t0 = assert_str_eq(theme_label(s.theme_idx), "Obsidian");
+    s = update(s, Action.CycleTheme);
+    const t1 = assert_str_eq(theme_label(s.theme_idx), "Light");
+    s = update(s, Action.CycleTheme);
+    const t2 = assert_str_eq(theme_label(s.theme_idx), "Nord");
+    s = update(s, Action.CycleTheme);
+    const t3 = assert_str_eq(theme_label(s.theme_idx), "Solar");
+    s = update(s, Action.CycleTheme);
+    const t4 = assert_str_eq(theme_label(s.theme_idx), "Obsidian");
+    return t0 && t1 && t2 && t3 && t4;
+}
+
+export function test_pipeline_add_complete_filter(): bool {
+    let s = init();
+    s = on_input(s, "job_draft_input", "Quantize Tensor Graph");
+    s = update(s, Action.AddJob);
+    const added_ok = assert_eq_i64(s.jobs.length, 6) && assert_eq_i64(total_epochs(s), 116) && assert_str_eq(s.draft, "");
+    s = update(s, Action.CompleteNext);
+    const done_ok = assert_eq_i64(count_done_jobs(s), 3) && assert_eq_i64(count_active_jobs(s), 3);
+    s = update(s, Action.FilterActive);
+    const filter_ok = assert_eq_i64(s.filter_mode, 1);
+    return added_ok && done_ok && filter_ok;
+}
+
+export function test_keyboard_and_resize_and_sliders(): bool {
+    let s = init();
+    s = on_key(s, "Ctrl+2");
+    const k1 = assert_str_eq(s.route.current, "/pipeline");
+    s = on_key(s, "Ctrl+3");
+    const k2 = assert_str_eq(s.route.current, "/shaders");
+    s = on_key(s, "Ctrl+T");
+    const k3 = assert_eq_i64(s.theme_idx, 1);
+    s = on_key(s, "Space");
+    const k4 = assert_true(s.paused);
+    s = on_resize(s, 390.0, 844.0);
+    const r_ok = assert_true(s.viewport_w < 640.0);
+    s = on_slider(s, "slider_energy", 0.92);
+    const sl_ok = assert_true(s.energy > 0.9);
+    s = tick(s, 0.5);
+    const paused_tick = assert_true(s.elapsed <= 0.001);
+    return k1 && k2 && k3 && k4 && r_ok && sl_ok && paused_tick;
+}
+
+export function test_async_effect_and_pulse(): bool {
+    let s = init();
+    s = update(s, Action.TriggerPulse);
+    const cmd = effect(s, "TriggerPulse");
+    const cmd_ok = assert_str_eq(cmd.kind, "timer") && assert_str_eq(cmd.on_result, "PulseDone") && assert_true(cmd.delay_ms > 300.0) && assert_true(s.pulse_active);
+    s = update(s, Action.PulseDone);
+    const done_ok = assert_true(!s.pulse_active);
+    return cmd_ok && done_ok;
+}
+
+export function test_shader_cpu_parity(): bool {
+    const c_aurora = neural_aurora_field({ x: 0.5, y: 0.5 }, 1.2, { x: 0.5, y: 0.5 }, { x: 1280.0, y: 720.0 }, 0.7, 0.35, 0.6, 0.75);
+    const c_orb = neural_sdf_orb({ x: 0.5, y: 0.5 }, 1.2, { x: 0.5, y: 0.5 }, 0.7, 0.35, 0.6);
+    const aurora_ok = assert_true(c_aurora.a > 0.99 && c_aurora.b > 0.05 && c_aurora.r <= 1.0);
+    const orb_ok = assert_true(c_orb.a > 0.99 && c_orb.b > 0.05 && c_orb.g <= 1.0);
+    return aurora_ok && orb_ok;
+}

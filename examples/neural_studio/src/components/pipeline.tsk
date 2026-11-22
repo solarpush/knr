@@ -1,0 +1,234 @@
+// ============================================================================
+// knr Neural Studio v0.4.0 -- Dynamic Pipeline View (`src/components/pipeline.tsk`)
+// ============================================================================
+
+import {
+    Column,
+    Row,
+    Card,
+    Scroll,
+    Badge,
+    Text,
+    Button,
+    Input,
+    Icon,
+    Divider,
+    Progress,
+} from "std/ui";
+import {
+    Action,
+    State,
+    active_theme,
+    primary_btn_bg,
+    primary_btn_fg,
+    accent_text_color,
+    card_shadow_color,
+    count_done_jobs,
+    count_active_jobs,
+    visible_jobs,
+} from "../state.tsk";
+
+export function PipelineView(s: readonly State): Widget {
+    const t = active_theme(s);
+    const { theme_idx } = s;
+    const accent_fg = accent_text_color(theme_idx);
+    const cta_bg = primary_btn_bg(theme_idx);
+    const cta_fg = primary_btn_fg(theme_idx);
+    const total = s.jobs.length;
+    const done = count_done_jobs(s);
+    const active = count_active_jobs(s);
+    const ratio = total > 0 ? toFloat(done) / toFloat(total) : 1.0;
+    const filtered = visible_jobs(s);
+    const sh = card_shadow_color(theme_idx);
+    return (
+        <Column key="ns_pipeline_view" w="full" gap={16}>
+            <Card
+                key="ns_pipeline_header"
+                w="full"
+                bg={t.surface}
+                border={t.border}
+                shadowColor={sh}
+                shadowBlur={16}
+                shadowY={6}
+                radius={t.radius_lg}
+                p={16}
+                gap={12}
+            >
+                <Row w="full" justify="between" align="center" gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="git" size={16} color={accent_fg} />
+                        <Text size={18} weight="extrabold" font="display" color={t.text}>
+                            Compute Job Pipeline
+                        </Text>
+                    </Row>
+                    <Badge bg={t.surface_alt} color={accent_fg} border={t.border}>
+                        {`${done}/${total} complete`}
+                    </Badge>
+                </Row>
+                <Progress value={ratio} h={6} color="linear(90, #38bdf8, #818cf8)" />
+                <Row w="full" align="center" gap={8}>
+                    <Icon name="search" size={15} color={t.text_muted} />
+                    <Input
+                        key="input_new_job"
+                        value={s.draft}
+                        onInput="job_draft_input"
+                        bg={t.surface_alt}
+                        color={t.text}
+                        border={t.border}
+                        grow={1}
+                    />
+                    <Button
+                        key="btn_add_job"
+                        onClick={Action.AddJob}
+                        bg={cta_bg}
+                        color={cta_fg}
+                        border={cta_bg}
+                        px={13}
+                        py={8}
+                        radius={8}
+                        gap={5}
+                        align="center"
+                    >
+                        <Icon name="plus" size={13} color={cta_fg} />
+                        <Text size={12} weight="bold" color={cta_fg}>Add Job</Text>
+                    </Button>
+                </Row>
+            </Card>
+            <Card
+                key="ns_pipeline_board"
+                w="full"
+                bg={t.surface}
+                border={t.border}
+                shadowColor={sh}
+                shadowBlur={16}
+                shadowY={6}
+                radius={t.radius_lg}
+                p={16}
+                gap={12}
+            >
+                <Row w="full" justify="between" align="center" gap={8}>
+                    <Row align="center" gap={6}>
+                        <Button
+                            key="btn_filter_all"
+                            onClick={Action.FilterAll}
+                            bg={s.filter_mode === 0 ? cta_bg : t.surface_alt}
+                            color={s.filter_mode === 0 ? cta_fg : t.text}
+                            border={s.filter_mode === 0 ? cta_bg : t.border}
+                            px={11}
+                            py={7}
+                            radius={8}
+                        >
+                            {`All (${total})`}
+                        </Button>
+                        <Button
+                            key="btn_filter_active"
+                            onClick={Action.FilterActive}
+                            bg={s.filter_mode === 1 ? cta_bg : t.surface_alt}
+                            color={s.filter_mode === 1 ? cta_fg : t.text}
+                            border={s.filter_mode === 1 ? cta_bg : t.border}
+                            px={11}
+                            py={7}
+                            radius={8}
+                        >
+                            {`Active (${active})`}
+                        </Button>
+                        <Button
+                            key="btn_filter_done"
+                            onClick={Action.FilterDone}
+                            bg={s.filter_mode === 2 ? cta_bg : t.surface_alt}
+                            color={s.filter_mode === 2 ? cta_fg : t.text}
+                            border={s.filter_mode === 2 ? cta_bg : t.border}
+                            px={11}
+                            py={7}
+                            radius={8}
+                        >
+                            {`Done (${done})`}
+                        </Button>
+                    </Row>
+                    <Button
+                        key="btn_complete_next"
+                        onClick={Action.CompleteNext}
+                        bg={t.surface_alt}
+                        color={t.text}
+                        border={t.border}
+                        hoverBorder={t.accent}
+                        px={12}
+                        py={7}
+                        radius={8}
+                        gap={5}
+                        align="center"
+                    >
+                        <Icon name="check" size={13} color={accent_fg} />
+                        <Text size={12} weight="semibold" color={t.text}>Complete Next</Text>
+                    </Button>
+                </Row>
+                <Divider />
+                <Scroll
+                    key="ns_jobs_scroll"
+                    w="full"
+                    h={320}
+                    gap={8}
+                    overflow="scroll"
+                >
+                    {filtered.map((item, idx) => (
+                        <Card
+                            key={`job_row_${idx}`}
+                            w="full"
+                            bg={t.surface_alt}
+                            border={t.border}
+                            shadowColor="#00000000"
+                            shadowBlur={0}
+                            shadowY={0}
+                            radius={10}
+                            px={14}
+                            py={10}
+                        >
+                            <Row
+                                key={`job_row_main_${idx}`}
+                                w="full"
+                                justify="between"
+                                align="center"
+                                gap={8}
+                            >
+                                <Row key={`job_row_left_${idx}`} align="center" gap={8}>
+                                    <Icon
+                                        key={`job_row_icon_${idx}`}
+                                        name={item.done ? "check" : "play"}
+                                        size={14}
+                                        color={accent_fg}
+                                    />
+                                    <Text
+                                        key={`job_row_name_${idx}`}
+                                        size={13}
+                                        weight="semibold"
+                                        color={t.text}
+                                    >
+                                        {`#${item.id} ${item.name}`}
+                                    </Text>
+                                </Row>
+                                <Row key={`job_row_right_${idx}`} align="center" gap={6}>
+                                    <Badge
+                                        key={`job_row_stage_${idx}`}
+                                        bg={t.surface}
+                                        color={t.text_muted}
+                                        border={t.border}
+                                    >
+                                        {`${item.stage} | ${item.epochs} ep`}
+                                    </Badge>
+                                    <Badge
+                                        key={`job_row_status_${idx}`}
+                                        bg={t.surface}
+                                        color={item.done ? accent_fg : t.text}
+                                        border={t.border}
+                                    >
+                                        {item.done ? "DONE" : "QUEUED"}
+                                    </Badge>
+                                </Row>
+                            </Row>
+                        </Card>
+                    ))}
+                </Scroll>
+            </Card>
+        </Column>
+    );
+}

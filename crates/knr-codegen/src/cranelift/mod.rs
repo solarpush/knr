@@ -11,6 +11,103 @@ use knr_core::{Effect, Function, Instruction as KnrInst, Module, Op, RegId, Sche
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Linux SELinux/W^X-safe global allocator wrapper for Cranelift JIT.
+///
+/// On Linux (especially Fedora/RHEL with SELinux `execheap` protection), glibc's
+/// `brk` heap pages (`std::alloc::System` for small page-aligned allocations) cannot
+/// be marked `PROT_READ | PROT_EXEC` via `mprotect`, causing `cranelift-jit` to fail
+/// with `EACCES: unable to make memory readable+executable`.
+///
+/// This allocator routes ONLY exact page-aligned, page-multiple allocations
+/// (`align == page_size && size >= page_size && size % page_size == 0`) to
+/// private anonymous `mmap(MAP_PRIVATE | MAP_ANONYMOUS)` pages, while forwarding
+/// all normal allocations straight to `std::alloc::System` with zero overhead.
+#[cfg(target_os = "linux")]
+pub struct MmapPageAllocator;
+
+#[cfg(target_os = "linux")]
+impl MmapPageAllocator {
+    #[inline]
+    fn page_size() -> usize {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static CACHED: AtomicUsize = AtomicUsize::new(0);
+        let ps = CACHED.load(Ordering::Relaxed);
+        if ps != 0 {
+            return ps;
+        }
+        let queried = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        let resolved = if queried > 0 { queried as usize } else { 4096 };
+        CACHED.store(resolved, Ordering::Relaxed);
+        resolved
+    }
+
+    #[inline]
+    fn is_mmap_managed(layout: std::alloc::Layout) -> bool {
+        let ps = Self::page_size();
+        layout.align() == ps && layout.size() >= ps && layout.size().is_multiple_of(ps)
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl std::alloc::GlobalAlloc for MmapPageAllocator {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        if Self::is_mmap_managed(layout) {
+            let ptr = libc::mmap(
+                std::ptr::null_mut(),
+                layout.size(),
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            if ptr == libc::MAP_FAILED {
+                std::ptr::null_mut()
+            } else {
+                ptr.cast::<u8>()
+            }
+        } else {
+            std::alloc::System.alloc(layout)
+        }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+        if Self::is_mmap_managed(layout) {
+            // Anonymous private mmap pages on Linux are kernel-guaranteed zero-filled.
+            self.alloc(layout)
+        } else {
+            std::alloc::System.alloc_zeroed(layout)
+        }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        if Self::is_mmap_managed(layout) {
+            if !ptr.is_null() {
+                let _ = libc::munmap(ptr.cast::<libc::c_void>(), layout.size());
+            }
+        } else {
+            std::alloc::System.dealloc(ptr, layout)
+        }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
+        let old_managed = Self::is_mmap_managed(layout);
+        let new_layout = match std::alloc::Layout::from_size_align(new_size, layout.align()) {
+            Ok(l) => l,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        let new_managed = Self::is_mmap_managed(new_layout);
+        if !old_managed && !new_managed {
+            return std::alloc::System.realloc(ptr, layout, new_size);
+        }
+        let new_ptr = self.alloc(new_layout);
+        if !new_ptr.is_null() {
+            std::ptr::copy_nonoverlapping(ptr, new_ptr, layout.size().min(new_size));
+            self.dealloc(ptr, layout);
+        }
+        new_ptr
+    }
+}
+
 #[inline]
 fn var(reg: RegId) -> Variable {
     Variable::from_u32(reg)
@@ -30,6 +127,9 @@ impl CraneliftBackend {
     /// Creates a new `CraneliftBackend` targeting the host platform ISA.
     pub fn new() -> Result<Self, CodegenError> {
         let mut flag_builder = settings::builder();
+        flag_builder
+            .set("opt_level", "speed")
+            .map_err(|e| CodegenError::Cranelift(e.to_string()))?;
         flag_builder
             .set("use_colocated_libcalls", "false")
             .map_err(|e| CodegenError::Cranelift(e.to_string()))?;
@@ -507,7 +607,15 @@ fn emit_instruction<M: cranelift_module::Module>(
         Op::Rem(a, b) => {
             let va = builder.use_var(var(*a));
             let vb = builder.use_var(var(*b));
-            let res = builder.ins().srem(va, vb);
+            let res = if inst.ty == Type::F64 {
+                // IEEE-754 truncated remainder: a - trunc(a / b) * b
+                let q = builder.ins().fdiv(va, vb);
+                let t = builder.ins().trunc(q);
+                let prod = builder.ins().fmul(t, vb);
+                builder.ins().fsub(va, prod)
+            } else {
+                builder.ins().srem(va, vb)
+            };
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
@@ -516,19 +624,7 @@ fn emit_instruction<M: cranelift_module::Module>(
             let va = builder.use_var(var(*a));
             let vb = builder.use_var(var(*b));
             let ty_a = reg_types.get(a).unwrap_or(&Type::I64);
-            let res = if *ty_a == Type::Str {
-                let callee =
-                    module.declare_func_in_func(runtime_funcs["rt_str_eq"], builder.func);
-                let call = builder.ins().call(callee, &[va, vb]);
-                builder.inst_results(call)[0]
-            } else {
-                let cmp = if *ty_a == Type::F64 {
-                    builder.ins().fcmp(FloatCC::Equal, va, vb)
-                } else {
-                    builder.ins().icmp(IntCC::Equal, va, vb)
-                };
-                builder.ins().uextend(types::I64, cmp)
-            };
+            let res = emit_clif_eq(module, builder, va, vb, ty_a, schemas, runtime_funcs);
             if let Some(dst) = dst_var {
                 builder.def_var(dst, res);
             }
@@ -771,7 +867,9 @@ fn emit_instruction<M: cranelift_module::Module>(
         }
         Op::MapSet(m, k, v) => {
             let vm = builder.use_var(var(*m));
-            let vk = builder.use_var(var(*k));
+            let vk_raw = builder.use_var(var(*k));
+            let key_ty = reg_types.get(k).unwrap_or(&Type::Str);
+            let vk = emit_clif_map_key(module, builder, vk_raw, key_ty, runtime_funcs);
             let v_len = builder.ins().iconst(types::I64, 0);
             let mut vv = builder.use_var(var(*v));
             if reg_types.get(v) == Some(&Type::F64) {
@@ -787,7 +885,9 @@ fn emit_instruction<M: cranelift_module::Module>(
         }
         Op::MapGet(m, k) => {
             let vm = builder.use_var(var(*m));
-            let vk = builder.use_var(var(*k));
+            let vk_raw = builder.use_var(var(*k));
+            let key_ty = reg_types.get(k).unwrap_or(&Type::Str);
+            let vk = emit_clif_map_key(module, builder, vk_raw, key_ty, runtime_funcs);
             let v_len = builder.ins().iconst(types::I64, 0);
             let local_callee =
                 module.declare_func_in_func(runtime_funcs["rt_map_get"], builder.func);
@@ -802,7 +902,9 @@ fn emit_instruction<M: cranelift_module::Module>(
         }
         Op::MapDel(m, k) => {
             let vm = builder.use_var(var(*m));
-            let vk = builder.use_var(var(*k));
+            let vk_raw = builder.use_var(var(*k));
+            let key_ty = reg_types.get(k).unwrap_or(&Type::Str);
+            let vk = emit_clif_map_key(module, builder, vk_raw, key_ty, runtime_funcs);
             let v_len = builder.ins().iconst(types::I64, 0);
             let local_callee =
                 module.declare_func_in_func(runtime_funcs["rt_map_del"], builder.func);
@@ -1007,6 +1109,111 @@ fn emit_instruction<M: cranelift_module::Module>(
     }
 
     Ok(())
+}
+
+fn emit_clif_map_key<M: cranelift_module::Module>(
+    module: &mut M,
+    builder: &mut FunctionBuilder,
+    vk: cranelift::codegen::ir::Value,
+    key_ty: &Type,
+    runtime_funcs: &HashMap<&'static str, FuncId>,
+) -> cranelift::codegen::ir::Value {
+    match key_ty {
+        Type::Str => vk,
+        Type::Bool => {
+            let callee =
+                module.declare_func_in_func(runtime_funcs["rt_bool_to_str"], builder.func);
+            let call = builder.ins().call(callee, &[vk]);
+            builder.inst_results(call)[0]
+        }
+        Type::F64 => {
+            let callee =
+                module.declare_func_in_func(runtime_funcs["rt_f64_to_str"], builder.func);
+            let call = builder.ins().call(callee, &[vk]);
+            builder.inst_results(call)[0]
+        }
+        _ => {
+            let callee =
+                module.declare_func_in_func(runtime_funcs["rt_int_to_str"], builder.func);
+            let call = builder.ins().call(callee, &[vk]);
+            builder.inst_results(call)[0]
+        }
+    }
+}
+
+fn emit_clif_eq<M: cranelift_module::Module>(
+    module: &mut M,
+    builder: &mut FunctionBuilder,
+    va: cranelift::codegen::ir::Value,
+    vb: cranelift::codegen::ir::Value,
+    ty: &Type,
+    schemas: &[Schema],
+    runtime_funcs: &HashMap<&'static str, FuncId>,
+) -> cranelift::codegen::ir::Value {
+    #[allow(clippy::too_many_arguments)]
+    fn inner<M: cranelift_module::Module>(
+        module: &mut M,
+        builder: &mut FunctionBuilder,
+        va: cranelift::codegen::ir::Value,
+        vb: cranelift::codegen::ir::Value,
+        ty: &Type,
+        schemas: &[Schema],
+        runtime_funcs: &HashMap<&'static str, FuncId>,
+        depth: usize,
+    ) -> cranelift::codegen::ir::Value {
+        if depth > 16 {
+            let cmp = builder.ins().icmp(IntCC::Equal, va, vb);
+            return builder.ins().uextend(types::I64, cmp);
+        }
+        match ty {
+            Type::Str => {
+                let callee =
+                    module.declare_func_in_func(runtime_funcs["rt_str_eq"], builder.func);
+                let call = builder.ins().call(callee, &[va, vb]);
+                builder.inst_results(call)[0]
+            }
+            Type::F64 => {
+                let cmp = builder.ins().fcmp(FloatCC::Equal, va, vb);
+                builder.ins().uextend(types::I64, cmp)
+            }
+            Type::Struct(sname) => {
+                if let Some(sc) = schemas.iter().find(|s| s.name == *sname) {
+                    if sc.fields.is_empty() {
+                        return builder.ins().iconst(types::I64, 1);
+                    }
+                    let get_callee =
+                        module.declare_func_in_func(runtime_funcs["rt_struct_get"], builder.func);
+                    let mut acc: Option<cranelift::codegen::ir::Value> = None;
+                    for f in &sc.fields {
+                        let fidx = builder.ins().iconst(types::I64, f.index as i64);
+                        let ca = builder.ins().call(get_callee, &[va, fidx]);
+                        let mut fa = builder.inst_results(ca)[0];
+                        let cb = builder.ins().call(get_callee, &[vb, fidx]);
+                        let mut fb = builder.inst_results(cb)[0];
+                        if f.ty == Type::F64 {
+                            fa = builder.ins().bitcast(types::F64, MemFlags::new(), fa);
+                            fb = builder.ins().bitcast(types::F64, MemFlags::new(), fb);
+                        }
+                        let feq =
+                            inner(module, builder, fa, fb, &f.ty, schemas, runtime_funcs, depth + 1);
+                        acc = Some(match acc {
+                            None => feq,
+                            Some(prev) => builder.ins().band(prev, feq),
+                        });
+                    }
+                    acc.unwrap_or_else(|| builder.ins().iconst(types::I64, 1))
+                } else {
+                    let cmp = builder.ins().icmp(IntCC::Equal, va, vb);
+                    builder.ins().uextend(types::I64, cmp)
+                }
+            }
+            _ => {
+                let cmp = builder.ins().icmp(IntCC::Equal, va, vb);
+                builder.ins().uextend(types::I64, cmp)
+            }
+        }
+    }
+    inner(module, builder, va, vb, ty, schemas, runtime_funcs, 0)
 }
 
 fn emit_terminator(

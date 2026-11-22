@@ -1,209 +1,224 @@
-//! Built-in standard library modules embedded directly in `knr-core`.
+//! Built-in standard library modules embedded directly in `knr-core` (Strict TypeScript / TSX).
 //!
 //! Enables zero-config imports such as:
-//! - `import "std/ui";`
-//! - `import "std/anim";`
-//! - `import "std/math";`
-//! - `import "std/sys";`
-//!
-//! These resolve identically for both on-disk `.knr` files and in-memory
-//! `parse_knr` + `lower_program` / `verify_program` pipelines.
+//! - `import { Column, Row, Card, Text, Button, Shader, Icon, Code } from "std/ui";`
+//! - `import { easeOutCubic, easeInOutSine, smoothDamp } from "std/anim";`
+//! - `import { Vec2, Vec3, smin, vec3Norm, pi, tau } from "std/math";`
+//! - `import { fsRead, fsWrite, jsonGet, httpGet } from "std/sys";`
 
-/// Pure animation, easing, and damping helpers (`import "std/anim";`).
+/// Pure animation, easing, and damping helpers (`import ... from "std/anim";`).
 pub const STD_ANIM_SRC: &str = r###"// Standard Pure Animation, Easing & Damping Helpers (`std/anim`).
 
-fn ease_out_cubic(t: f64) -> f64 {
-    let c = clamp(t, 0.0, 1.0);
-    let inv = 1.0 - c;
+export function ease_out_cubic(t: f64): f64 {
+    const c = clamp(t, 0.0, 1.0);
+    const inv = 1.0 - c;
     return 1.0 - inv * inv * inv;
 }
 
-fn ease_in_out_sine(t: f64) -> f64 {
-    let c = clamp(t, 0.0, 1.0);
+export function easeOutCubic(t: f64): f64 {
+    return ease_out_cubic(t);
+}
+
+export function ease_in_out_sine(t: f64): f64 {
+    const c = clamp(t, 0.0, 1.0);
     return 0.5 - 0.5 * cos(c * 3.141592653589793);
 }
 
-fn ease_out_expo(t: f64) -> f64 {
-    let c = clamp(t, 0.0, 1.0);
-    if c <= 0.0 {
+export function easeInOutSine(t: f64): f64 {
+    return ease_in_out_sine(t);
+}
+
+export function ease_out_expo(t: f64): f64 {
+    const c = clamp(t, 0.0, 1.0);
+    if (c <= 0.0) {
         return 0.0;
     }
-    if c >= 1.0 {
+    if (c >= 1.0) {
         return 1.0;
     }
     return 1.0 - pow(2.0, -10.0 * c);
 }
 
-fn smooth_damp(current: f64, target: f64, dt: f64, rate: f64) -> f64 {
-    let factor = clamp(dt * rate, 0.0, 1.0);
+export function easeOutExpo(t: f64): f64 {
+    return ease_out_expo(t);
+}
+
+export function smooth_damp(current: f64, target: f64, dt: f64, rate: f64): f64 {
+    const factor = clamp(dt * rate, 0.0, 1.0);
     return lerp(current, target, factor);
+}
+
+export function smoothDamp(current: f64, target: f64, dt: f64, rate: f64): f64 {
+    return smooth_damp(current, target, dt, rate);
 }
 "###;
 
-/// Pure GPU-compatible 2D/3D vector and SDF math helpers (`import "std/math";`).
+/// Pure GPU-compatible 2D/3D vector and SDF math helpers (`import ... from "std/math";`).
 pub const STD_MATH_SRC: &str = r###"// Standard Pure GPU-Compatible 2D/3D Vector & SDF Math Library (`std/math`).
 
-schema Vec2 {
-    0: x f64,
-    1: y f64,
-}
+export type Vec2 = {
+    x: f64;
+    y: f64;
+};
 
-schema Vec3 {
-    0: x f64,
-    1: y f64,
-    2: z f64,
-}
+export type Vec3 = {
+    x: f64;
+    y: f64;
+    z: f64;
+};
 
-fn pi() -> f64 {
+export function pi(): f64 {
     return 3.141592653589793;
 }
 
-fn tau() -> f64 {
+export function tau(): f64 {
     return 6.283185307179586;
 }
 
-fn vec2_len(v: &Vec2) -> f64 {
+export function vec2_len(v: readonly Vec2): f64 {
     return sqrt(v.x * v.x + v.y * v.y);
 }
 
-fn vec2_dot(a: &Vec2, b: &Vec2) -> f64 {
+export function vec2_dot(a: readonly Vec2, b: readonly Vec2): f64 {
     return a.x * b.x + a.y * b.y;
 }
 
-fn vec3_add(a: &Vec3, b: &Vec3) -> Vec3 {
-    return Vec3 {
+export function vec3_add(a: readonly Vec3, b: readonly Vec3): Vec3 {
+    return {
         x: a.x + b.x,
         y: a.y + b.y,
         z: a.z + b.z,
     };
 }
 
-fn vec3_sub(a: &Vec3, b: &Vec3) -> Vec3 {
-    return Vec3 {
+export function vec3_sub(a: readonly Vec3, b: readonly Vec3): Vec3 {
+    return {
         x: a.x - b.x,
         y: a.y - b.y,
         z: a.z - b.z,
     };
 }
 
-fn vec3_scale(v: &Vec3, s: f64) -> Vec3 {
-    return Vec3 {
+export function vec3_scale(v: readonly Vec3, s: f64): Vec3 {
+    return {
         x: v.x * s,
         y: v.y * s,
         z: v.z * s,
     };
 }
 
-fn vec3_dot(a: &Vec3, b: &Vec3) -> f64 {
+export function vec3_dot(a: readonly Vec3, b: readonly Vec3): f64 {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-fn vec3_len(v: &Vec3) -> f64 {
+export function vec3_len(v: readonly Vec3): f64 {
     return sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
 }
 
-fn vec3_norm(v: &Vec3) -> Vec3 {
-    let l = max(vec3_len(v), 0.000001);
-    let inv = 1.0 / l;
-    return Vec3 {
+export function vec3_norm(v: readonly Vec3): Vec3 {
+    const l = max(vec3_len(v), 0.000001);
+    const inv = 1.0 / l;
+    return {
         x: v.x * inv,
         y: v.y * inv,
         z: v.z * inv,
     };
 }
 
-fn smin(a: f64, b: f64, k: f64) -> f64 {
-    let kk = max(k, 0.000001);
-    let h = max(kk - abs(a - b), 0.0) / kk;
+export function smin(a: f64, b: f64, k: f64): f64 {
+    const kk = max(k, 0.000001);
+    const h = max(kk - abs(a - b), 0.0) / kk;
     return min(a, b) - h * h * kk * 0.25;
 }
 "###;
 
-/// Standard unconstrained typed UI, styling, widget constructors, and animation re-exports (`import "std/ui";`).
-pub const STD_UI_SRC: &str = r###"// Standard Unconstrained Typed UI, Styling, Animation & Shader Primitives for knr (`std/ui`).
-// Zero raw HTML, zero raw CSS, zero raw GLSL — 100% statically verified schemas.
-// Works identically on Native GPU Desktop (`wgpu 23`) and Web (`WASM + WebGPU/WebGL2`).
+/// Standard unconstrained typed GPU UI, styling, widget constructors, and animation re-exports (`std/ui`).
+/// 45-field `Style` schema rendered pixel-identically by the Unified GPU Engine (Desktop `wgpu`,
+/// Headless PNG `knr render`, and Flutter-style Web Canvas+WebGPU).
+pub const STD_UI_SRC: &str = r###"// Standard Unconstrained Typed GPU UI & Styling Primitives (`std/ui`).
+// Zero HTML DOM, zero CSS, zero GLSL — 100% statically verified schemas rendered by ONE unified GPU engine.
 
 import "std/anim";
 
-schema Vec2 {
-    0: x f64,
-    1: y f64,
-}
+export type Vec2 = {
+    x: f64;
+    y: f64;
+};
 
-schema Color {
-    0: r f64,
-    1: g f64,
-    2: b f64,
-    3: a f64,
-}
+export type Color = {
+    r: f64;
+    g: f64;
+    b: f64;
+    a: f64;
+};
 
-schema Style {
-    0: w f64,
-    1: h f64,
-    2: min_w f64,
-    3: max_w f64,
-    4: bg str,
-    5: color str,
-    6: border str,
-    7: border_w f64,
-    8: r_tl f64,
-    9: r_tr f64,
-    10: r_br f64,
-    11: r_bl f64,
-    12: pad_t f64,
-    13: pad_r f64,
-    14: pad_b f64,
-    15: pad_l f64,
-    16: gap_x f64,
-    17: gap_y f64,
-    18: font_size f64,
-    19: font_weight i64,
-    20: align str,
-    21: justify str,
-    22: grid_cols i64,
-    23: shadow_x f64,
-    24: shadow_y f64,
-    25: shadow_blur f64,
-    26: shadow_color str,
-    27: backdrop_blur f64,
-    28: opacity f64,
-    29: translate_x f64,
-    30: translate_y f64,
-    31: scale f64,
-    32: rotate_deg f64,
-    33: hover_bg str,
-    34: hover_border str,
-    35: hover_scale f64,
-    36: transition_ms f64,
-    37: overflow str,
-    38: z_index i64,
-    39: grow f64,
-}
+export type Style = {
+    w: f64;
+    h: f64;
+    min_w: f64;
+    max_w: f64;
+    bg: string;
+    color: string;
+    border: string;
+    border_w: f64;
+    r_tl: f64;
+    r_tr: f64;
+    r_br: f64;
+    r_bl: f64;
+    pad_t: f64;
+    pad_r: f64;
+    pad_b: f64;
+    pad_l: f64;
+    gap_x: f64;
+    gap_y: f64;
+    font_size: f64;
+    font_weight: i64;
+    align: string;
+    justify: string;
+    grid_cols: i64;
+    shadow_x: f64;
+    shadow_y: f64;
+    shadow_blur: f64;
+    shadow_color: string;
+    backdrop_blur: f64;
+    opacity: f64;
+    translate_x: f64;
+    translate_y: f64;
+    scale: f64;
+    rotate_deg: f64;
+    hover_bg: string;
+    hover_border: string;
+    hover_scale: f64;
+    transition_ms: f64;
+    overflow: string;
+    z_index: i64;
+    grow: f64;
+    font_family: string;
+    text_align: string;
+    line_height: f64;
+    col_span: i64;
+    letter_spacing: f64;
+};
 
-schema Widget {
-    0: key str,
-    1: kind str,
-    2: text str,
-    3: action str,
-    4: value f64,
-    5: uniforms vec[f64],
-    6: style Style,
-    7: children vec[Widget],
-}
+export type Widget = {
+    key: string;
+    kind: string;
+    text: string;
+    action: string;
+    value: f64;
+    uniforms: f64[];
+    style: Style;
+    children: Widget[];
+};
 
-// ============================================================================
-// Composable Style Presets (use with `..style_default()` / `..style_card()`)
-// ============================================================================
-
-fn style_default() -> Style {
-    return Style {
+export function style_default(): Style {
+    return {
         w: 0.0,
         h: 0.0,
         min_w: 0.0,
         max_w: 0.0,
         bg: "",
-        color: #f8fafc,
+        color: "#f8fafc",
         border: "",
         border_w: 1.0,
         r_tl: 0.0,
@@ -216,7 +231,7 @@ fn style_default() -> Style {
         pad_l: 0.0,
         gap_x: 0.0,
         gap_y: 0.0,
-        font_size: 16.0,
+        font_size: 15.0,
         font_weight: 400,
         align: "stretch",
         justify: "start",
@@ -238,567 +253,536 @@ fn style_default() -> Style {
         overflow: "visible",
         z_index: 0,
         grow: 0.0,
+        font_family: "sans",
+        text_align: "left",
+        line_height: 0.0,
+        col_span: 1,
+        letter_spacing: 0.0,
     };
 }
 
-fn style_radius(s: Style, r: f64) -> Style {
-    return Style {
-        r_tl: r,
-        r_tr: r,
-        r_br: r,
-        r_bl: r,
-        ..s
-    };
-}
-
-fn style_pad(s: Style, p: f64) -> Style {
-    return Style {
-        pad_t: p,
-        pad_r: p,
-        pad_b: p,
-        pad_l: p,
-        ..s
-    };
-}
-
-fn style_gap(s: Style, g: f64) -> Style {
-    return Style {
-        gap_x: g,
-        gap_y: g,
-        ..s
-    };
-}
-
-fn style_card() -> Style {
-    return Style {
-        bg: #111827cc,
-        color: #f8fafc,
-        border: #334155aa,
+export function style_card(): Style {
+    return {
+        ...style_default(),
+        bg: "linear(155, #0e1424ee, #090d18f6)",
+        color: "#f8fafc",
+        border: "#ffffff16",
         border_w: 1.0,
-        r_tl: 18.0,
-        r_tr: 18.0,
-        r_br: 18.0,
-        r_bl: 18.0,
+        r_tl: 16.0,
+        r_tr: 16.0,
+        r_br: 16.0,
+        r_bl: 16.0,
         pad_t: 22.0,
         pad_r: 22.0,
         pad_b: 22.0,
         pad_l: 22.0,
-        gap_x: 14.0,
-        gap_y: 14.0,
+        gap_x: 12.0,
+        gap_y: 12.0,
         shadow_x: 0.0,
-        shadow_y: 12.0,
-        shadow_blur: 28.0,
-        shadow_color: #00000066,
-        backdrop_blur: 16.0,
+        shadow_y: 14.0,
+        shadow_blur: 32.0,
+        shadow_color: "#00000066",
+        backdrop_blur: 14.0,
         transition_ms: 160.0,
-        ..style_default()
     };
 }
 
-fn style_button(bg: str, color: str) -> Style {
-    return Style {
+export function style_button(bg: string, color: string): Style {
+    return {
+        ...style_default(),
         bg: bg,
         color: color,
-        border: #ffffff22,
+        border: "#ffffff1c",
         border_w: 1.0,
-        r_tl: 12.0,
-        r_tr: 12.0,
-        r_br: 12.0,
-        r_bl: 12.0,
-        pad_t: 11.0,
-        pad_r: 18.0,
-        pad_b: 11.0,
-        pad_l: 18.0,
-        font_size: 15.0,
+        r_tl: 10.0,
+        r_tr: 10.0,
+        r_br: 10.0,
+        r_bl: 10.0,
+        pad_t: 10.0,
+        pad_r: 16.0,
+        pad_b: 10.0,
+        pad_l: 16.0,
+        font_size: 14.0,
         font_weight: 600,
-        hover_scale: 1.04,
-        transition_ms: 150.0,
-        ..style_default()
-    };
-}
-
-// ============================================================================
-// Declarative Widget Constructors
-// ============================================================================
-
-fn w_col(key: str, style: Style, children: vec[Widget]) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    return Widget {
-        key: key,
-        kind: "col",
-        text: "",
-        action: "",
-        value: 0.0,
-        uniforms: empty_u,
-        style: style,
-        children: children,
-    };
-}
-
-fn w_row(key: str, style: Style, children: vec[Widget]) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    return Widget {
-        key: key,
-        kind: "row",
-        text: "",
-        action: "",
-        value: 0.0,
-        uniforms: empty_u,
-        style: style,
-        children: children,
-    };
-}
-
-fn w_grid(key: str, cols: i64, style: Style, children: vec[Widget]) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    return Widget {
-        key: key,
-        kind: "grid",
-        text: "",
-        action: "",
-        value: 0.0,
-        uniforms: empty_u,
-        style: Style { grid_cols: cols, ..style },
-        children: children,
-    };
-}
-
-fn w_stack(key: str, style: Style, children: vec[Widget]) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    return Widget {
-        key: key,
-        kind: "stack",
-        text: "",
-        action: "",
-        value: 0.0,
-        uniforms: empty_u,
-        style: style,
-        children: children,
-    };
-}
-
-fn w_card(key: str, style: Style, children: vec[Widget]) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    return Widget {
-        key: key,
-        kind: "card",
-        text: "",
-        action: "",
-        value: 0.0,
-        uniforms: empty_u,
-        style: style,
-        children: children,
-    };
-}
-
-fn w_text(key: str, text: str, font_size: f64, color: str) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    let empty_c: vec[Widget] = vec_new();
-    return Widget {
-        key: key,
-        kind: "text",
-        text: text,
-        action: "",
-        value: 0.0,
-        uniforms: empty_u,
-        style: Style {
-            color: color,
-            font_size: font_size,
-            ..style_default()
-        },
-        children: empty_c,
-    };
-}
-
-fn w_badge(key: str, text: str, bg: str, color: str) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    let empty_c: vec[Widget] = vec_new();
-    return Widget {
-        key: key,
-        kind: "badge",
-        text: text,
-        action: "",
-        value: 0.0,
-        uniforms: empty_u,
-        style: Style {
-            bg: bg,
-            color: color,
-            border: #38bdf855,
-            r_tl: 999.0,
-            r_tr: 999.0,
-            r_br: 999.0,
-            r_bl: 999.0,
-            pad_t: 6.0,
-            pad_r: 12.0,
-            pad_b: 6.0,
-            pad_l: 12.0,
-            font_size: 13.0,
-            font_weight: 600,
-            ..style_default()
-        },
-        children: empty_c,
-    };
-}
-
-fn w_button(key: str, label: str, action: str, style: Style) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    let empty_c: vec[Widget] = vec_new();
-    return Widget {
-        key: key,
-        kind: "button",
-        text: label,
-        action: action,
-        value: 0.0,
-        uniforms: empty_u,
-        style: style,
-        children: empty_c,
-    };
-}
-
-fn w_input(key: str, text: str, action: str, style: Style) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    let empty_c: vec[Widget] = vec_new();
-    return Widget {
-        key: key,
-        kind: "input",
-        text: text,
-        action: action,
-        value: 0.0,
-        uniforms: empty_u,
-        style: style,
-        children: empty_c,
-    };
-}
-
-fn w_slider(key: str, action: str, value: f64, style: Style) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    let empty_c: vec[Widget] = vec_new();
-    return Widget {
-        key: key,
-        kind: "slider",
-        text: "",
-        action: action,
-        value: value,
-        uniforms: empty_u,
-        style: style,
-        children: empty_c,
-    };
-}
-
-fn w_toggle(key: str, label: str, action: str, checked: bool, style: Style) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    let empty_c: vec[Widget] = vec_new();
-    let v = if checked { 1.0 } else { 0.0 };
-    return Widget {
-        key: key,
-        kind: "toggle",
-        text: label,
-        action: action,
-        value: v,
-        uniforms: empty_u,
-        style: style,
-        children: empty_c,
-    };
-}
-
-fn w_shader(key: str, shader_name: str, uniforms: vec[f64], style: Style) -> Widget {
-    let empty_c: vec[Widget] = vec_new();
-    return Widget {
-        key: key,
-        kind: "shader",
-        text: shader_name,
-        action: "",
-        value: 0.0,
-        uniforms: uniforms,
-        style: style,
-        children: empty_c,
-    };
-}
-
-fn w_divider(key: str, style: Style) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    let empty_c: vec[Widget] = vec_new();
-    return Widget {
-        key: key,
-        kind: "divider",
-        text: "",
-        action: "",
-        value: 0.0,
-        uniforms: empty_u,
-        style: style,
-        children: empty_c,
-    };
-}
-
-fn w_progress(key: str, value: f64, style: Style) -> Widget {
-    let empty_u: vec[f64] = vec_new();
-    let empty_c: vec[Widget] = vec_new();
-    return Widget {
-        key: key,
-        kind: "progress",
-        text: "",
-        action: "",
-        value: value,
-        uniforms: empty_u,
-        style: style,
-        children: empty_c,
+        hover_scale: 1.02,
+        transition_ms: 140.0,
     };
 }
 "###;
 
-/// Standard system, filesystem, JSON, and HTTP/1.1 client helpers (`import "std/sys";`).
+/// Standard system, filesystem, JSON, and HTTP/1.1 client helpers (`import ... from "std/sys";`).
 pub const STD_SYS_SRC: &str = r###"// Standard System, Filesystem, JSON & HTTP Client Library (`std/sys`).
-// Capability-isolated via `effects(Hw)` (filesystem & JSON) and `effects(Net)` (HTTP/1.1 client).
+// Capability-isolated via `@effects("hw")` (filesystem & JSON) and `@effects("net")` (HTTP/1.1).
 
-schema FileWrite {
-    0: path str,
-    1: content str,
-}
+export type FileWrite = {
+    path: string;
+    content: string;
+};
 
-schema JsonQuery {
-    0: json str,
-    1: key str,
-}
+export type JsonQuery = {
+    json: string;
+    key: string;
+};
 
-schema HttpPost {
-    0: url str,
-    1: body str,
-}
+export type HttpPost = {
+    url: string;
+    body: string;
+};
 
-fn fs_read(path: str) -> str effects(Hw) {
-    let out: str = syscall Hw "fs.read_file" path;
+@effects("hw")
+export function fs_read(path: string): string {
+    const out: string = syscall("hw", "fs.read_file", path);
     return out;
 }
 
-fn fs_write(path: str, content: str) -> bool effects(Hw) {
-    let req = FileWrite { path: path, content: content };
-    let ok: bool = syscall Hw "fs.write_file" req;
+@effects("hw")
+export function fs_write(path: string, content: string): bool {
+    const req: FileWrite = { path, content };
+    const ok: bool = syscall("hw", "fs.write_file", req);
     return ok;
 }
 
-fn fs_exists(path: str) -> bool effects(Hw) {
-    let ok: bool = syscall Hw "fs.exists" path;
+@effects("hw")
+export function fs_exists(path: string): bool {
+    const ok: bool = syscall("hw", "fs.exists", path);
     return ok;
 }
 
-fn fs_remove(path: str) -> bool effects(Hw) {
-    let ok: bool = syscall Hw "fs.remove_file" path;
+@effects("hw")
+export function fs_remove(path: string): bool {
+    const ok: bool = syscall("hw", "fs.remove_file", path);
     return ok;
 }
 
-fn fs_list(dir: str) -> str effects(Hw) {
-    let out: str = syscall Hw "fs.list_dir" dir;
+@effects("hw")
+export function fs_list(dir: string): string {
+    const out: string = syscall("hw", "fs.list_dir", dir);
     return out;
 }
 
-fn json_is_valid(raw: str) -> bool effects(Hw) {
-    let ok: bool = syscall Hw "json.is_valid" raw;
+@effects("hw")
+export function json_is_valid(raw: string): bool {
+    const ok: bool = syscall("hw", "json.is_valid", raw);
     return ok;
 }
 
-fn json_pretty(raw: str) -> str effects(Hw) {
-    let out: str = syscall Hw "json.pretty" raw;
+@effects("hw")
+export function json_pretty(raw: string): string {
+    const out: string = syscall("hw", "json.pretty", raw);
     return out;
 }
 
-fn json_get(raw: str, key: str) -> str effects(Hw) {
-    let q = JsonQuery { json: raw, key: key };
-    let out: str = syscall Hw "json.get" q;
+@effects("hw")
+export function json_get(raw: string, key: string): string {
+    const q: JsonQuery = { json: raw, key };
+    const out: string = syscall("hw", "json.get", q);
     return out;
 }
 
-fn http_get(url: str) -> str effects(Net) {
-    let body: str = syscall Net "http.get" url;
+@effects("net")
+export function http_get(url: string): string {
+    const body: string = syscall("net", "http.get", url);
     return body;
 }
 
-fn http_post(url: str, body: str) -> str effects(Net) {
-    let req = HttpPost { url: url, body: body };
-    let resp: str = syscall Net "http.post" req;
+@effects("net")
+export function http_post(url: string, body: string): string {
+    const req: HttpPost = { url, body };
+    const resp: string = syscall("net", "http.post", req);
     return resp;
 }
 "###;
 
+/// Standard core algebraic generic types (`import { Option, Result } from "std/core";`).
+pub const STD_CORE_SRC: &str = r###"// Standard Core Algebraic Generic Types (`std/core`).
+
+export enum Option<T> {
+    Some(T),
+    None,
+}
+
+export enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+"###;
+
+/// Standard declarative side-effect commands (`import { Cmd, cmd_none, cmd_http_get, ... } from "std/cmd";`).
+pub const STD_CMD_SRC: &str = r###"// Standard Declarative Side-Effect Commands (`std/cmd`).
+
+export type Cmd = {
+    kind: string;
+    target: string;
+    payload: string;
+    on_result: string;
+    delay_ms: f64;
+};
+
+export function cmd_none(): Cmd {
+    return {
+        kind: "none",
+        target: "",
+        payload: "",
+        on_result: "",
+        delay_ms: 0.0,
+    };
+}
+
+export function cmd_http_get(url: string, on_result: string): Cmd {
+    return {
+        kind: "http_get",
+        target: url,
+        payload: "",
+        on_result: on_result,
+        delay_ms: 0.0,
+    };
+}
+
+export function cmd_http_post(url: string, body: string, on_result: string): Cmd {
+    return {
+        kind: "http_post",
+        target: url,
+        payload: body,
+        on_result: on_result,
+        delay_ms: 0.0,
+    };
+}
+
+export function cmd_timer(delay_ms: f64, on_fire: string): Cmd {
+    return {
+        kind: "timer",
+        target: "",
+        payload: "",
+        on_result: on_fire,
+        delay_ms: delay_ms,
+    };
+}
+
+export function cmd_storage_save(key: string, value: string): Cmd {
+    return {
+        kind: "storage_save",
+        target: key,
+        payload: value,
+        on_result: "",
+        delay_ms: 0.0,
+    };
+}
+
+export function cmd_storage_load(key: string, on_result: string): Cmd {
+    return {
+        kind: "storage_load",
+        target: key,
+        payload: "",
+        on_result: on_result,
+        delay_ms: 0.0,
+    };
+}
+"###;
+
+/// Standard design tokens & curated color themes (`import { Theme, theme_obsidian, ... } from "std/theme";`).
+pub const STD_THEME_SRC: &str = r###"// Standard Design Tokens & Curated Themes (`std/theme`).
+
+export type Theme = {
+    bg: string;
+    surface: string;
+    surface_alt: string;
+    border: string;
+    text: string;
+    text_muted: string;
+    accent: string;
+    accent_alt: string;
+    success: string;
+    warning: string;
+    danger: string;
+    radius_sm: f64;
+    radius_md: f64;
+    radius_lg: f64;
+};
+
+export function theme_obsidian(): Theme {
+    return {
+        bg: "#06080f",
+        surface: "#0e1424",
+        surface_alt: "#161e33",
+        border: "#ffffff1a",
+        text: "#f8fafc",
+        text_muted: "#94a3b8",
+        accent: "#38bdf8",
+        accent_alt: "#818cf8",
+        success: "#22c55e",
+        warning: "#f59e0b",
+        danger: "#ef4444",
+        radius_sm: 6.0,
+        radius_md: 12.0,
+        radius_lg: 18.0,
+    };
+}
+
+export function theme_light(): Theme {
+    return {
+        bg: "#f8fafc",
+        surface: "#ffffff",
+        surface_alt: "#f1f5f9",
+        border: "#cbd5e1",
+        text: "#0f172a",
+        text_muted: "#475569",
+        accent: "#0284c7",
+        accent_alt: "#4f46e5",
+        success: "#16a34a",
+        warning: "#d97706",
+        danger: "#dc2626",
+        radius_sm: 6.0,
+        radius_md: 12.0,
+        radius_lg: 18.0,
+    };
+}
+
+export function theme_nord(): Theme {
+    return {
+        bg: "#2e3440",
+        surface: "#3b4252",
+        surface_alt: "#434c5e",
+        border: "#4c566a",
+        text: "#eceff4",
+        text_muted: "#d8dee9",
+        accent: "#88c0d0",
+        accent_alt: "#81a1c1",
+        success: "#a3be8c",
+        warning: "#ebcb8b",
+        danger: "#bf616a",
+        radius_sm: 6.0,
+        radius_md: 10.0,
+        radius_lg: 16.0,
+    };
+}
+
+export function theme_solar(): Theme {
+    return {
+        bg: "#002b36",
+        surface: "#073642",
+        surface_alt: "#0d4452",
+        border: "#586e75",
+        text: "#fdf6e3",
+        text_muted: "#93a1a1",
+        accent: "#268bd2",
+        accent_alt: "#2aa198",
+        success: "#859900",
+        warning: "#b58900",
+        danger: "#dc322f",
+        radius_sm: 6.0,
+        radius_md: 12.0,
+        radius_lg: 18.0,
+    };
+}
+"###;
+
+/// Standard zero-GC client-side router state helpers (`import { Route, router_init, ... } from "std/router";`).
+pub const STD_ROUTER_SRC: &str = r###"// Standard Zero-GC Client-Side Router (`std/router`).
+
+export type Route = {
+    current: string;
+    previous: string;
+    depth: i64;
+};
+
+export function router_init(path: string): Route {
+    return {
+        current: path,
+        previous: "",
+        depth: 0,
+    };
+}
+
+export function router_push(r: Route, path: string): Route {
+    return {
+        ...r,
+        previous: r.current,
+        current: path,
+        depth: r.depth + 1,
+    };
+}
+
+export function router_back(r: Route): Route {
+    if (r.depth > 0) {
+        return {
+            ...r,
+            current: r.previous,
+            previous: "",
+            depth: r.depth - 1,
+        };
+    }
+    return r;
+}
+
+export function router_replace(r: Route, path: string): Route {
+    return {
+        ...r,
+        current: path,
+    };
+}
+
+export function router_is(r: readonly Route, path: string): bool {
+    return r.current === path;
+}
+
+export function router_can_back(r: readonly Route): bool {
+    return r.depth > 0;
+}
+"###;
+
+/// Standard responsive breakpoint & layout helpers (`import { is_compact, responsive_cols, ... } from "std/layout";`).
+pub const STD_LAYOUT_SRC: &str = r###"// Standard Responsive Breakpoint & Layout Helpers (`std/layout`).
+
+export function is_compact(w: f64): bool {
+    return w < 640.0;
+}
+
+export function is_medium(w: f64): bool {
+    return w >= 640.0 && w < 1024.0;
+}
+
+export function is_wide(w: f64): bool {
+    return w >= 1024.0;
+}
+
+export function responsive_cols(w: f64, sm: i64, md: i64, lg: i64): i64 {
+    if (w < 640.0) {
+        return sm;
+    }
+    if (w < 1024.0) {
+        return md;
+    }
+    return lg;
+}
+
+export function responsive_pad(w: f64): f64 {
+    if (w < 640.0) {
+        return 12.0;
+    }
+    if (w < 1024.0) {
+        return 20.0;
+    }
+    return 28.0;
+}
+"###;
+
+/// Standard deterministic unit testing assertions (`import { assert_eq_i64, assert_near, ... } from "std/testing";`).
+pub const STD_TESTING_SRC: &str = r###"// Standard Deterministic Unit Testing Assertions (`std/testing`).
+
+export function assert_eq_i64(a: i64, b: i64): bool {
+    return a === b;
+}
+
+export function assert_near(a: f64, b: f64, eps: f64): bool {
+    return abs(a - b) <= eps;
+}
+
+export function assert_str_eq(a: string, b: string): bool {
+    return a === b;
+}
+
+export function assert_true(b: bool): bool {
+    return b;
+}
+
+export function assert_false(b: bool): bool {
+    return !b;
+}
+
+export function assert_gt(a: i64, b: i64): bool {
+    return a > b;
+}
+
+export function assert_lt(a: i64, b: i64): bool {
+    return a < b;
+}
+"###;
+
 /// Resolves a built-in standard library import path (`"std/ui"`, `"std/anim"`, `"std/math"`,
-/// `"std/sys"`, with or without a `.knr` suffix) to its embedded `.knr` source code.
+/// `"std/sys"`, `"std/core"`, `"std/cmd"`, `"std/theme"`, `"std/router"`, `"std/layout"`,
+/// `"std/testing"`, with or without `.tsk`/`.knr` suffix) to its embedded source code.
 pub fn resolve_builtin_std(import_path: &str) -> Option<&'static str> {
-    let normalized = import_path.strip_suffix(".knr").unwrap_or(import_path);
+    let normalized = import_path
+        .strip_suffix(".tsk")
+        .or_else(|| import_path.strip_suffix(".knr"))
+        .unwrap_or(import_path);
     match normalized {
         "std/ui" => Some(STD_UI_SRC),
         "std/anim" => Some(STD_ANIM_SRC),
         "std/math" => Some(STD_MATH_SRC),
         "std/sys" => Some(STD_SYS_SRC),
+        "std/core" => Some(STD_CORE_SRC),
+        "std/cmd" => Some(STD_CMD_SRC),
+        "std/theme" => Some(STD_THEME_SRC),
+        "std/router" => Some(STD_ROUTER_SRC),
+        "std/layout" => Some(STD_LAYOUT_SRC),
+        "std/testing" => Some(STD_TESTING_SRC),
         _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::*;
     use crate::lower::lower_program;
-    use crate::syntax::parse_knr;
+    use crate::syntax::parse_tsx;
 
     #[test]
     fn test_resolve_builtin_std_paths() {
         assert!(resolve_builtin_std("std/ui").is_some());
-        assert!(resolve_builtin_std("std/ui.knr").is_some());
+        assert!(resolve_builtin_std("std/ui.tsk").is_some());
         assert!(resolve_builtin_std("std/anim").is_some());
-        assert!(resolve_builtin_std("std/anim.knr").is_some());
         assert!(resolve_builtin_std("std/math").is_some());
-        assert!(resolve_builtin_std("std/math.knr").is_some());
         assert!(resolve_builtin_std("std/sys").is_some());
-        assert!(resolve_builtin_std("std/sys.knr").is_some());
-        assert!(resolve_builtin_std("./std_ui.knr").is_none());
+        assert!(resolve_builtin_std("std/core").is_some());
+        assert!(resolve_builtin_std("std/cmd").is_some());
+        assert!(resolve_builtin_std("std/theme").is_some());
+        assert!(resolve_builtin_std("std/router").is_some());
+        assert!(resolve_builtin_std("std/layout").is_some());
+        assert!(resolve_builtin_std("std/testing").is_some());
         assert!(resolve_builtin_std("std/unknown").is_none());
     }
 
     #[test]
-    fn test_builtin_std_sys_lowering() {
-        let src = r#"
-            import "std/sys";
+    fn test_std_ui_and_jsx_lower_cleanly() {
+        let src = r###"
+import { Column, Row, Card, Text, Button, Shader, Icon, Code } from "std/ui";
 
-            fn check_fs_and_json() -> bool effects(Hw) {
-                let wrote = fs_write("/tmp/test_sys.json", "{\"user\":{\"name\":\"knr\"}}");
-                let exists = fs_exists("/tmp/test_sys.json");
-                let valid = json_is_valid(fs_read("/tmp/test_sys.json"));
-                let pretty = json_pretty("{\"a\":1}");
-                let name = json_get("{\"user\":{\"name\":\"knr\"}}", "user.name");
-                let listing = fs_list("/tmp");
-                let removed = fs_remove("/tmp/test_sys.json");
-                return wrote
-                    && exists
-                    && valid
-                    && str_len(pretty) > 0
-                    && name == "knr"
-                    && str_len(listing) >= 0
-                    && removed;
-            }
+type State = { count: i64; energy: f64; };
 
-            fn check_http() -> str effects(Net) {
-                let a = http_get("http://127.0.0.1:8080/health");
-                let b = http_post("http://127.0.0.1:8080/echo", "{}");
-                return a + b;
-            }
-        "#;
+export function init(): State {
+    return { count: 1, energy: 0.5 };
+}
 
-        let prog = parse_knr(src).expect("parse program using std/sys");
-        let module = lower_program(&prog).expect("lower program using std/sys");
+@shader
+export function fx(uv: Vec2, time: f64, energy: f64): Color {
+    const w = 0.5 + 0.5 * sin(uv.x * 6.0 + time + energy);
+    return { r: w, g: 0.4, b: 0.9, a: 1.0 };
+}
 
-        let mut schema_names = HashSet::new();
-        for s in &module.schemas {
-            assert!(
-                schema_names.insert(s.name.clone()),
-                "Duplicate schema '{}'",
-                s.name
-            );
-        }
-        assert!(schema_names.contains("FileWrite"));
-        assert!(schema_names.contains("JsonQuery"));
-        assert!(schema_names.contains("HttpPost"));
-
-        let mut fn_names = HashSet::new();
-        for f in &module.functions {
-            assert!(
-                fn_names.insert(f.name.clone()),
-                "Duplicate function '{}'",
-                f.name
-            );
-        }
-        for expected in [
-            "fs_read",
-            "fs_write",
-            "fs_exists",
-            "fs_remove",
-            "fs_list",
-            "json_is_valid",
-            "json_pretty",
-            "json_get",
-            "http_get",
-            "http_post",
-        ] {
-            assert!(
-                fn_names.contains(expected),
-                "Missing std/sys function '{expected}'"
-            );
-        }
-    }
-
-    #[test]
-    fn test_builtin_std_in_memory_and_diamond_dedup() {
-        let src = r#"
-            import "std/ui";
-            import "std/anim";
-            import "std/math";
-            import "std/ui.knr";
-
-            fn main() -> f64 {
-                let a = Vec3 { x: 1.0, y: 2.0, z: 2.0 };
-                let b = Vec3 { x: 0.0, y: 1.0, z: 0.0 };
-                let c = vec3_add(&a, &b);
-                let n = vec3_norm(&c);
-                return smin(vec3_len(&n), ease_out_expo(0.5), 0.25) + pi();
-            }
-        "#;
-
-        let prog = parse_knr(src).expect("parse program using built-in std imports");
-        let module = lower_program(&prog).expect("lower program using built-in std imports");
-
-        // Ensure zero duplicate schema names and zero duplicate function names
-        let mut schema_names = HashSet::new();
-        for s in &module.schemas {
-            assert!(
-                schema_names.insert(s.name.clone()),
-                "Duplicate schema '{}'",
-                s.name
-            );
-        }
-        assert!(schema_names.contains("Vec2"));
-        assert!(schema_names.contains("Vec3"));
-        assert!(schema_names.contains("Color"));
-        assert!(schema_names.contains("Style"));
-        assert!(schema_names.contains("Widget"));
-
-        let mut fn_names = HashSet::new();
-        for f in &module.functions {
-            assert!(
-                fn_names.insert(f.name.clone()),
-                "Duplicate function '{}'",
-                f.name
-            );
-        }
-        assert!(fn_names.contains("w_shader"));
-        assert!(fn_names.contains("ease_out_expo"));
-        assert!(fn_names.contains("smin"));
-        assert!(fn_names.contains("vec3_norm"));
-    }
-
-    #[test]
-    fn test_builtin_std_reverse_import_order() {
-        let src = r#"
-            import "std/math";
-            import "std/anim";
-            import "std/ui";
-
-            fn main() -> f64 {
-                let v = Vec2 { x: 3.0, y: 4.0 };
-                return vec2_len(&v) + ease_out_cubic(0.5);
-            }
-        "#;
-
-        let prog = parse_knr(src).expect("parse reverse-order std imports");
-        let module = lower_program(&prog).expect("lower reverse-order std imports");
-        let mut schema_names = HashSet::new();
-        for s in &module.schemas {
-            assert!(
-                schema_names.insert(s.name.clone()),
-                "Duplicate schema '{}'",
-                s.name
-            );
-        }
-        assert!(schema_names.contains("Vec2"));
-        assert!(schema_names.contains("Vec3"));
-        assert!(schema_names.contains("Widget"));
+export function view(s: readonly State): Widget {
+    return (
+        <Column p={24} gap={16} bg="#06080f">
+            <Card p={20} radius={16}>
+                <Row justify="between" align="center">
+                    <Text size={24} weight="bold">Count: {s.count}</Text>
+                    <Button onClick="inc" bg="#0ea5e9" px={16} py={10}>
+                        <Icon name="plus" size={16} color="#ffffff" />
+                        <Text size={14} weight="semibold">Add</Text>
+                    </Button>
+                </Row>
+                <Shader fn={fx} h={220} radius={12} uniforms={[s.energy]} />
+                <Code lang="tsx">{`const x = ${s.count};`}</Code>
+            </Card>
+        </Column>
+    );
+}
+"###;
+        let prog = parse_tsx(src).expect("parse TSX");
+        let module = lower_program(&prog).expect("lower TSX + JSX");
+        assert!(module.get_schema("Widget").is_some());
+        assert!(module.get_schema("Style").is_some());
+        assert!(module.get_function("view").is_some());
+        assert!(module.get_function("fx").is_some());
     }
 }

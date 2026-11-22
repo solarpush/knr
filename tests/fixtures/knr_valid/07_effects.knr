@@ -1,9 +1,11 @@
 // Valid 07: Effect capabilities
-fn notify(msg: str) -> void effects(Ui) {
+@effects("ui")
+function notify(msg: string): void {
     return;
 }
 
-fn sync_all() -> void effects(Ui, Net) {
+@effects("ui", "net")
+function sync_all(): void {
     notify("syncing");
     return;
 }

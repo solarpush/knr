@@ -2,50 +2,64 @@ use super::ast::Span;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
-    // Keywords
-    Fn,
-    Shader,
-    Struct,
-    Schema,
+    // Strict TypeScript / TSX Keywords
+    Import,
+    From,
+    Export,
+    Type,
+    Interface,
     Enum,
-    Match,
+    Function,
+    Const,
     Let,
     Return,
     If,
     Else,
     While,
+    For,
+    Switch,
+    Case,
+    Default,
     Break,
     Continue,
-    Effects,
-    Import,
+    Readonly,
     True,
     False,
-    Syscall,
+    As,
 
     // Identifiers & Literals
     Ident(String),
     IntLit(i64),
     FloatLit(f64),
     StrLit(String),
+    TemplateLit(String),
     HexColor(String),
 
-    // Symbols & Delimiters
-    LBrace,     // {
-    RBrace,     // }
-    LParen,     // (
-    RParen,     // )
-    LBracket,   // [
-    RBracket,   // ]
-    Semicolon,  // ;
-    Colon,      // :
-    ColonColon, // ::
-    Comma,      // ,
-    Dot,        // .
-    DotDot,     // ..
-    Arrow,      // ->
-    FatArrow,   // =>
-    Assign,     // =
-    Amp,        // &
+    // Decorators & Symbols
+    At,        // @
+    LBrace,    // {
+    RBrace,    // }
+    LParen,    // (
+    RParen,    // )
+    LBracket,  // [
+    RBracket,  // ]
+    Semicolon, // ;
+    Colon,     // :
+    Comma,     // ,
+    Dot,              // .
+    DotDotDot,        // ...
+    Question,         // ?
+    QuestionQuestion, // ??
+    Pipe,             // |
+    Amp,       // &
+    FatArrow,  // =>
+    Assign,    // =
+    PlusEq,    // +=
+    MinusEq,   // -=
+    StarEq,    // *=
+    SlashEq,   // /=
+    PlusPlus,  // ++
+    MinusMinus,// --
 
     // Operators
     Plus,    // +
@@ -53,8 +67,8 @@ pub enum TokenKind {
     Star,    // *
     Slash,   // /
     Percent, // %
-    EqEq,    // ==
-    BangEq,  // !=
+    EqEq,    // == / ===
+    BangEq,  // != / !==
     Lt,      // <
     LtEq,    // <=
     Gt,      // >

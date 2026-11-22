@@ -1,0 +1,507 @@
+// 3D SDF Raymarching Flagship Demo in Strict TSX (`examples/raymarch_3d.tsk`)
+// Unified GPU Engine | Pure `@shader` Compiled via `naga` to WGSL + GLSL ES 3.00
+//
+// Run natively on GPU (wgpu Vulkan/Metal/DX12, auto CPU fallback):
+//   knr run examples/raymarch_3d.tsk --gui
+// Render headless PNG + visual audit:
+//   knr render examples/raymarch_3d.tsk --png /tmp/raymarch.png --audit
+// Export standalone Web GPU + zero-import WASM app:
+//   knr build examples/raymarch_3d.tsk --target web -o dist_raymarch/
+// Run built-in deterministic unit tests:
+//   knr test examples/raymarch_3d.tsk
+
+import {
+    Column,
+    Row,
+    Grid,
+    Card,
+    Badge,
+    Text,
+    Button,
+    Slider,
+    Toggle,
+    Shader,
+    Icon,
+    Divider,
+    ease_out_cubic,
+    ease_out_expo,
+    smooth_damp,
+} from "std/ui";
+import {
+    Vec3,
+    smin,
+    vec3_norm,
+    vec3_dot,
+    vec3_add,
+    vec3_len,
+    pi,
+    tau,
+} from "std/math";
+
+// ============================================================================
+// 1. PURE 3D SIGNED DISTANCE FIELD (SDF) & GPU RAYMARCHING KERNEL
+// ============================================================================
+
+export function sd_torus(px: f64, py: f64, pz: f64, major: f64, minor: f64): f64 {
+    const qx = sqrt(px * px + pz * pz) - major;
+    return sqrt(qx * qx + py * py) - minor;
+}
+
+export function sd_sphere(px: f64, py: f64, pz: f64, radius: f64): f64 {
+    return sqrt(px * px + py * py + pz * pz) - radius;
+}
+
+export function scene_sdf(px: f64, py: f64, pz: f64, time: f64, twist: f64): f64 {
+    const ta = py * (twist * 2.1);
+    const ct = cos(ta);
+    const st = sin(ta);
+    const tx = px * ct - pz * st;
+    const tz = px * st + pz * ct;
+
+    const ax = time * 0.68;
+    const ay = time * 0.50;
+    const cx = cos(ax);
+    const sx = sin(ax);
+    const cy = cos(ay);
+    const sy = sin(ay);
+
+    const ry1 = py * cx - tz * sx;
+    const rz1 = py * sx + tz * cx;
+    const rx2 = tx * cy + rz1 * sy;
+    const rz2 = rz1 * cy - tx * sy;
+    const d_torus = sd_torus(rx2, ry1, rz2, 0.88, 0.26);
+
+    const ox1 = cos(time * 1.12) * 0.92;
+    const oy1 = sin(time * 1.48) * 0.42;
+    const oz1 = sin(time * 1.12) * 0.92;
+    const d_orb1 = sd_sphere(px - ox1, py - oy1, pz - oz1, 0.35);
+
+    const ox2 = cos(time * 0.84 + pi()) * 0.78;
+    const oy2 = cos(time * 1.26) * 0.46;
+    const oz2 = sin(time * 0.84 + pi()) * 0.78;
+    const d_orb2 = sd_sphere(px - ox2, py - oy2, pz - oz2, 0.28);
+
+    const d_core = sd_sphere(px, py, pz, 0.34 + 0.05 * sin(time * 2.1));
+
+    const b1 = smin(d_torus, d_orb1, 0.42);
+    const b2 = smin(b1, d_orb2, 0.38);
+    return smin(b2, d_core, 0.35);
+}
+
+@shader
+export function raymarch_scene(
+    uv: Vec2,
+    time: f64,
+    mouse: Vec2,
+    twist: f64,
+    glow: f64,
+    zoom: f64,
+): Color {
+    const sx = (uv.x - 0.5) * 2.2;
+    const sy = (0.5 - uv.y) * 1.25;
+
+    const yaw = (mouse.x - 0.5) * tau() * 0.72 + time * 0.18;
+    const pitch = clamp((mouse.y - 0.5) * 1.30, -0.92, 0.92);
+    const cam_dist = 3.85 - zoom * 1.50;
+
+    const cp = cos(pitch);
+    const sp = sin(pitch);
+    const cy = cos(yaw);
+    const sy_ang = sin(yaw);
+
+    const ro: Vec3 = {
+        x: cam_dist * cp * sy_ang,
+        y: cam_dist * sp,
+        z: cam_dist * cp * cy,
+    };
+    const neg_ro: Vec3 = { x: 0.0 - ro.x, y: 0.0 - ro.y, z: 0.0 - ro.z };
+    const fwd = vec3_norm(neg_ro);
+    const right_raw: Vec3 = { x: 0.0 - fwd.z, y: 0.0, z: fwd.x };
+    const right = vec3_norm(right_raw);
+    const up: Vec3 = {
+        x: right.y * fwd.z - right.z * fwd.y,
+        y: right.z * fwd.x - right.x * fwd.z,
+        z: right.x * fwd.y - right.y * fwd.x,
+    };
+
+    const focal = 1.48;
+    const rd_raw: Vec3 = {
+        x: fwd.x * focal + right.x * sx + up.x * sy,
+        y: fwd.y * focal + right.y * sx + up.y * sy,
+        z: fwd.z * focal + right.z * sx + up.z * sy,
+    };
+    const rd = vec3_norm(rd_raw);
+
+    const ro_x = ro.x;
+    const ro_y = ro.y;
+    const ro_z = ro.z;
+    const rd_x = rd.x;
+    const rd_y = rd.y;
+    const rd_z = rd.z;
+
+    let t = 0.0;
+    let glow_acc = 0.0;
+    let hit = 0.0;
+
+    for (let step = 0; step < 48; step += 1) {
+        const px = ro_x + rd_x * t;
+        const py = ro_y + rd_y * t;
+        const pz = ro_z + rd_z * t;
+        const d = scene_sdf(px, py, pz, time, twist);
+        glow_acc = glow_acc + 0.013 / (abs(d) + 0.055);
+        if (d < 0.0025) {
+            hit = 1.0;
+            break;
+        }
+        t = t + d * 0.84;
+        if (t > 9.5) {
+            break;
+        }
+    }
+
+    const hx = ro_x + rd_x * t;
+    const hy = ro_y + rd_y * t;
+    const hz = ro_z + rd_z * t;
+    const eps = 0.002;
+    const nx = scene_sdf(hx + eps, hy, hz, time, twist) - scene_sdf(hx - eps, hy, hz, time, twist);
+    const ny = scene_sdf(hx, hy + eps, hz, time, twist) - scene_sdf(hx, hy - eps, hz, time, twist);
+    const nz = scene_sdf(hx, hy, hz + eps, time, twist) - scene_sdf(hx, hy, hz - eps, time, twist);
+    const n_raw: Vec3 = { x: nx, y: ny, z: nz };
+    const n = vec3_norm(n_raw);
+
+    const l1_raw: Vec3 = { x: 0.65, y: 0.82, z: 0.55 };
+    const l1 = vec3_norm(l1_raw);
+    const l2_raw: Vec3 = { x: -0.75, y: 0.25, z: -0.60 };
+    const l2 = vec3_norm(l2_raw);
+    const view_dir: Vec3 = { x: 0.0 - rd_x, y: 0.0 - rd_y, z: 0.0 - rd_z };
+
+    const diff1 = max(vec3_dot(n, l1), 0.0);
+    const diff2 = max(vec3_dot(n, l2), 0.0);
+
+    const h_sum = vec3_add(l1, view_dir);
+    const half_v = vec3_norm(h_sum);
+    const nh = max(vec3_dot(n, half_v), 0.0);
+    const s2 = nh * nh;
+    const s4 = s2 * s2;
+    const s8 = s4 * s4;
+    const s16 = s8 * s8;
+    const spec = s16 * s16;
+
+    const nv = clamp(vec3_dot(n, view_dir), 0.0, 1.0);
+    const fres1 = 1.0 - nv;
+    const fres = fres1 * fres1 * fres1;
+
+    // Refined cool studio iridescence (cobalt, indigo, ice-cyan)
+    const phase = n.y * 0.35 + n.x * 0.22 + time * 0.10;
+    const pal_r = 0.28 + 0.26 * cos(tau() * (phase + 0.62));
+    const pal_g = 0.48 + 0.32 * cos(tau() * (phase + 0.12));
+    const pal_b = 0.72 + 0.26 * cos(tau() * (phase + 0.92));
+
+    const surf_r = pal_r * (0.14 + diff1 * 0.74) + diff2 * 0.18 + spec * 0.88 + fres * 0.30;
+    const surf_g = pal_g * (0.16 + diff1 * 0.78) + diff2 * 0.16 + spec * 0.92 + fres * 0.64;
+    const surf_b = pal_b * (0.24 + diff1 * 0.86) + diff2 * 0.38 + spec * 1.00 + fres * 0.96;
+
+    const bg_grad = clamp(1.0 - uv.y, 0.0, 1.0);
+    const bg_r = 0.022 + bg_grad * 0.024;
+    const bg_g = 0.030 + bg_grad * 0.042;
+    const bg_b = 0.058 + bg_grad * 0.075;
+
+    const g_pow = glow_acc * (0.10 + glow * 0.45);
+    const glow_r = g_pow * 0.20;
+    const glow_g = g_pow * 0.62;
+    const glow_b = g_pow * 0.98;
+
+    const vdx = uv.x - 0.5;
+    const vdy = uv.y - 0.5;
+    const vig = clamp(1.0 - (vdx * vdx + vdy * vdy) * 0.78, 0.44, 1.0);
+
+    const r = clamp((lerp(bg_r, surf_r, hit) + glow_r) * vig, 0.0, 1.0);
+    const g = clamp((lerp(bg_g, surf_g, hit) + glow_g) * vig, 0.0, 1.0);
+    const b = clamp((lerp(bg_b, surf_b, hit) + glow_b) * vig, 0.0, 1.0);
+    return { r, g, b, a: 1.0 };
+}
+
+// ============================================================================
+// 2. MVU APPLICATION STATE & TRANSITIONS
+// ============================================================================
+
+export type State = {
+    preset_idx: i64;
+    twist: f64;
+    glow: f64;
+    zoom: f64;
+    paused: bool;
+    elapsed: f64;
+    smooth_glow: f64;
+};
+
+export function init(): State {
+    return {
+        preset_idx: 0,
+        twist: 0.35,
+        glow: 0.62,
+        zoom: 0.45,
+        paused: false,
+        elapsed: 0.0,
+        smooth_glow: 0.62,
+    };
+}
+
+export function tick(s: State, dt: f64, _wall_elapsed: f64): State {
+    const next_elapsed = s.paused ? s.elapsed : s.elapsed + dt;
+    const next_smooth_glow = smooth_damp(s.smooth_glow, s.glow, dt, 8.0);
+    return {
+        ...s,
+        elapsed: next_elapsed,
+        smooth_glow: next_smooth_glow,
+    };
+}
+
+export function update(s: State, action: string): State {
+    switch (action) {
+        case "preset_sculpt":
+            return { ...s, preset_idx: 0, twist: 0.35, glow: 0.62, zoom: 0.45 };
+        case "preset_vortex":
+            return { ...s, preset_idx: 1, twist: 0.92, glow: 0.88, zoom: 0.68 };
+        case "preset_zen":
+            return { ...s, preset_idx: 2, twist: 0.08, glow: 0.38, zoom: 0.25 };
+        case "toggle_pause":
+            return { ...s, paused: !s.paused };
+        case "reset":
+            return init();
+        default:
+            return s;
+    }
+}
+
+export function on_slider(s: State, action: string, val: f64): State {
+    const v = clamp(val, 0.0, 1.0);
+    switch (action) {
+        case "slider_twist":
+            return { ...s, twist: v };
+        case "slider_glow":
+            return { ...s, glow: v };
+        case "slider_zoom":
+            return { ...s, zoom: v };
+        default:
+            return s;
+    }
+}
+
+// ============================================================================
+// 3. DECLARATIVE TSX VIEW
+// ============================================================================
+
+export function view(s: readonly State): Widget {
+    const twist_pct = toInt(s.twist * 100.0);
+    const glow_pct = toInt(s.glow * 100.0);
+    const zoom_pct = toInt(s.zoom * 100.0);
+    const preset_label =
+        s.preset_idx === 0
+            ? "Liquid Torus"
+            : s.preset_idx === 1
+                ? "Helix Vortex"
+                : "Orbital Zen";
+
+    return (
+        <Column
+            key="raymarch_root"
+            w="full"
+            bg="#06080f"
+            p={28}
+            gap={18}
+        >
+            <Row key="raymarch_header" align="center" justify="between" gap={12}>
+                <Column gap={6}>
+                    <Row align="center" gap={8}>
+                        <Icon name="cube" size={18} color="#38bdf8" />
+                        <Text size={26} weight="extrabold" font="display" letterSpacing={-0.6} color="#f8fafc">
+                            knr 3D SDF Raymarcher
+                        </Text>
+                    </Row>
+                    <Text size={14} color="#94a3b8">
+                        {`Move pointer over viewport to orbit camera | Preset: ${preset_label} | Twist ${twist_pct}% | Glow ${glow_pct}% | Zoom ${zoom_pct}%`}
+                    </Text>
+                </Column>
+                <Badge bg="#0e1628" color="#38bdf8" border="#38bdf833">
+                    48-Step SDF | WGSL + GLSL ES 3.00
+                </Badge>
+            </Row>
+
+            <Shader
+                key="raymarch_viewport"
+                fn={raymarch_scene}
+                h={340}
+                radius={16}
+                border="#ffffff18"
+                uniforms={[s.twist, s.glow, s.zoom]}
+            />
+
+            <Grid key="grid_controls" cols={2} gap={16}>
+                <Card bg="#0b0f1c" border="#ffffff14" radius={14} p={20} gap={14}>
+                    <Row align="center" gap={8}>
+                        <Icon name="palette" size={16} color="#818cf8" />
+                        <Text size={16} weight="bold" color="#f8fafc">
+                            3D Sculpture Presets
+                        </Text>
+                    </Row>
+                    <Row gap={8}>
+                        <Button
+                            onClick="preset_sculpt"
+                            bg={s.preset_idx === 0 ? "#15233d" : "#0e1322"}
+                            border={s.preset_idx === 0 ? "#38bdf866" : "#ffffff14"}
+                            hoverBorder="#38bdf855"
+                            px={14}
+                            py={9}
+                            radius={9}
+                        >
+                            Liquid Torus
+                        </Button>
+                        <Button
+                            onClick="preset_vortex"
+                            bg={s.preset_idx === 1 ? "#1e1a3a" : "#0e1322"}
+                            border={s.preset_idx === 1 ? "#818cf866" : "#ffffff14"}
+                            hoverBorder="#818cf855"
+                            px={14}
+                            py={9}
+                            radius={9}
+                        >
+                            Helix Vortex
+                        </Button>
+                        <Button
+                            onClick="preset_zen"
+                            bg={s.preset_idx === 2 ? "#15233d" : "#0e1322"}
+                            border={s.preset_idx === 2 ? "#38bdf866" : "#ffffff14"}
+                            hoverBorder="#38bdf855"
+                            px={14}
+                            py={9}
+                            radius={9}
+                        >
+                            Orbital Zen
+                        </Button>
+                    </Row>
+                    <Divider />
+                    <Row align="center" justify="between" gap={10}>
+                        <Toggle
+                            checked={s.paused}
+                            onToggle="toggle_pause"
+                            label="Pause Simulation"
+                        />
+                        <Button
+                            onClick="reset"
+                            bg="#0e1322"
+                            border="#ffffff14"
+                            hoverBorder="#ffffff2a"
+                            px={14}
+                            py={9}
+                            radius={9}
+                            gap={6}
+                            align="center"
+                        >
+                            <Icon name="refresh" size={14} color="#94a3b8" />
+                            <Text size={13} weight="medium" color="#cbd5e1">
+                                Reset
+                            </Text>
+                        </Button>
+                    </Row>
+                </Card>
+
+                <Card bg="#0b0f1c" border="#ffffff14" radius={14} p={20} gap={12}>
+                    <Row align="center" gap={8}>
+                        <Icon name="sliders" size={16} color="#38bdf8" />
+                        <Text size={16} weight="bold" color="#f8fafc">
+                            Live GPU Uniforms
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8">
+                        {`Axial Twist (${twist_pct}%)`}
+                    </Text>
+                    <Slider value={s.twist} onChange="slider_twist" />
+                    <Text size={13} color="#94a3b8">
+                        {`Volumetric Glow (${glow_pct}%)`}
+                    </Text>
+                    <Slider value={s.glow} onChange="slider_glow" />
+                    <Text size={13} color="#94a3b8">
+                        {`Camera Zoom (${zoom_pct}%)`}
+                    </Text>
+                    <Slider value={s.zoom} onChange="slider_zoom" />
+                </Card>
+            </Grid>
+        </Column>
+    );
+}
+
+// ============================================================================
+// 4. BUILT-IN DETERMINISTIC UNIT TESTS (`knr test examples/raymarch_3d.tsk`)
+// ============================================================================
+
+export function test_raymarch_init_tick(): bool {
+    const s0 = init();
+    const s1 = tick(s0, 0.016, 0.016);
+    const s2 = tick(s1, 0.500, 0.516);
+    const s3 = update(s2, "toggle_pause");
+    const s4 = tick(s3, 1.000, 1.516);
+    const e_cubic = ease_out_cubic(0.5);
+    const e_expo = ease_out_expo(0.5);
+    return (
+        s4.paused
+        && s4.elapsed > 0.5
+        && s4.elapsed < 0.6
+        && e_cubic > 0.8
+        && e_expo > 0.9
+    );
+}
+
+export function test_raymarch_sdf_cpu_parity(): bool {
+    const blend = smin(1.0, 1.0, 0.4);
+    const v: Vec3 = { x: 3.0, y: 4.0, z: 0.0 };
+    const vn = vec3_norm(v);
+    const vlen = vec3_len(vn);
+
+    const uv_center: Vec2 = { x: 0.5, y: 0.5 };
+    const mouse_center: Vec2 = { x: 0.5, y: 0.5 };
+    const c_hit = raymarch_scene(uv_center, 0.8, mouse_center, 0.35, 0.62, 0.45);
+
+    const uv_corner: Vec2 = { x: 0.02, y: 0.02 };
+    const mouse_orb: Vec2 = { x: 0.65, y: 0.45 };
+    const c_bg = raymarch_scene(uv_corner, 0.8, mouse_orb, 0.35, 0.62, 0.45);
+
+    const diff_rgb = abs(c_hit.r - c_bg.r) + abs(c_hit.g - c_bg.g) + abs(c_hit.b - c_bg.b);
+
+    return (
+        blend < 1.0
+        && abs(vlen - 1.0) < 0.001
+        && c_hit.a === 1.0
+        && c_hit.r >= 0.0
+        && c_hit.r <= 1.0
+        && c_hit.g >= 0.0
+        && c_hit.g <= 1.0
+        && c_hit.b >= 0.0
+        && c_hit.b <= 1.0
+        && c_bg.a === 1.0
+        && diff_rgb > 0.05
+    );
+}
+
+export function test_raymarch_ui_tree(): bool {
+    let s = init();
+    s = update(s, "preset_vortex");
+    s = on_slider(s, "slider_twist", 0.82);
+    s = on_slider(s, "slider_glow", 0.90);
+    s = on_slider(s, "slider_zoom", 0.70);
+    s = update(s, "toggle_pause");
+
+    const tree = view(s);
+    const top_children = tree.children.length;
+
+    return (
+        s.preset_idx === 1
+        && s.paused
+        && s.twist > 0.80
+        && s.glow > 0.85
+        && s.zoom > 0.65
+        && tree.kind === "col"
+        && tree.key === "raymarch_root"
+        && top_children === 3
+    );
+}

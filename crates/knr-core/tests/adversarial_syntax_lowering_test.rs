@@ -76,7 +76,7 @@ fn test_stress_deeply_nested_subtraction_left_associativity() {
     // Left-associative: 100 - 1 - 2 - 3 ... - 50 must parse as ((100 - 1) - 2) ...
     let terms: Vec<String> = (1..=50).map(|i| i.to_string()).collect();
     let expr_str = format!("100 - {}", terms.join(" - "));
-    let src = format!("fn sub_chain() -> i64 {{ return {expr_str}; }}");
+    let src = format!("function sub_chain(): i64 {{ return {expr_str}; }}");
 
     let prog = parse_knr(&src).expect("Parse deeply nested subtraction chain");
     let module = lower_program(&prog).expect("Lower deeply nested subtraction chain");
@@ -115,7 +115,7 @@ fn test_stress_deeply_nested_parentheses_recursion() {
     for _ in 0..depth {
         expr = format!("({expr})");
     }
-    let src = format!("fn nested_parens() -> i64 {{ return {expr}; }}");
+    let src = format!("function nested_parens(): i64 {{ return {expr}; }}");
 
     let prog = parse_knr(&src).expect("Parse 80-level nested parentheses");
     let module = lower_program(&prog).expect("Lower 80-level nested parentheses");
@@ -134,10 +134,10 @@ fn test_stress_deeply_nested_parentheses_recursion() {
 
 #[test]
 fn test_stress_complex_operator_precedence_hierarchy() {
-    // Precedence: (a + (b * c)) - (d / e) == (f < g)
+    // Precedence: ((a + (b * c)) < d) === (e > f)
     let src = r#"
-        fn precedence(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) -> bool {
-            return a + b * c < d == e > f;
+        function precedence(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64): bool {
+            return a + b * c < d === e > f;
         }
     "#;
 
@@ -168,16 +168,16 @@ fn test_stress_complex_operator_precedence_hierarchy() {
 
     assert!(mul_idx < add_idx, "b * c must precede a + (b * c)");
     assert!(add_idx < lt_idx, "a + (b * c) must precede (...) < d");
-    assert!(lt_idx < eq_idx, "(...) < d must precede (...) == (...)");
+    assert!(lt_idx < eq_idx, "(...) < d must precede (...) === (...)");
 }
 
 #[test]
 fn test_stress_chained_unary_prefix_operators() {
     let src = r#"
-        fn unaries(x: i64, flag: bool) -> i64 {
-            let a = - - -x;
-            let b = ! !flag;
-            if b {
+        function unaries(x: i64, flag: bool): i64 {
+            const a = - - -x;
+            const b = ! !flag;
+            if (b) {
                 return a;
             } else {
                 return 0;
@@ -209,18 +209,18 @@ fn test_stress_chained_unary_prefix_operators() {
 #[test]
 fn test_stress_deeply_nested_struct_literals_chained_moves() {
     let src = r#"
-        schema Level0 { 0: v0 i64, }
-        schema Level1 { 0: l0 struct[Level0], }
-        schema Level2 { 0: l1 struct[Level1], }
-        schema Level3 { 0: l2 struct[Level2], }
-        schema Level4 { 0: l3 struct[Level3], }
+        type Level0 = { v0: i64 };
+        type Level1 = { l0: Level0 };
+        type Level2 = { l1: Level1 };
+        type Level3 = { l2: Level2 };
+        type Level4 = { l3: Level3 };
 
-        fn build_deep_struct() -> Level4 {
-            let tree = Level4 {
-                l3: Level3 {
-                    l2: Level2 {
-                        l1: Level1 {
-                            l0: Level0 {
+        function build_deep_struct(): Level4 {
+            const tree: Level4 = {
+                l3: {
+                    l2: {
+                        l1: {
+                            l0: {
                                 v0: 999,
                             },
                         },
@@ -267,8 +267,8 @@ fn test_stress_deeply_nested_struct_literals_chained_moves() {
 #[test]
 fn test_stress_deeply_nested_3d_array_literals_chained_moves() {
     let src = r#"
-        fn build_matrix_3d() -> vec[vec[vec[i64]]] {
-            let m = [
+        function build_matrix_3d(): i64[][][] {
+            const m = [
                 [[1, 2], [3, 4]],
                 [[5, 6], [7, 8]]
             ];
@@ -302,15 +302,15 @@ fn test_stress_deeply_nested_3d_array_literals_chained_moves() {
 #[test]
 fn test_stress_chained_field_access_and_indexing() {
     let src = r#"
-        schema Item {
-            0: weight i64,
-        }
-        schema Container {
-            0: items vec[struct[Item]],
-        }
+        type Item = {
+            weight: i64,
+        };
+        type Container = {
+            items: Item[],
+        };
 
-        fn extract_weight(c: Container) -> i64 {
-            let w = c.items[0].weight;
+        function extract_weight(c: Container): i64 {
+            const w = c.items[0].weight;
             return w;
         }
     "#;
@@ -334,24 +334,24 @@ fn test_stress_chained_field_access_and_indexing() {
 #[test]
 fn test_stress_multi_level_nested_if_else_branches() {
     let src = r#"
-        fn classify(x: i64, y: i64) -> i64 {
-            let res = 0;
-            if x > 0 {
-                if y > 0 {
+        function classify(x: i64, y: i64): i64 {
+            const res = 0;
+            if (x > 0) {
+                if (y > 0) {
                     return 1;
-                } else if y == 0 {
+                } else if (y === 0) {
                     return 2;
                 } else {
                     return 3;
                 }
-            } else if x == 0 {
-                if y > 0 {
+            } else if (x === 0) {
+                if (y > 0) {
                     return 4;
                 } else {
                     return 5;
                 }
             } else {
-                if y > 0 {
+                if (y > 0) {
                     return 6;
                 } else {
                     return 7;
@@ -374,9 +374,9 @@ fn test_stress_multi_level_nested_if_else_branches() {
 #[test]
 fn test_stress_while_loop_simple() {
     let src = r#"
-        fn count_loop() -> i64 {
+        function count_loop(): i64 {
             let i = 0;
-            while i < 100 {
+            while (i < 100) {
                 i = i + 1;
             }
             return i;
@@ -400,10 +400,10 @@ fn test_defect_while_loop_nested_if_return_discards_merge_block() {
     // FIX: start_block and is_terminated ensure merge_bb (bb5) is retained and wired back
     // to loop_header (bb1), eliminating InvalidBranchTarget.
     let src = r#"
-        fn search_loop(target: i64) -> i64 {
+        function search_loop(target: i64): i64 {
             let i = 0;
-            while i < 100 {
-                if i == target {
+            while (i < 100) {
+                if (i === target) {
                     return i * 2;
                 }
                 i = i + 1;
@@ -450,17 +450,17 @@ fn test_defect_branch_local_linear_allocations_autodrop_leak() {
     // FIX: LinearTracker branch isolation snapshots tracker before then-branch and restores it
     // before else-branch, dropping r_outer on both branches (4 Free ops total).
     let src = r#"
-        schema Resource {
-            0: id i64,
-        }
+        type Resource = {
+            id: i64,
+        };
 
-        fn conditional_alloc(cond: bool) -> i64 {
-            let r_outer = Resource { id: 1 };
-            if cond {
-                let r_then = Resource { id: 2 };
+        function conditional_alloc(cond: bool): i64 {
+            const r_outer: Resource = { id: 1 };
+            if (cond) {
+                const r_then: Resource = { id: 2 };
                 return 10;
             } else {
-                let r_else = Resource { id: 3 };
+                const r_else: Resource = { id: 3 };
                 return 20;
             }
         }
@@ -493,17 +493,17 @@ fn test_defect_linear_move_in_mutually_exclusive_branches() {
     // FIX: LinearTracker branch isolation restores snapshot before else branch,
     // allowing mutually exclusive consumption without false UseAfterMove.
     let src = r#"
-        schema Box { 0: val i64, }
-        fn consume_box(b: Box) -> i64 {
+        type Box = { val: i64 };
+        function consume_box(b: Box): i64 {
             return b.val;
         }
-        fn test_move(cond: bool) -> i64 {
-            let b = Box { val: 42 };
-            if cond {
-                let x = consume_box(b);
+        function test_move(cond: bool): i64 {
+            const b: Box = { val: 42 };
+            if (cond) {
+                const x = consume_box(b);
                 return x;
             } else {
-                let y = consume_box(b);
+                const y = consume_box(b);
                 return y;
             }
         }
@@ -532,8 +532,8 @@ fn test_defect_linear_move_in_mutually_exclusive_branches() {
 #[test]
 fn test_stress_empty_vector_literal_requires_annotation() {
     let src = r#"
-        fn empty_vec() {
-            let v = [];
+        function empty_vec() {
+            const v = [];
         }
     "#;
     let prog = parse_knr(src).expect("Parse succeeds");
@@ -547,8 +547,8 @@ fn test_stress_empty_vector_literal_requires_annotation() {
 
     // With explicit type annotation, empty vector lowering succeeds and synthesizes Op::VecNew
     let src_typed = r#"
-        fn empty_vec_typed() -> vec[i64] {
-            let v: vec[i64] = [];
+        function empty_vec_typed(): i64[] {
+            const v: i64[] = [];
             return v;
         }
     "#;
@@ -562,14 +562,14 @@ fn test_stress_empty_vector_literal_requires_annotation() {
 
 #[test]
 fn test_stress_struct_literal_in_condition_parenthesized() {
-    // Parenthesized struct literal in condition: `(Point { x: 1, y: 2 }.x > 0)`
+    // Parenthesized object literal in condition: `(({ x: 1, y: 2 }).x > 0)`
     let src = r#"
-        schema Point {
-            0: x i64,
-            1: y i64,
-        }
-        fn test_cond() -> bool {
-            if (Point { x: 1, y: 2 }.x > 0) {
+        type Point = {
+            x: i64,
+            y: i64,
+        };
+        function test_cond(): bool {
+            if (({ x: 1, y: 2 }).x > 0) {
                 return true;
             } else {
                 return false;
@@ -577,8 +577,8 @@ fn test_stress_struct_literal_in_condition_parenthesized() {
         }
     "#;
 
-    let prog = parse_knr(src).expect("Parse parenthesized struct literal in if condition");
-    let module = lower_program(&prog).expect("Lower struct literal in condition");
+    let prog = parse_knr(src).expect("Parse parenthesized object literal in if condition");
+    let module = lower_program(&prog).expect("Lower object literal in condition");
 
     let func = &module.functions[0];
     assert_ssa_monotonic_registers(func);
@@ -587,19 +587,19 @@ fn test_stress_struct_literal_in_condition_parenthesized() {
 
 #[test]
 fn test_stress_large_function_stress_200_let_bindings() {
-    // Generate a function with 200 sequential let bindings
+    // Generate a function with 200 sequential const bindings
     let mut lines = Vec::new();
-    lines.push("fn chain_200() -> i64 {".to_string());
-    lines.push("    let x0 = 1;".to_string());
+    lines.push("function chain_200(): i64 {".to_string());
+    lines.push("    const x0 = 1;".to_string());
     for i in 1..=200 {
-        lines.push(format!("    let x{i} = x{} + 1;", i - 1));
+        lines.push(format!("    const x{i} = x{} + 1;", i - 1));
     }
     lines.push("    return x200;".to_string());
     lines.push("}".to_string());
 
     let src = lines.join("\n");
-    let prog = parse_knr(&src).expect("Parse 200 let bindings");
-    let module = lower_program(&prog).expect("Lower 200 let bindings");
+    let prog = parse_knr(&src).expect("Parse 200 const bindings");
+    let module = lower_program(&prog).expect("Lower 200 const bindings");
 
     let func = &module.functions[0];
     assert_ssa_monotonic_registers(func);

@@ -1,4 +1,18 @@
--- knr Language & Built-in LSP integration for Neovim 0.10+
+-- knr Language (.tsk) & Built-in IDE-Ultra LSP integration for Neovim 0.10+ (v0.4.0)
+-- Dedicated `.tsk` (Strict TypeScript/TSX for knr), `.knr`, `.ssa`, and `.ssa.schema`
+-- support with ZERO conflicts with ts_ls / vtsls.
+--
+-- IDE-Ultra LSP 3.17 capabilities provided out-of-the-box by `knr lsp`:
+--   - Live diagnostics (parse, lower, linear ownership, effects, WGSL/GLSL @shader verification)
+--   - Hover docs (local, cross-file, package, std/*, 45 Style fields, 15 array methods)
+--   - Rich completions (JSX tags/props, 67 <Icon name="..."> icons, std/theme, std/router,
+--     std/layout, std/testing, knr.toml [dependencies] packages, array methods)
+--   - Signature help (`textDocument/signatureHelp`, triggers: `(`, `,`)
+--   - Inlay hints (`textDocument/inlayHint`: inferred `const`/`let` types & call param names)
+--   - Document & Workspace symbols (`textDocument/documentSymbol`, `workspace/symbol`)
+--   - Semantic code folding (`textDocument/foldingRange`: comments, imports, multi-line decls)
+--   - Go-to-Definition (locals, destructured bindings, cross-file, knr.toml packages)
+--   - Find All References, Cross-File Rename, QuickFix Code Actions & Document Formatting
 --
 -- Usage:
 --   1. Copy to ~/.config/nvim/lua/knr.lua and call in init.lua:
@@ -6,7 +20,10 @@
 --   2. Or customize options:
 --        require("knr").setup({
 --          cmd = { "knr", "lsp" },
+--          filetypes = { "knr", "knr_ssa" },
 --          root_markers = { "knr.toml", "Cargo.toml", ".git" },
+--          inlay_hints = true,
+--          lsp_folding = false, -- set true to use `vim.lsp.foldexpr()` for knr buffers
 --          on_attach = function(client, bufnr) end,
 --        })
 --   3. Alternatively, drop directly into ~/.config/nvim/plugin/knr.lua for zero-config auto-setup.
@@ -15,10 +32,36 @@ local M = {}
 
 local DEFAULT_CONFIG = {
   cmd = { "knr", "lsp" },
+  filetypes = { "knr", "knr_ssa" },
   root_markers = { "knr.toml", "Cargo.toml", ".git" },
+  inlay_hints = true,
+  lsp_folding = false,
   capabilities = nil,
   on_attach = nil,
 }
+
+local function build_default_capabilities()
+  local caps = vim.lsp.protocol.make_client_capabilities()
+  caps.textDocument = caps.textDocument or {}
+  caps.textDocument.signatureHelp = caps.textDocument.signatureHelp or {
+    signatureInformation = {
+      documentationFormat = { "markdown", "plaintext" },
+      parameterInformation = { labelOffsetSupport = false },
+    },
+  }
+  caps.textDocument.inlayHint = caps.textDocument.inlayHint or {
+    dynamicRegistration = false,
+  }
+  caps.textDocument.foldingRange = caps.textDocument.foldingRange or {
+    dynamicRegistration = false,
+    lineFoldingOnly = true,
+  }
+  caps.workspace = caps.workspace or {}
+  caps.workspace.symbol = caps.workspace.symbol or {
+    dynamicRegistration = false,
+  }
+  return caps
+end
 
 local missing_binary_notified = false
 
@@ -48,9 +91,10 @@ end
 function M.setup(user_opts)
   local opts = vim.tbl_deep_extend("force", {}, DEFAULT_CONFIG, user_opts or {})
 
-  -- Register .knr, .ssa, and .ssa.schema filetypes
+  -- Register .tsk (primary), .knr, .ssa, and .ssa.schema filetypes (never collides with .ts/.tsx)
   vim.filetype.add({
     extension = {
+      tsk = "knr",
       knr = "knr",
       ssa = "knr_ssa",
     },
@@ -59,9 +103,13 @@ function M.setup(user_opts)
     },
   })
 
+  -- Reuse Tree-sitter's native TSX parser for rich `.tsk` syntax highlighting if installed
+  if vim.treesitter and vim.treesitter.language and vim.treesitter.language.register then
+    pcall(vim.treesitter.language.register, "tsx", "knr")
+  end
+
   local group = vim.api.nvim_create_augroup("knr_lsp", { clear = true })
 
-  -- Buffer editing defaults for both .knr and .ssa/.ssa.schema
   vim.api.nvim_create_autocmd("FileType", {
     group = group,
     pattern = { "knr", "knr_ssa" },
@@ -70,10 +118,10 @@ function M.setup(user_opts)
     end,
   })
 
-  -- Attach built-in `knr lsp` server to .knr buffers
+  -- Attach built-in `knr lsp` server exclusively to knr filetypes
   vim.api.nvim_create_autocmd("FileType", {
     group = group,
-    pattern = "knr",
+    pattern = opts.filetypes,
     callback = function(args)
       local bin = opts.cmd[1]
       if vim.fn.executable(bin) ~= 1 then
@@ -93,8 +141,27 @@ function M.setup(user_opts)
         name = "knr-lsp",
         cmd = opts.cmd,
         root_dir = resolve_root_dir(args.buf, opts.root_markers),
-        capabilities = opts.capabilities,
-        on_attach = opts.on_attach,
+        capabilities = opts.capabilities or build_default_capabilities(),
+        on_attach = function(client, bufnr)
+          if
+            opts.inlay_hints
+            and vim.lsp.inlay_hint
+            and client:supports_method("textDocument/inlayHint")
+          then
+            pcall(vim.lsp.inlay_hint.enable, true, { bufnr = bufnr })
+          end
+          if
+            opts.lsp_folding
+            and vim.lsp.foldexpr
+            and client:supports_method("textDocument/foldingRange")
+          then
+            vim.wo.foldmethod = "expr"
+            vim.wo.foldexpr = "v:lua.vim.lsp.foldexpr()"
+          end
+          if type(opts.on_attach) == "function" then
+            opts.on_attach(client, bufnr)
+          end
+        end,
       }, { bufnr = args.buf })
     end,
   })
@@ -104,8 +171,9 @@ function M.setup(user_opts)
       client:stop()
     end
     vim.defer_fn(function()
-      if vim.bo.filetype == "knr" then
-        vim.cmd("doautocmd FileType knr")
+      local ft = vim.bo.filetype
+      if ft ~= "" then
+        vim.cmd("doautocmd FileType " .. ft)
       end
     end, 200)
   end, { desc = "Restart the knr-lsp Language Server" })

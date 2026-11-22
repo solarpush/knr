@@ -1,0 +1,218 @@
+// ============================================================================
+// knr -- Official Interactive Showcase & Landing Site (`site/app.tsk`)
+// 100% Pure Modular Strict TSX | Unified GPU Engine | Zero GC
+// ============================================================================
+// Verify statically in < 100 us & run built-in deterministic tests:
+//   knr check site/app.tsk --json
+//   knr test site/app.tsk
+// Render headless PNG + automated visual/glyph/layout audit:
+//   knr render site/app.tsk --png /tmp/site_overview.png --audit
+// Run natively on GPU (wgpu Vulkan/Metal/DX12, auto CPU fallback):
+//   knr run site/app.tsk --gui
+//   knr dev site/app.tsk --gui
+// Build standalone Flutter-style WebGPU/WebGL2 + zero-import WASM bundle:
+//   knr build site/app.tsk --target web -o site/
+
+import { Column } from "std/ui";
+import { Vec2 } from "std/math";
+import { State, init, tick, update, on_slider, on_input, active_shader_fn_name } from "./state.tsk";
+import { knr_hero_nebula, knr_sdf_crystal, knr_quantum_grid } from "./shaders.tsk";
+import { Navbar } from "./components/navbar.tsk";
+import { Hero, ShaderStage, ShaderSwitcher } from "./components/hero.tsk";
+import { Overview } from "./components/overview.tsk";
+import { ShaderLab } from "./components/shader_lab.tsk";
+import { Safety } from "./components/safety.tsk";
+import { Toolchain } from "./components/toolchain.tsk";
+import { Footer } from "./components/footer.tsk";
+
+// ============================================================================
+// ROOT DECLARATIVE VIEW (`view(s: readonly State): Widget`)
+// ============================================================================
+
+export function ActiveTab(s: readonly State): Widget {
+    if (s.active_tab === 1) {
+        return <ShaderLab s={s} />;
+    }
+    if (s.active_tab === 2) {
+        return <Safety s={s} />;
+    }
+    if (s.active_tab === 3) {
+        return <Toolchain s={s} />;
+    }
+    return <Overview s={s} />;
+}
+
+export function view(s: readonly State): Widget {
+    return (
+        <Column
+            key="site_root"
+            w="full"
+            bg="#06080f"
+            align="center"
+            px={28}
+            pt={20}
+            pb={44}
+        >
+            <Column key="site_shell" w="full" maxW={1180} gap={24}>
+                <Navbar s={s} />
+                <ActiveTab s={s} />
+                <Footer s={s} />
+            </Column>
+        </Column>
+    );
+}
+
+// ============================================================================
+// BUILT-IN DETERMINISTIC UNIT TESTS (`knr test site/app.tsk`)
+// ============================================================================
+
+export function test_site_init_and_navigation(): bool {
+    let s = init();
+    const init_ok =
+        s.active_tab === 0
+        && s.active_shader === 0
+        && s.energy > 0.60
+        && s.preset_name === "Midnight Cobalt"
+        && s.demo_count === 42;
+
+    const v0 = view(s);
+    const ok0 = v0.kind === "col" && v0.key === "site_root";
+
+    // Exercise interactive MVU linear playground
+    s = update(s, "demo_inc");
+    s = update(s, "demo_boost");
+    s = update(s, "demo_dec");
+    const demo_ok = s.demo_count === 52 && s.demo_ops === 4;
+
+    // Exercise all 4 navigation tabs + verifier explorer + code gallery
+    s = update(s, "tab_shaders");
+    const v1 = view(s);
+    const ok1 = s.active_tab === 1 && v1.kind === "col";
+
+    s = update(s, "tab_safety");
+    s = update(s, "diag_escape");
+    const v2 = view(s);
+    const ok2 = s.active_tab === 2 && s.diag_case === 2 && v2.kind === "col";
+
+    s = update(s, "tab_toolchain");
+    s = update(s, "code_shader");
+    const v3 = view(s);
+    const ok3 = s.active_tab === 3 && s.code_sample === 1 && v3.kind === "col";
+
+    s = update(s, "tab_overview");
+    const ok_back = s.active_tab === 0;
+
+    return init_ok && ok0 && demo_ok && ok1 && ok2 && ok3 && ok_back;
+}
+
+export function test_site_shader_controls_and_tick(): bool {
+    let s = init();
+    s = tick(s, 0.016, 0.016);
+    s = tick(s, 0.500, 0.516);
+    const tick_ok = s.elapsed > 0.5 && s.pulse >= 0.0 && s.pulse <= 1.0;
+
+    const prev_elapsed = s.elapsed;
+    s = update(s, "toggle_pause");
+    s = tick(s, 1.0, 1.516);
+    const pause_ok = s.paused && s.elapsed === prev_elapsed;
+    s = update(s, "toggle_pause");
+    const unpause_ok = !s.paused;
+
+    // Switch live between all 3 GPU kernels & adjust all 3 uniforms
+    s = update(s, "shader_crystal");
+    const sw1_ok =
+        s.active_shader === 1 && active_shader_fn_name(s.active_shader) === "knr_sdf_crystal";
+    s = update(s, "shader_grid");
+    const sw2_ok =
+        s.active_shader === 2 && active_shader_fn_name(s.active_shader) === "knr_quantum_grid";
+
+    s = on_slider(s, "slider_energy", 0.92);
+    s = on_slider(s, "slider_hue", 0.58);
+    s = on_slider(s, "slider_depth", 0.80);
+    s = on_input(s, "input_headline", "Zero-GC Linear GPU");
+    const controls_ok =
+        s.energy > 0.90
+        && s.hue_shift > 0.55
+        && s.depth > 0.78
+        && s.preset_name === "Custom"
+        && s.headline === "Zero-GC Linear GPU";
+
+    s = update(s, "preset_ultraviolet");
+    const p1_ok = s.preset_name === "Ultraviolet" && s.energy > 0.80;
+    s = update(s, "preset_arctic_cyan");
+    const p2_ok = s.preset_name === "Arctic Cyan" && s.hue_shift < 0.05;
+    s = update(s, "preset_obsidian_ember");
+    const p3_ok = s.preset_name === "Obsidian Ember" && s.depth > 0.75;
+    s = update(s, "reset_defaults");
+    const reset_ok = s.active_shader === 0 && s.preset_name === "Midnight Cobalt";
+
+    s = update(s, "tab_shaders");
+    const v = view(s);
+    const view_ok = v.kind === "col";
+
+    return (
+        tick_ok
+        && pause_ok
+        && unpause_ok
+        && sw1_ok
+        && sw2_ok
+        && controls_ok
+        && p1_ok
+        && p2_ok
+        && p3_ok
+        && reset_ok
+        && view_ok
+    );
+}
+
+export function test_site_all_gpu_shaders_cpu_parity(): bool {
+    const uv1: Vec2 = { x: 0.5, y: 0.5 };
+    const m1: Vec2 = { x: 0.5, y: 0.5 };
+    const c_nebula = knr_hero_nebula(uv1, 1.25, m1, 0.68, 0.12, 0.52);
+
+    // Continuity check across negative X axis (guarantees zero atan2 branch-cut seam)
+    const uv_above: Vec2 = { x: 0.20, y: 0.499 };
+    const m_above: Vec2 = { x: 0.5, y: 0.5 };
+    const uv_below: Vec2 = { x: 0.20, y: 0.501 };
+    const m_below: Vec2 = { x: 0.5, y: 0.5 };
+    const c_above = knr_hero_nebula(uv_above, 1.25, m_above, 0.68, 0.12, 0.52);
+    const c_below = knr_hero_nebula(uv_below, 1.25, m_below, 0.68, 0.12, 0.52);
+    const seam_delta =
+        abs(c_above.r - c_below.r)
+        + abs(c_above.g - c_below.g)
+        + abs(c_above.b - c_below.b);
+
+    const uv2: Vec2 = { x: 0.5, y: 0.5 };
+    const m2: Vec2 = { x: 0.62, y: 0.44 };
+    const c_crystal = knr_sdf_crystal(uv2, 0.90, m2, 0.55, 0.25, 0.60);
+
+    const uv3: Vec2 = { x: 0.5, y: 0.78 };
+    const m3: Vec2 = { x: 0.5, y: 0.45 };
+    const c_grid = knr_quantum_grid(uv3, 2.10, m3, 0.72, 0.18, 0.60);
+
+    const ok1 =
+        c_nebula.r >= 0.0 && c_nebula.r <= 1.0
+        && c_nebula.g >= 0.0 && c_nebula.g <= 1.0
+        && c_nebula.b >= 0.0 && c_nebula.b <= 1.0
+        && c_nebula.a === 1.0
+        && seam_delta < 0.04;
+
+    const ok2 =
+        c_crystal.r >= 0.0 && c_crystal.r <= 1.0
+        && c_crystal.g >= 0.0 && c_crystal.g <= 1.0
+        && c_crystal.b >= 0.0 && c_crystal.b <= 1.0
+        && c_crystal.a === 1.0;
+
+    const ok3 =
+        c_grid.r >= 0.0 && c_grid.r <= 1.0
+        && c_grid.g >= 0.0 && c_grid.g <= 1.0
+        && c_grid.b >= 0.0 && c_grid.b <= 1.0
+        && c_grid.a === 1.0;
+
+    const lit =
+        (c_nebula.b > 0.12 || c_nebula.g > 0.12)
+        && (c_crystal.r + c_crystal.g + c_crystal.b > 0.12)
+        && (c_grid.r + c_grid.g + c_grid.b > 0.10);
+
+    return ok1 && ok2 && ok3 && lit;
+}

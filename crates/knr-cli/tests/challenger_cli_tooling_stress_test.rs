@@ -149,7 +149,7 @@ fn test_stress_debounce_burst_modifications() {
         .expect("init");
     assert!(init_out.status.success());
 
-    let entry = temp.path().join("src/main.knr");
+    let entry = temp.path().join("src/main.tsk");
     let mut proc = RunningProcess::spawn({
         let mut cmd = knr_cmd();
         cmd.args([
@@ -173,9 +173,9 @@ fn test_stress_debounce_burst_modifications() {
     // Snapshot stdout before burst
     let stdout_before = proc.stdout_text();
 
-    // Fire 20 rapid file modifications within ~60ms (well inside the 150ms debounce window)
+    // Fire 20 rapid file modifications within ~60ms (well inside the 250ms debounce window)
     for i in 1..=20 {
-        let src = format!("fn main() -> i64 {{\n    return {i};\n}}\n");
+        let src = format!("export function main(): i64 {{\n    return {i};\n}}\n");
         let _ = fs::write(&entry, src);
         thread::sleep(Duration::from_millis(3));
     }
@@ -209,9 +209,9 @@ fn test_stress_multi_file_simultaneous_save_batching() {
         .expect("init");
     assert!(init_out.status.success());
 
-    let main_knr = temp.path().join("src/main.knr");
-    let helper_knr = temp.path().join("src/helper.knr");
-    fs::write(&helper_knr, "schema Config { 0: flag i64 }\n").expect("write helper");
+    let main_ts = temp.path().join("src/main.tsk");
+    let helper_ts = temp.path().join("src/helper.tsk");
+    fs::write(&helper_ts, "export type Config = { flag: i64; };\n").expect("write helper");
 
     let mut proc = RunningProcess::spawn({
         let mut cmd = knr_cmd();
@@ -230,10 +230,10 @@ fn test_stress_multi_file_simultaneous_save_batching() {
     assert!(proc.wait_for_stdout("Ready. Watching for changes", Duration::from_secs(3)));
     let before_stdout = proc.stdout_text();
 
-    // Concurrently write both helper.knr and main.knr within 10ms
-    fs::write(&helper_knr, "schema Config { 0: flag i64, 1: extra bool }\n").expect("write helper");
+    // Concurrently write both helper.tsk and main.tsk within 10ms
+    fs::write(&helper_ts, "export type Config = { flag: i64; extra: bool; };\n").expect("write helper");
     thread::sleep(Duration::from_millis(5));
-    fs::write(&main_knr, "fn main() -> i64 {\n    return 951;\n}\n").expect("write main");
+    fs::write(&main_ts, "export function main(): i64 {\n    return 951;\n}\n").expect("write main");
 
     assert!(
         proc.wait_for_stdout("\n951\n", Duration::from_secs(4)),
@@ -260,7 +260,7 @@ fn test_stress_zero_debounce() {
         .expect("init");
     assert!(init_out.status.success());
 
-    let entry = temp.path().join("src/main.knr");
+    let entry = temp.path().join("src/main.tsk");
     let mut proc = RunningProcess::spawn({
         let mut cmd = knr_cmd();
         cmd.args([
@@ -277,7 +277,7 @@ fn test_stress_zero_debounce() {
 
     assert!(proc.wait_for_stdout("Ready. Watching for changes", Duration::from_secs(3)));
 
-    let new_src = "fn main() -> i64 {\n    return 42;\n}\n";
+    let new_src = "export function main(): i64 {\n    return 42;\n}\n";
     fs::write(&entry, new_src).expect("write");
 
     assert!(
@@ -301,7 +301,7 @@ fn test_stress_transient_syntax_corruption_and_recovery() {
         .expect("init");
     assert!(init_out.status.success());
 
-    let entry = temp.path().join("src/main.knr");
+    let entry = temp.path().join("src/main.tsk");
     let mut proc = RunningProcess::spawn({
         let mut cmd = knr_cmd();
         cmd.args([
@@ -332,7 +332,7 @@ fn test_stress_transient_syntax_corruption_and_recovery() {
     assert!(proc.is_alive(), "Watcher crashed on syntax error!");
 
     // Recover with valid syntax returning 888
-    let recovered_src = "fn main() -> i64 {\n    return 888;\n}\n";
+    let recovered_src = "export function main(): i64 {\n    return 888;\n}\n";
     fs::write(&entry, recovered_src).expect("write recovered");
 
     // Watcher must cleanly re-execute and report 888
@@ -353,7 +353,7 @@ fn test_stress_transient_verification_error_and_recovery() {
         .expect("init");
     assert!(init_out.status.success());
 
-    let entry = temp.path().join("src/main.knr");
+    let entry = temp.path().join("src/main.tsk");
     let mut proc = RunningProcess::spawn({
         let mut cmd = knr_cmd();
         cmd.args([
@@ -372,8 +372,8 @@ fn test_stress_transient_verification_error_and_recovery() {
 
     // Code with semantic verification error (undeclared variable)
     let bad_code = r#"
-fn main() -> i64 {
-    let x = undeclared_variable_name;
+export function main(): i64 {
+    const x = undeclared_variable_name;
     return x;
 }
 "#;
@@ -388,8 +388,8 @@ fn main() -> i64 {
 
     // Fix verification error
     let fixed_code = r#"
-fn main() -> i64 {
-    let x = 555;
+export function main(): i64 {
+    const x: i64 = 555;
     return x;
 }
 "#;
@@ -412,7 +412,7 @@ fn test_stress_oscillating_corruption_storm() {
         .expect("init");
     assert!(init_out.status.success());
 
-    let entry = temp.path().join("src/main.knr");
+    let entry = temp.path().join("src/main.tsk");
     let mut proc = RunningProcess::spawn({
         let mut cmd = knr_cmd();
         cmd.args([
@@ -436,7 +436,7 @@ fn test_stress_oscillating_corruption_storm() {
         thread::sleep(Duration::from_millis(35));
 
         // Restore
-        let valid_src = format!("fn main() -> i64 {{\n    return {};\n}}\n", 2000 + i);
+        let valid_src = format!("export function main(): i64 {{\n    return {};\n}}\n", 2000 + i);
         let _ = fs::write(&entry, valid_src);
         thread::sleep(Duration::from_millis(35));
     }
@@ -460,7 +460,7 @@ fn test_stress_empty_file_handling() {
         .expect("init");
     assert!(init_out.status.success());
 
-    let entry = temp.path().join("src/main.knr");
+    let entry = temp.path().join("src/main.tsk");
 
     // Test in --once mode: empty file must fail with exit code != 0
     fs::write(&entry, "").expect("write empty file");
@@ -495,7 +495,7 @@ fn test_stress_empty_file_handling() {
     assert!(proc.is_alive(), "Watcher must not crash on empty file");
 
     // Restore valid file
-    fs::write(&entry, "fn main() -> i64 { return 111; }\n").expect("write valid");
+    fs::write(&entry, "export function main(): i64 { return 111; }\n").expect("write valid");
     assert!(
         proc.wait_for_stdout("\n111\n", Duration::from_secs(3)),
         "Watcher failed to recover after empty file: stdout={}",
@@ -517,7 +517,7 @@ fn test_stress_entrypoint_deletion_and_recreation() {
         .expect("init");
     assert!(init_out.status.success());
 
-    let entry = temp.path().join("src/main.knr");
+    let entry = temp.path().join("src/main.tsk");
     let mut proc = RunningProcess::spawn({
         let mut cmd = knr_cmd();
         cmd.args([
@@ -546,7 +546,7 @@ fn test_stress_entrypoint_deletion_and_recreation() {
     assert!(proc.is_alive(), "Watcher died on entrypoint deletion!");
 
     // Re-create entrypoint with new logic
-    let recreated = "fn main() -> i64 {\n    return 333;\n}\n";
+    let recreated = "export function main(): i64 {\n    return 333;\n}\n";
     fs::write(&entry, recreated).expect("recreate entry");
 
     // Watcher must detect recreation and execute
@@ -583,12 +583,12 @@ fn test_stress_secondary_file_lifecycle() {
 
     assert!(proc.wait_for_stdout("Ready. Watching for changes", Duration::from_secs(3)));
 
-    // Add a secondary file src/schema.knr
-    let helper_file = temp.path().join("src/types.knr");
-    fs::write(&helper_file, "// secondary schema\nschema Dummy { 0: a i64 }\n").expect("write secondary");
+    // Add a secondary file src/types.tsk
+    let helper_file = temp.path().join("src/types.tsk");
+    fs::write(&helper_file, "// secondary schema\nexport type Dummy = { a: i64; };\n").expect("write secondary");
 
     assert!(
-        proc.wait_for_stdout("File changed: src/types.knr", Duration::from_secs(3)),
+        proc.wait_for_stdout("File changed: src/types.tsk", Duration::from_secs(3)),
         "Watcher missed creation of secondary file: stdout={}",
         proc.stdout_text()
     );
@@ -597,7 +597,7 @@ fn test_stress_secondary_file_lifecycle() {
     fs::remove_file(&helper_file).expect("remove secondary");
 
     assert!(
-        proc.wait_for_stdout("File changed: src/types.knr", Duration::from_secs(3)),
+        proc.wait_for_stdout("File changed: src/types.tsk", Duration::from_secs(3)),
         "Watcher missed deletion of secondary file: stdout={}",
         proc.stdout_text()
     );
@@ -614,8 +614,8 @@ fn test_stress_entrypoint_rename_recovery() {
         .expect("init");
     assert!(init_out.status.success());
 
-    let entry = temp.path().join("src/main.knr");
-    let backup = temp.path().join("src/main.knr.bak");
+    let entry = temp.path().join("src/main.tsk");
+    let backup = temp.path().join("src/main.tsk.bak");
 
     let mut proc = RunningProcess::spawn({
         let mut cmd = knr_cmd();
@@ -633,7 +633,7 @@ fn test_stress_entrypoint_rename_recovery() {
 
     assert!(proc.wait_for_stdout("Ready. Watching for changes", Duration::from_secs(3)));
 
-    // Rename main.knr -> main.knr.bak
+    // Rename main.tsk -> main.tsk.bak
     fs::rename(&entry, &backup).expect("rename to bak");
     assert!(
         proc.wait_for_stderr("not found", Duration::from_secs(3)),
@@ -645,8 +645,8 @@ fn test_stress_entrypoint_rename_recovery() {
     // Rename back
     fs::rename(&backup, &entry).expect("rename back");
     assert!(
-        proc.wait_for_stdout("File changed: src/main.knr", Duration::from_secs(3)),
-        "Watcher missed rename back to main.knr"
+        proc.wait_for_stdout("File changed: src/main.tsk", Duration::from_secs(3)),
+        "Watcher missed rename back to main.tsk"
     );
     assert!(proc.is_alive());
 }
@@ -661,8 +661,8 @@ fn test_stress_dynamic_manifest_entrypoint_switch() {
     assert!(init_out.status.success());
 
     // Create an alternate entrypoint
-    let alt_entry = temp.path().join("src/alt.knr");
-    fs::write(&alt_entry, "fn main() -> i64 {\n    return 77;\n}\n").expect("write alt");
+    let alt_entry = temp.path().join("src/alt.tsk");
+    fs::write(&alt_entry, "export function main(): i64 {\n    return 77;\n}\n").expect("write alt");
 
     let mut proc = RunningProcess::spawn({
         let mut cmd = knr_cmd();
@@ -680,17 +680,17 @@ fn test_stress_dynamic_manifest_entrypoint_switch() {
 
     assert!(proc.wait_for_stdout("Ready. Watching for changes", Duration::from_secs(3)));
 
-    // Update knr.toml to point to src/alt.knr
+    // Update knr.toml to point to src/alt.tsk
     let manifest_path = temp.path().join("knr.toml");
     let new_manifest = r#"[package]
 name = "dynamic_switch_app"
 version = "0.1.0"
-entry = "src/alt.knr"
+entry = "src/alt.tsk"
 edition = "2026"
 "#;
     fs::write(&manifest_path, new_manifest).expect("update manifest");
 
-    // Watcher should detect knr.toml change, re-resolve entry to src/alt.knr, and execute it
+    // Watcher should detect knr.toml change, re-resolve entry to src/alt.tsk, and execute it
     assert!(
         proc.wait_for_stdout("\n77\n", Duration::from_secs(4)),
         "Watcher did not switch entrypoint according to updated knr.toml: stdout={}",
@@ -814,7 +814,7 @@ fn test_stress_new_collision_with_force() {
     );
 
     assert!(target.join("knr.toml").is_file());
-    assert!(target.join("src/main.knr").is_file());
+    assert!(target.join("src/main.tsk").is_file());
     assert_eq!(fs::read_to_string(&sentinel_file).unwrap(), "STILL HERE");
 }
 
@@ -834,7 +834,7 @@ fn test_stress_new_on_empty_existing_dir() {
         "knr new must succeed when destination directory exists but is completely empty"
     );
     assert!(target.join("knr.toml").is_file());
-    assert!(target.join("src/main.knr").is_file());
+    assert!(target.join("src/main.tsk").is_file());
 }
 
 #[test]
@@ -867,8 +867,8 @@ fn test_stress_init_preserves_existing_sources_without_force() {
     let src_dir = temp.path().join("src");
     fs::create_dir_all(&src_dir).expect("create src dir");
 
-    let custom_main = src_dir.join("main.knr");
-    let custom_code = "// UNIQUE USER CODE — DO NOT OVERWRITE\nfn main() -> i64 {\n    return 4321;\n}\n";
+    let custom_main = src_dir.join("main.tsk");
+    let custom_code = "// UNIQUE USER CODE — DO NOT OVERWRITE\nexport function main(): i64 {\n    return 4321;\n}\n";
     fs::write(&custom_main, custom_code).expect("write custom main");
 
     // Run init without knr.toml present
@@ -880,11 +880,11 @@ fn test_stress_init_preserves_existing_sources_without_force() {
     assert!(output.status.success());
     assert!(temp.path().join("knr.toml").is_file());
 
-    // main.knr MUST NOT be overwritten by starter template when --force is absent
+    // main.tsk MUST NOT be overwritten by starter template when --force is absent
     let read_back = fs::read_to_string(&custom_main).unwrap();
     assert_eq!(
         read_back, custom_code,
-        "knr init without --force must NOT clobber pre-existing src/main.knr!"
+        "knr init without --force must NOT clobber pre-existing src/main.tsk!"
     );
 
     // Now run with --force and verify it DOES overwrite
@@ -897,7 +897,7 @@ fn test_stress_init_preserves_existing_sources_without_force() {
     let overwritten = fs::read_to_string(&custom_main).unwrap();
     assert!(
         overwritten.contains("Knr Minimal Starter Application"),
-        "knr init --force should overwrite src/main.knr with requested template"
+        "knr init --force should overwrite src/main.tsk with requested template"
     );
 }
 
@@ -953,7 +953,7 @@ fn test_stress_dev_once_exit_codes() {
     // 2. Syntax error case: must exit with non-zero status
     let syntax_err_proj = temp.path().join("syntax_err");
     knr_cmd().args(["new", syntax_err_proj.to_str().unwrap()]).output().unwrap();
-    fs::write(syntax_err_proj.join("src/main.knr"), "BROKEN SYNTAX // !").unwrap();
+    fs::write(syntax_err_proj.join("src/main.tsk"), "BROKEN SYNTAX // !").unwrap();
 
     let out_syntax = knr_cmd()
         .args(["dev", syntax_err_proj.to_str().unwrap(), "--once"])
@@ -973,8 +973,8 @@ fn test_stress_dev_once_exit_codes() {
     let verify_err_proj = temp.path().join("verify_err");
     knr_cmd().args(["new", verify_err_proj.to_str().unwrap()]).output().unwrap();
     fs::write(
-        verify_err_proj.join("src/main.knr"),
-        "fn main() -> i64 {\n    let val = undefined_identifier;\n    return val;\n}\n",
+        verify_err_proj.join("src/main.tsk"),
+        "export function main(): i64 {\n    const val = undefined_identifier;\n    return val;\n}\n",
     )
     .unwrap();
 
@@ -1019,7 +1019,7 @@ fn test_stress_run_watch_once_exit_codes() {
     let proj = temp.path().join("app");
     knr_cmd().args(["new", proj.to_str().unwrap()]).output().unwrap();
 
-    let entry = proj.join("src/main.knr");
+    let entry = proj.join("src/main.tsk");
 
     // Success case
     let out_ok = knr_cmd()
@@ -1075,7 +1075,7 @@ fn test_stress_workspace_dev_watching() {
         .expect("new ws");
     assert!(init_out.status.success());
 
-    let demo_main = ws_dir.join("apps/demo/src/main.knr");
+    let demo_main = ws_dir.join("apps/demo/src/main.tsk");
     assert!(demo_main.is_file());
 
     let mut proc = RunningProcess::spawn({
@@ -1098,8 +1098,8 @@ fn test_stress_workspace_dev_watching() {
         proc.stdout_text()
     );
 
-    // Modify apps/demo/src/main.knr to return 654
-    let new_src = "fn main() -> i64 {\n    return 654;\n}\n";
+    // Modify apps/demo/src/main.tsk to return 654
+    let new_src = "export function main(): i64 {\n    return 654;\n}\n";
     fs::write(&demo_main, new_src).expect("write demo main");
 
     assert!(
@@ -1137,8 +1137,8 @@ fn test_stress_dev_direct_file_and_manifest_targets() {
     let app_dir = temp.path().join("app");
     knr_cmd().args(["new", app_dir.to_str().unwrap()]).output().unwrap();
 
-    // 1. Direct file target: should execute src/main.knr cleanly
-    let file_target = app_dir.join("src/main.knr");
+    // 1. Direct file target: should execute src/main.tsk cleanly
+    let file_target = app_dir.join("src/main.tsk");
     let out_file = knr_cmd()
         .args(["dev", file_target.to_str().unwrap(), "--once"])
         .output()

@@ -59,6 +59,7 @@ fn test_adv_cli_args_parsing_unit_matrix() {
         file: PathBuf::from("main.knr"),
         gas: 1_000_000,
         trace: false,
+        profile: false,
         watch: false,
         once: false,
         gui: true,
@@ -69,6 +70,7 @@ fn test_adv_cli_args_parsing_unit_matrix() {
         file: PathBuf::from("main.knr"),
         gas: 50_000,
         trace: false,
+        profile: false,
         watch: false,
         once: false,
         gui: true,
@@ -80,6 +82,7 @@ fn test_adv_cli_args_parsing_unit_matrix() {
         file: PathBuf::from("app.ssa"),
         gas: u64::MAX,
         trace: false,
+        profile: false,
         watch: true,
         once: true,
         gui: false,
@@ -144,14 +147,14 @@ fn test_adv_cli_args_parsing_unit_matrix() {
 #[test]
 fn test_adv_cli_init_templates_matrix() {
     let templates = [
-        ("minimal", "0"),
-        ("app", "0"),
-        ("ui", "800"),
-        ("service", "0"),
-        ("lib", "40"),
+        ("minimal", "src/main.tsk", "0"),
+        ("app", "src/main.tsk", "0"),
+        ("ui", "src/app.tsk", "1"),
+        ("service", "src/main.tsk", "0"),
+        ("lib", "src/main.tsk", "40"),
     ];
 
-    for (tmpl, expected_ret) in templates {
+    for (tmpl, entry_rel, expected_ret) in templates {
         let temp = TempDir::new(&format!("tmpl_{tmpl}"));
 
         // knr init . --template <tmpl>
@@ -162,21 +165,24 @@ fn test_adv_cli_init_templates_matrix() {
             .expect("run knr init");
         assert!(init_out.status.success(), "knr init --template {tmpl} failed: {:?}", init_out);
 
-        // Verify knr.toml exists
+        // Verify knr.toml and Strict TS/TSX entrypoint exist
         assert!(temp.path().join("knr.toml").is_file());
-        assert!(temp.path().join("src/main.knr").is_file());
+        assert!(
+            temp.path().join(entry_rel).is_file(),
+            "{entry_rel} must exist for template {tmpl}"
+        );
 
-        // knr check src/main.knr
+        // knr check <entry>
         let check_out = knr_bin()
-            .args(["check", "src/main.knr"])
+            .args(["check", entry_rel])
             .current_dir(temp.path())
             .output()
             .expect("run knr check");
         assert!(check_out.status.success(), "knr check failed for {tmpl}: {:?}", check_out);
 
-        // knr run src/main.knr
+        // knr run <entry>
         let run_out = knr_bin()
-            .args(["run", "src/main.knr"])
+            .args(["run", entry_rel])
             .current_dir(temp.path())
             .output()
             .expect("run knr run");
@@ -217,7 +223,7 @@ fn test_adv_cli_new_workspace_lifecycle() {
     // Verify workspace layout
     assert!(ws_path.join("knr.toml").is_file());
     assert!(ws_path.join("apps/demo/knr.toml").is_file());
-    assert!(ws_path.join("apps/demo/src/main.knr").is_file());
+    assert!(ws_path.join("apps/demo/src/main.tsk").is_file());
 
     // Verify workspace knr.toml content
     let ws_toml = fs::read_to_string(ws_path.join("knr.toml")).unwrap();
@@ -226,7 +232,7 @@ fn test_adv_cli_new_workspace_lifecycle() {
 
     // Check demo package
     let check_out = knr_bin()
-        .args(["check", "apps/demo/src/main.knr"])
+        .args(["check", "apps/demo/src/main.tsk"])
         .current_dir(&ws_path)
         .output()
         .expect("check demo");
@@ -241,40 +247,41 @@ fn test_adv_cli_new_workspace_lifecycle() {
 fn test_adv_cli_disasm_schema_splitting_and_recheck() {
     let temp = TempDir::new("disasm_test");
 
-    // Source with 2 schemas
-    let knr_src = r#"
-schema Header {
-    0: title str,
-    1: version i64,
-}
+    // Strict TS source with 2 record types (lowered to SSA schemas)
+    let ts_src = r#"
+export type Header = {
+    title: string;
+    version: i64;
+};
 
-schema Payload {
-    0: data str,
-    1: count i64,
-}
+export type Payload = {
+    data: string;
+    count: i64;
+};
 
-fn main() -> i64 {
-    let h = Header {
+export function main(): i64 {
+    const h: Header = {
         title: "Knr",
         version: 1,
     };
-    let p = Payload {
+    const p: Payload = {
         data: "Test",
         count: 42,
     };
+    const _v = h.version;
     return p.count;
 }
 "#;
-    let knr_file = temp.path().join("main.knr");
-    fs::write(&knr_file, knr_src).unwrap();
+    let ts_file = temp.path().join("main.tsk");
+    fs::write(&ts_file, ts_src).unwrap();
 
     let knrbin_file = temp.path().join("main.knrbin");
     let ssa_out_file = temp.path().join("disasm_out/extracted.ssa");
     let schema_expected_file = temp.path().join("disasm_out/extracted.ssa.schema");
 
-    // Step 1: Assemble .knr to .knrbin
+    // Step 1: Assemble .tsk to .knrbin
     let asm_out = knr_bin()
-        .args(["asm", knr_file.to_str().unwrap(), "-o", knrbin_file.to_str().unwrap()])
+        .args(["asm", ts_file.to_str().unwrap(), "-o", knrbin_file.to_str().unwrap()])
         .output()
         .expect("run knr asm");
     assert!(asm_out.status.success(), "knr asm failed: {:?}", asm_out);
@@ -315,11 +322,11 @@ fn main() -> i64 {
 fn test_adv_cli_run_gui_and_diagnostics() {
     let temp = TempDir::new("gui_cli");
 
-    let valid_knr = "fn main() -> i64 { return 42; }";
-    let valid_file = temp.path().join("valid.knr");
-    fs::write(&valid_file, valid_knr).unwrap();
+    let valid_ts = "export function main(): i64 { return 42; }";
+    let valid_file = temp.path().join("valid.tsk");
+    fs::write(&valid_file, valid_ts).unwrap();
 
-    // knr run valid.knr --gui
+    // knr run valid.tsk --gui
     let run_gui = knr_bin()
         .args(["run", valid_file.to_str().unwrap(), "--gui"])
         .output()
@@ -328,10 +335,10 @@ fn test_adv_cli_run_gui_and_diagnostics() {
     let stdout = String::from_utf8_lossy(&run_gui.stdout);
     assert!(stdout.contains("[GUI] Headless environment detected: rendered off-screen canvas snapshot"));
 
-    // Syntax error .knr: must fail with exit 1 and structured JSON diagnostic
-    let bad_knr = "fn main( { return 42; }";
-    let bad_file = temp.path().join("bad.knr");
-    fs::write(&bad_file, bad_knr).unwrap();
+    // Syntax error .ts: must fail with exit 1 and structured JSON diagnostic
+    let bad_ts = "export function main( { return 42; }";
+    let bad_file = temp.path().join("bad.tsk");
+    fs::write(&bad_file, bad_ts).unwrap();
 
     let check_json = knr_bin()
         .args(["check", bad_file.to_str().unwrap(), "--json"])

@@ -1,0 +1,3 @@
+# Highlight knr Strict TypeScript/TSX (.tsk) files as TSX on GitHub
+*.tsk linguist-language=TSX
+*.knr linguist-language=TSX

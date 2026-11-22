@@ -4,24 +4,20 @@ use std::path::{Path, PathBuf};
 use crate::error::CliError;
 
 pub fn execute(file: &Path, output: Option<&Path>) -> Result<(), CliError> {
-    let module = if file.to_string_lossy().ends_with(".knr") {
+    let module = if knr_core::is_source_file(file) {
         let src = fs::read_to_string(file).map_err(|e| {
             eprintln!("Error reading file '{}': {e}", file.display());
             CliError::Io(e)
         })?;
-        let prog = knr_core::syntax::parse_knr(&src).map_err(|err| {
+        let _prog = knr_core::syntax::parse_tsx(&src).map_err(|err| {
             eprintln!("{err}");
             CliError::Parse(err)
         })?;
-        if let Err(diagnostics) = knr_verify::verify_program(&prog) {
+        knr_verify::verify_program_from_file(file).map_err(|diagnostics| {
             for diag in &diagnostics {
                 eprintln!("{diag}");
             }
-            return Err(CliError::Verify(diagnostics.len()));
-        }
-        knr_core::lower::lower_program_from_file(file).map_err(|err| {
-            eprintln!("{err}");
-            CliError::Other(err.to_string())
+            CliError::Verify(diagnostics.len())
         })?
     } else {
         let bin_bytes = fs::read(file).map_err(|e| {

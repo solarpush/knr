@@ -1,0 +1,33 @@
+// ============================================================================
+// knr Official Showcase -- Minimal Editorial Footer (`site/components/footer.tsk`)
+// ============================================================================
+
+import { Column, Row, Text, Icon, Divider } from "std/ui";
+import { State, active_tab_label, active_shader_fn_name } from "../state.tsk";
+
+export function Footer(s: readonly State): Widget {
+    const tab_name = active_tab_label(s.active_tab);
+    const shader_name = active_shader_fn_name(s.active_shader);
+    const secs = toInt(s.elapsed);
+
+    return (
+        <Column key="site_footer" w="full" gap={14} pt={8}>
+            <Divider />
+            <Row w="full" justify="between" align="center" gap={16} py={4}>
+                <Row align="center" gap={10}>
+                    <Icon name="diamond" size={14} color="#38bdf8" />
+                    <Text size={13} weight="semibold" color="#e2e8f0">
+                        Built 100% in knr TSX (site/app.tsk)
+                    </Text>
+                    <Text size={12} color="#64748b">
+                        Unified GPU Engine | Zero HTML / CSS / GLSL | Zero GC
+                    </Text>
+                </Row>
+
+                <Text size={12} font="mono" color="#64748b">
+                    {`Section: ${tab_name} | Kernel: ${shader_name} | Preset: ${s.preset_name} | Uptime ${secs}s`}
+                </Text>
+            </Row>
+        </Column>
+    );
+}

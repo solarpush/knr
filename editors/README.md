@@ -1,10 +1,13 @@
-# knr Editor Extensions
+# knr Editor Extensions (v0.2.0)
 
-First-party editor integrations for `.knr`, `.ssa`, and `.ssa.schema` powered by the built-in `knr lsp` JSON-RPC 2.0 Language Server.
+First-party editor integrations for **`.tsk`** (*TypeScript for Knr* — Strict TSX/TS + linear ownership + GPU shaders), legacy `.knr`, and `.ssa` / `.ssa.schema` IR, powered exclusively by the built-in `knr lsp` JSON-RPC 2.0 Language Server.
+
+> **Why `.tsk` instead of `.tsx`/`.ts`?**
+> Using a dedicated `.tsk` extension completely avoids conflicts with `tsserver`, `vtsls`, ESLint, and Prettier (which would otherwise flag `i64`/`f64`, `readonly State`, top-level `@shader`/`@effects`, algebraic `enum`, and `"std/ui"` imports as TypeScript errors). Meanwhile, `.gitattributes` maps `*.tsk` to TSX on GitHub and all editor extensions ship native TSX + knr highlighting.
 
 ## Prerequisites
 
-Ensure the `knr` CLI is installed and available on your `$PATH`:
+Ensure the `knr` v0.2.0 CLI is installed and available on your `$PATH`:
 
 ```bash
 knr --version
@@ -12,16 +15,16 @@ knr --version
 
 ### Features Powered by `knr lsp`
 
-- **Live Diagnostics** (`textDocument/publishDiagnostics`): real-time syntax parsing, lowering, static linear ownership / second-class borrow (`&T`) checks, effect capability checks (`Net`, `Ui`, `Hw`, `Async`), and GPU shader WGSL/GLSL validation via `naga`.
-- **Hover Documentation** (`textDocument/hover`): signatures and docs for local `fn`, `shader fn`, `schema`, `enum`, fields/variants, built-in math & linear intrinsics, and all 40 `Style` / 8 `Widget` fields.
-- **Autocomplete** (`textDocument/completion`): context-aware completions triggered on `.`, `:`, and `"` including keywords, snippets, `std/ui` & `std/math` imports, builtins, `Style`/`Widget` fields, and local symbols.
-- **Document Outline** (`textDocument/documentSymbol`): hierarchical outline of schemas (with field slots), enums (with variants), functions, and GPU shaders.
+- **Live Diagnostics** (`textDocument/publishDiagnostics`): real-time `.tsk` parsing, JSX lowering, static linear ownership and `readonly T` second-class borrow checks, `@effects` capability checks (`net`, `ui`, `hw`, `async`), and `@shader` WGSL/GLSL validation via `naga`.
+- **Hover Documentation** (`textDocument/hover`): signatures and docs for `function`, `@shader`, `type`, `enum`, built-in JSX primitives (`<Column>`, `<Row>`, `<Grid>`, `<Card>`, `<Shader>`, `<Icon>`, `<Code>`, ...), and math/sys intrinsics.
+- **Autocomplete** (`textDocument/completion`): context-aware completions triggered on `.`, `:`, `"`, `<`, and `@` including `std/ui`, `std/math`, `std/anim`, `std/sys` imports, JSX props, icon names, and local symbols.
+- **Document Outline** (`textDocument/documentSymbol`): hierarchical outline of types, enums, functions, components, and `@shader` kernels.
 
 ---
 
 ## VS Code (`editors/vscode/`)
 
-Zero external npm runtime dependencies — no `npm install` or build step required.
+Zero external npm runtime dependencies — no `npm install` or build step required. Activates exclusively on `.tsk`, `.knr`, `.ssa`, and `.ssa.schema` with a full built-in Strict TSX + knr TextMate grammar (`source.tsk`).
 
 ### Quick Install (Symlink or Copy)
 
@@ -29,12 +32,12 @@ Zero external npm runtime dependencies — no `npm install` or build step requir
 ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/knr-lang
 ```
 
-Reload VS Code (`Developer: Reload Window`) and open any `.knr`, `.ssa`, or `.ssa.schema` file.
+Reload VS Code (`Developer: Reload Window`) and open any `.tsk` file (e.g. `site/app.tsk` or `examples/counter_app.tsk`).
 
 ### Run in Extension Development Host
 
 ```bash
-code --extensionDevelopmentPath="$(pwd)/editors/vscode" examples/raymarch_3d.knr
+code --extensionDevelopmentPath="$(pwd)/editors/vscode" examples/raymarch_3d.tsk
 ```
 
 ### Settings & Commands
@@ -48,9 +51,9 @@ code --extensionDevelopmentPath="$(pwd)/editors/vscode" examples/raymarch_3d.knr
 
 ## Neovim 0.10+ (`editors/neovim/knr.lua`)
 
-### Option A: Lua Module (Recommended)
+Automatically registers `.tsk` -> `knr` filetype, wires Neovim's Tree-sitter `tsx` parser for highlighting, and attaches `knr lsp` exclusively without waking `ts_ls`/`vtsls`.
 
-Copy `editors/neovim/knr.lua` into your Neovim config:
+### Option A: Lua Module (Recommended)
 
 ```bash
 mkdir -p ~/.config/nvim/lua
@@ -61,18 +64,6 @@ Add to `~/.config/nvim/init.lua`:
 
 ```lua
 require("knr").setup()
-```
-
-Optional customization:
-
-```lua
-require("knr").setup({
-  cmd = { "knr", "lsp" },
-  root_markers = { "knr.toml", "Cargo.toml", ".git" },
-  on_attach = function(client, bufnr)
-    vim.keymap.set("n", "K", vim.lsp.buf.hover, { buffer = bufnr })
-  end,
-})
 ```
 
 ### Option B: Zero-Config Plugin Drop-In

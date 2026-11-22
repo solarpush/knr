@@ -1,0 +1,84 @@
+// Standalone Native Compiled HTTP Server in Strict TypeScript (`examples/http_server.tsk`)
+// Zero GC | Capability-Isolated `@effects("net")` | Cranelift AOT + Tokio TCP
+//
+// Build standalone native binary:
+//   knr build examples/http_server.tsk --target native -o ./http_server
+// Run (binds http://127.0.0.1:8080, override via KNR_PORT=3000):
+//   ./http_server
+// Verify & test deterministically:
+//   knr check examples/http_server.tsk
+//   knr test examples/http_server.tsk
+
+import {
+    HttpRequest,
+    HttpResponse,
+    Route,
+    classify_route,
+} from "./http_types.tsk";
+
+export function format_state_json(count: i64, reqs: i64, route_path: string): string {
+    return `{"service":"knr-http","count":${count},"requests":${reqs},"route":"${route_path}"}`;
+}
+
+@effects("net")
+export function main(): i64 {
+    const srv: i64 = syscall("net", "net.listen", 8080);
+    let count: i64 = 0;
+    let reqs: i64 = 0;
+    let running: bool = true;
+
+    while (running) {
+        const req: HttpRequest = syscall("net", "net.wait_req", srv);
+        const route: Route = classify_route(req);
+        const req_id: i64 = req.req_id;
+        const req_path: string = req.path;
+        reqs += 1;
+
+        switch (route) {
+            case Route.Home:
+                const home_body = format_state_json(count, reqs, req_path);
+                const home_resp: HttpResponse = { req_id, status: 200, body: home_body };
+                const _ok_home: bool = syscall("net", "net.respond", home_resp);
+                break;
+            case Route.ApiInc:
+                count += 1;
+                const inc_resp: HttpResponse = { req_id, status: 200, body: `{"count":${count}}` };
+                const _ok_inc: bool = syscall("net", "net.respond", inc_resp);
+                break;
+            case Route.ApiDec:
+                count -= 1;
+                const dec_resp: HttpResponse = { req_id, status: 200, body: `{"count":${count}}` };
+                const _ok_dec: bool = syscall("net", "net.respond", dec_resp);
+                break;
+            case Route.ApiReset:
+                count = 0;
+                const rst_resp: HttpResponse = { req_id, status: 200, body: `{"count":${count}}` };
+                const _ok_rst: bool = syscall("net", "net.respond", rst_resp);
+                break;
+            case Route.Count:
+                const cnt_resp: HttpResponse = { req_id, status: 200, body: String(count) };
+                const _ok_cnt: bool = syscall("net", "net.respond", cnt_resp);
+                break;
+            case Route.Health:
+                const hlth_resp: HttpResponse = { req_id, status: 200, body: "{\"status\":\"ok\"}" };
+                const _ok_hlth: bool = syscall("net", "net.respond", hlth_resp);
+                break;
+            case Route.Shutdown:
+                const bye_resp: HttpResponse = { req_id, status: 200, body: "bye" };
+                const _ok_bye: bool = syscall("net", "net.respond", bye_resp);
+                running = false;
+                break;
+            case Route.NotFound:
+                const nf_resp: HttpResponse = { req_id, status: 404, body: "not found" };
+                const _ok_nf: bool = syscall("net", "net.respond", nf_resp);
+                break;
+        }
+    }
+
+    return count;
+}
+
+export function test_format_state_json(): bool {
+    const out = format_state_json(7, 3, "/api/inc");
+    return out === "{\"service\":\"knr-http\",\"count\":7,\"requests\":3,\"route\":\"/api/inc\"}";
+}

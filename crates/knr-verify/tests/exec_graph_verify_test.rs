@@ -11,9 +11,9 @@ fn test_reference_exec_graph_component_verifies_cleanly() {
         .unwrap()
         .parent()
         .unwrap()
-        .join("site/components/exec_graph.knr");
+        .join("tests/fixtures/legacy_site/components/exec_graph.knr");
 
-    assert!(component_path.exists(), "site/components/exec_graph.knr must exist");
+    assert!(component_path.exists(), "legacy exec_graph.knr fixture must exist");
 
     // 1. Test loading and lowering from file (which resolves ../schemas/vdom.ssa.schema)
     let module = lower_program_from_file(&component_path)

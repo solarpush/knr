@@ -1,0 +1,181 @@
+// ============================================================================
+// knr Neural Studio v0.4.0 -- GPU Shader Deck (`src/components/shader_deck.tsk`)
+// ============================================================================
+
+import {
+    Column,
+    Row,
+    Grid,
+    Card,
+    Badge,
+    Text,
+    Button,
+    Slider,
+    Toggle,
+    Shader,
+    Icon,
+    Divider,
+} from "std/ui";
+import {
+    Action,
+    State,
+    active_theme,
+    primary_btn_bg,
+    primary_btn_fg,
+    accent_text_color,
+    card_shadow_color,
+} from "../state.tsk";
+import { neural_aurora_field, neural_sdf_orb } from "../shaders.tsk";
+
+export function ShaderDeck(s: readonly State): Widget {
+    const t = active_theme(s);
+    const { theme_idx } = s;
+    const accent_fg = accent_text_color(theme_idx);
+    const cta_bg = primary_btn_bg(theme_idx);
+    const cta_fg = primary_btn_fg(theme_idx);
+    const show_wave = s.shader_idx === 0;
+    const eff_energy = s.paused ? 0.1 : s.energy;
+    const sh = card_shadow_color(theme_idx);
+    return (
+        <Column key="ns_shader_deck" w="full" gap={16}>
+            <Card
+                key="ns_shader_viewport_card"
+                w="full"
+                bg={t.surface}
+                border={t.border}
+                shadowColor={sh}
+                shadowBlur={16}
+                shadowY={6}
+                radius={t.radius_lg}
+                p={16}
+                gap={14}
+            >
+                <Row w="full" justify="between" align="center" gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="layers" size={16} color={accent_fg} />
+                        <Text size={18} weight="extrabold" font="display" color={t.text}>
+                            {show_wave ? "Neural Aurora Field (res: Vec2)" : "3D SDF Neural Core (40-step)"}
+                        </Text>
+                    </Row>
+                    <Row align="center" gap={6}>
+                        <Button
+                            key="btn_shader_wave"
+                            onClick={Action.SelectShaderWave}
+                            bg={show_wave ? cta_bg : t.surface_alt}
+                            color={show_wave ? cta_fg : t.text}
+                            border={show_wave ? cta_bg : t.border}
+                            px={11}
+                            py={7}
+                            radius={8}
+                        >
+                            Aurora
+                        </Button>
+                        <Button
+                            key="btn_shader_orb"
+                            onClick={Action.SelectShaderOrb}
+                            bg={!show_wave ? cta_bg : t.surface_alt}
+                            color={!show_wave ? cta_fg : t.text}
+                            border={!show_wave ? cta_bg : t.border}
+                            px={11}
+                            py={7}
+                            radius={8}
+                        >
+                            SDF Orb
+                        </Button>
+                    </Row>
+                </Row>
+                {show_wave && <Shader
+                    key="ns_deck_aurora_shader"
+                    fn={neural_aurora_field}
+                    h={240}
+                    radius={12}
+                    uniforms={[eff_energy, s.hue, s.density, s.glow]}
+                />}
+                {!show_wave && <Shader
+                    key="ns_deck_orb_shader"
+                    fn={neural_sdf_orb}
+                    h={240}
+                    radius={12}
+                    uniforms={[eff_energy, s.hue, s.density]}
+                />}
+                <Row w="full" justify="between" align="center" gap={8}>
+                    <Badge bg={t.surface_alt} color={accent_fg} border={t.border}>
+                        naga WGSL + WebGL2 GLSL ES 3.00
+                    </Badge>
+                    <Toggle
+                        key="tgl_deck_pause"
+                        checked={s.paused}
+                        onToggle="TogglePause"
+                        label="Freeze Time"
+                        bg={t.surface_alt}
+                        color={t.text}
+                    />
+                </Row>
+            </Card>
+            <Card
+                key="ns_uniform_controls"
+                w="full"
+                bg={t.surface}
+                border={t.border}
+                shadowColor={sh}
+                shadowBlur={16}
+                shadowY={6}
+                radius={t.radius_lg}
+                p={16}
+                gap={12}
+            >
+                <Row align="center" gap={8}>
+                    <Icon name="sliders" size={15} color={accent_fg} />
+                    <Text size={15} weight="bold" color={t.text}>
+                        Live Uniform Parameters (16-Slot Buffer)
+                    </Text>
+                </Row>
+                <Divider />
+                <Grid key="ns_sliders_grid" cols={2} gap={14}>
+                    <Column gap={6}>
+                        <Row justify="between" align="center">
+                            <Text size={12} weight="semibold" color={t.text_muted}>ENERGY</Text>
+                            <Text size={12} font="mono" color={t.text}>
+                                {`${toInt(s.energy * 100.0)}%`}
+                            </Text>
+                        </Row>
+                        <Slider key="sl_energy" value={s.energy} onChange="slider_energy" />
+                    </Column>
+                    <Column gap={6}>
+                        <Row justify="between" align="center">
+                            <Text size={12} weight="semibold" color={t.text_muted}>
+                                HUE SHIFT
+                            </Text>
+                            <Text size={12} font="mono" color={t.text}>
+                                {`${toInt(s.hue * 360.0)} deg`}
+                            </Text>
+                        </Row>
+                        <Slider key="sl_hue" value={s.hue} onChange="slider_hue" />
+                    </Column>
+                    <Column gap={6}>
+                        <Row justify="between" align="center">
+                            <Text size={12} weight="semibold" color={t.text_muted}>
+                                DENSITY
+                            </Text>
+                            <Text size={12} font="mono" color={t.text}>
+                                {`${toInt(s.density * 100.0)}%`}
+                            </Text>
+                        </Row>
+                        <Slider key="sl_density" value={s.density} onChange="slider_density" />
+                    </Column>
+                    <Column gap={6}>
+                        <Row justify="between" align="center">
+                            <Text size={12} weight="semibold" color={t.text_muted}>
+                                GLOW INTENSITY
+                            </Text>
+                            <Text size={12} font="mono" color={t.text}>
+                                {`${toInt(s.glow * 100.0)}%`}
+                            </Text>
+                        </Row>
+                        <Slider key="sl_glow" value={s.glow} onChange="slider_glow" />
+                    </Column>
+                </Grid>
+            </Card>
+        </Column>
+    );
+}

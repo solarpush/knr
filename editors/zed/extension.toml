@@ -1,9 +1,9 @@
 id = "knr"
-name = "knr"
-version = "0.1.0"
+name = "knr (.tsk)"
+version = "0.3.0"
 schema_version = 1
 authors = ["knr Contributors"]
-description = "Language support and built-in LSP integration for knr (.knr)."
+description = "First-class .tsk (Strict TypeScript/TSX for knr), .knr, and SSA IR language support powered exclusively by knr lsp (zero tsserver conflict)."
 repository = "https://github.com/knr-lang/knr"
 
 [language_servers.knr-lsp]

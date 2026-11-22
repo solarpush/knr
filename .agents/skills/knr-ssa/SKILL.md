@@ -1,121 +1,158 @@
 ---
 name: knr-ssa
 description: >-
-  Official guide, language reference, ISA reference, and AI workflow for the knr linear programming
-  language and toolchain (knr explore, knr check, knr test, knr run, knr build, knr asm, knr disasm, knr skill).
-  Activate this skill whenever reading, writing, refactoring, exploring, verifying, testing, or compiling
-  .knr, .ssa, or .ssa.schema files, building native binaries, WebAssembly (.wasm), Web apps (--target web),
-  or native desktop MVU UI applications (--gui).
+  Official guide, Strict TypeScript/TSX (.tsk) language reference, Unified GPU Engine UI guide, MCP server & AI workflow
+  for the knr v0.4.0 linear programming language and toolchain (knr mcp, knr doctor, knr bench, knr explore, knr check,
+  knr fix, knr fmt, knr test, knr render --flow/--viewports/--diff-out/--assert-audit/--baseline, knr run, knr dev,
+  knr build, knr new --template, knr lsp, knr asm, knr disasm).
+  Activate this skill whenever reading, writing, refactoring, exploring, verifying, visually auditing, testing,
+  benchmarking, or compiling .tsk, .knr, .ssa, or .ssa.schema files, building native binaries, WebAssembly (.wasm),
+  Web apps (--target web), or desktop GPU UI applications (--gui).
 ---
 
-# knr Language & Toolchain Skill
+# knr Language & Toolchain Skill (v0.4.0)
 
 Use the `knr` binary directly from `$PATH` (never invoke `cargo run` or `/tmp/.../knr` when `knr` is installed).
+AI agents with MCP support can connect directly to **`knr mcp`** (Model Context Protocol 2024-11-05 over stdio) for 8 native zero-shell tools: `knr_check`, `knr_explore`, `knr_test`, `knr_render_audit`, `knr_fmt`, `knr_fix`, `knr_bench`, and `knr_get_skill`.
 
 ---
 
-## 1. Mandatory AI Workflow (`explore` -> `check` -> `test` -> `run` / `build`)
+## 1. Mandatory AI Workflow (`explore` -> `check` / `fix` -> `fmt` -> `test` -> `render --flow --viewports --assert-audit` -> `build`)
 
-1. **Explore the project in one shot before reading files**:
+1. **Inspect environment or scaffold a project**:
+   ```bash
+   knr doctor --json                                 # Verify CLI, linker, libknr_runtime.a, display, Node.js, VS Code ext, knr.toml
+   knr new my_app --template app                     # Templates: app | dashboard | shader | ui | minimal
+   ```
+2. **Explore the project in one shot before reading files**:
    ```bash
    knr explore <dir_or_file>
-   knr explore <dir> --symbol <SchemaOrFn>
+   knr explore <dir> --symbol <TypeOrFn>
    knr explore <dir> --callers <fn_name>
    knr explore <dir> --callees <fn_name>
    knr explore <dir> --effects <ui|net|hw|async>
    knr explore <dir> --orphans
    knr explore <dir> --format <ai|json|mermaid>
    ```
-2. **Statically verify in < 100 µs (SSA, Linear Ownership & Second-Class Borrows, Types, Effects)**:
+3. **Statically verify in < 100 us + deterministic auto-fix + canonical formatting**:
    ```bash
-   knr check <entry.knr> --graph
-   knr check <entry.knr> --json
+   knr check <entry.tsk> --json
+   knr fix <entry.tsk> --write --json                # Auto-heals UseAfterMove, UndeclaredEffect, missing std/ui, BorrowEscape
+   knr fmt --check <dir_or_file>                     # Verify canonical formatting
+   knr fmt <dir_or_file>                             # Canonically format .tsk/.knr files
    ```
-   - Always inspect `fix_hint`, `source_variable`, and `alive_registers` in `--json` output if a `UseAfterMove`, `LinearLeak`, or `BorrowEscape` occurs.
-3. **Run deterministic unit tests (zero browser/network needed)**:
+   - Inspect `fix_hint`, `source_variable`, and `alive_registers` in `knr check --json` output if a `UseAfterMove`, `LinearLeak`, `BorrowEscape`, `NonExhaustiveMatch`, or `ShaderImpureOp` occurs.
+4. **Run deterministic unit tests & performance benchmarks (zero browser/network needed)**:
    ```bash
    knr test <file_or_dir>
    knr test <file_or_dir> --json
+   knr bench <entry.tsk> --json                      # VM gas/steps, Cranelift JIT compile & native latency, .knrbin/.wasm sizes
    ```
-   - Discovers and runs every `fn test_*() -> bool` (or `i64`) in `.knr`/`.ssa` files via the deterministic VM with mocked effects.
-4. **Execute or Compile (VM == Native Cranelift == WebAssembly == Web)**:
+   - Discovers and runs every `export function test_*(): bool` (or `i64`) in `.tsk`/`.knr`/`.ssa` files via the deterministic VM with mocked effects. Use `std/testing` (`assert_eq_i64`, `assert_near`, `assert_str_eq`, `assert_true`, `assert_false`, `assert_gt`, `assert_lt`).
+5. **Headless GPU/CPU Render, Declarative E2E Flows, Multi-Viewport & Visual Regression (`knr render`)**:
    ```bash
-   knr run <entry.knr>                              # Reference VM (default gas: 1,000,000)
-   knr run <app.knr> --gui                          # Real native GPU desktop window (wgpu + CPU fallback)
-   knr dev <app.knr> --gui                          # Live hot-reloading GUI + WGSL shaders window
-   knr lsp                                          # Built-in JSON-RPC 2.0 Language Server (stdio)
-   knr build <server.knr> --target native -o server # Standalone native ELF linked with Rust knr-runtime
-   knr build <app.knr> --target native --gui -o app # Standalone native desktop GUI executable (MVU + shaders)
-   knr build <app.knr> --target wasm -o app.wasm    # Standalone zero-import WebAssembly binary
-   knr build <app.knr> --target web -o dist/        # SSR index.html + zero-import app.wasm + WebGPU/WebGL2
-   knr asm <file.ssa> -o out.knrbin                 # Compact binary IR codec (1:1 bijection)
+   knr render <app.tsk> -o /tmp/frame.png --assert-audit
+   knr render <app.tsk> --viewports mobile,tablet,desktop --assert-audit --json
+   knr render <app.tsk> --flow flow.json --assert-audit --json
+   knr render <app.tsk> --input draft_input="Ship v0.4" --click btn_add -o /tmp/flow.png --assert-audit --json
+   knr render <app.tsk> --baseline /tmp/ref.png --diff-out /tmp/diff.png --max-diff 0.0 --assert-audit
+   ```
+   - `--flow <flow.json>` runs declarative E2E journeys (`action`, `click`, `input`, `slider`, `tick`, `assert_text`, `assert_key`, `assert_audit` with `max_errors`/`max_warnings`, `snapshot`).
+   - `--viewports` audits preset (`mobile`=390x844, `tablet`=768x1024, `desktop`=1280x900) or custom `WxH` sizes in one pass.
+   - `--diff-out <diff.png>` emits a 3-panel `[Baseline | Actual | Magenta Diff]` visual regression PNG.
+   - **Visual Auditor Pro v2** checks: `ViewportOverflow`, `SiblingOverlap`, `MissingGlyph`, `MissingImage`, `LowContrast`, `TinyHitTarget`, `UnknownShader`, `DuplicateKey`, `TextTruncation`, `EmptyInteractiveAction`, `OffscreenInteractive`, and outputs `accessibility` (`focusable_count`, `interactive_keys`, `min_contrast_ratio`, `duplicate_keys`).
+   - **Zero-defect rule**: fix ALL audit errors and warnings before shipping (give explicit unique `key` props inside `.map()` loops, pass explicit `bg`/`color` on `<Input>`/`<Toggle>` for >= 4.5 WCAG contrast, and always use `<Icon name="..." />` instead of raw Unicode symbols!).
+6. **Execute, Serve MCP/LSP, or Compile (VM == Native Cranelift == Zero-Import WASM == Unified GPU Web)**:
+   ```bash
+   knr run <entry.tsk>                               # Reference VM (default gas: 1,000,000)
+   knr run <app.tsk> --gui                           # Native GPU desktop window (wgpu + CPU fallback + async Cmd + on_key + on_resize)
+   knr dev <app.tsk> --gui                           # Live hot-reloading .tsk UI + WGSL shaders + async Cmd
+   knr mcp                                           # Built-in MCP 2024-11-05 JSON-RPC 2.0 server over stdio (8 tools)
+   knr lsp                                           # IDE-Ultra JSON-RPC 2.0 LSP (cross-file hover/def/refs/rename/completion/auto-import, SignatureHelp, InlayHints, WorkspaceSymbol, FoldingRange, QuickFix, Format)
+   knr build <server.tsk> --target native -o server  # Standalone native binary linked with libknr_runtime.a
+   knr build <app.tsk> --target native --gui -o app  # Standalone native desktop GPU executable
+   knr build <app.tsk> --target wasm -o app.wasm     # Standalone zero-import WebAssembly binary
+   knr build <app.tsk> --target web -o dist/         # Unified Flutter-style Canvas/WebGPU/WebGL2 + app.wasm
+   knr asm <file.ssa> -o out.knrbin                  # Lossless 1:1 binary IR codec
    knr disasm out.knrbin -o roundtrip.ssa
    ```
 
 ---
 
-## 2. Writing Idiomatic `.knr` (Primary Source Language)
+## 2. Strict TypeScript / TSX Surface Syntax (`.tsk`, v0.4.0)
 
-`.knr` lowers cleanly to canonical verified linear SSA (`.ssa` / `.knrbin`):
+Primary file extension: **`.tsk`** (*TypeScript for Knr* — zero conflicts with `tsserver` / `vtsls`). Legacy `.knr` is also accepted. All source lowers to canonical statically verified linear SSA (`.ssa` / `.knrbin`).
 
-- **Multi-file & Built-in Stdlib Imports**: `import "std/ui";` (widgets including `w_divider`/`w_progress` + responsive `w_grid`), `import "std/anim";`, `import "std/math";`, `import "std/sys";` (`fs_read`/`fs_write`/`fs_exists`/`fs_remove`/`fs_list`, `json_is_valid`/`json_pretty`/`json_get`, `http_get`/`http_post`) — built directly into `knr-core`, zero relative paths needed! Plus relative `import "./helper.knr";` (cycle-safe, diamond-deduplicated; also imports `.ssa` and `.ssa.schema`).
-- **Editor Extensions**: Ready-to-use VS Code, Neovim, and Zed integrations wired to `knr lsp` live in `editors/`.
-- **Typed Schemas & Tagged Unions (`enum`)**:
-  ```knr
-  schema State { 0: count i64, 1: status str }
-  enum Action { Inc(i64), Dec(i64), Reset }
-  ```
-- **Exhaustive `match` (expressions & statements)**:
-  ```knr
-  let next = match act {
-      Action::Inc(n) => state.count + n,
-      Action::Dec(n) => state.count - n,
-      Action::Reset => 0,
-  };
-  ```
-- **Loops & Control Flow**: `while cond { ... }` with real SSA block-parameter mutations, `break;`, `continue;`, `if`/`else if`/`else` expressions, short-circuit `&&` / `||`, and `%`.
-- **Memory Safety without GC or Lifetimes (Second-Class Borrows `&T`)**:
-  - Linear values (`struct`, `enum`, `vec[T]`, `map[K, V]`, `buf`, `chan[T]`) have unique ownership and auto-drop at scope exit (zero GC, zero leaks).
-  - Read a linear value without moving it using **second-class borrows (`&T`)**:
-    ```knr
-    fn view(state: &State) -> UiNode { ... }
-    let ui = view(&state); // `state` stays Alive in caller!
-    ```
-  - Borrowed `&T` parameters cannot escape (returned, moved, or stored in structs/vecs) -> rejected statically as `BorrowEscape` with zero lifetime annotations!
-- **Strings, Math & Builtins**: `"a" + "b"`, `s1 == s2`, `to_str(n)`, `str_len(s)`, `vec_new()`, `vec_push(v, x)`, `vec_len(v)`, `v[i]`, `map_new()`, `map_set(m, k, v)`, `map_get(m, k)`, `buf_alloc(n)`, `chan_new(cap)`, plus GPU/CPU-parity math (`sin`, `cos`, `tan`, `sqrt`, `abs`, `floor`, `ceil`, `fract`, `pow`, `atan2`, `min`, `max`, `clamp`, `lerp`, `mix`, `smoothstep`, `to_f64`, `to_i64`), typed `#hex` color literals (`#38bdf8` -> `Color` or `str`), and linear struct spread (`Style { bg: #111827, ..style_card() }`).
-- **Explicit Effects & Syscalls**:
-  ```knr
-  fn main() -> i64 effects(Net) {
-      let srv: i64 = syscall Net "net.listen" 0;
-      let req: HttpRequest = syscall Net "net.wait_req" srv;
-      let ok: bool = syscall Net "net.respond" HttpResponse { req_id: req.req_id, status: 200, body: "ok" };
-      return 0;
-  }
-  ```
+### Imports, Barrels, Aliases & Built-in Standard Libraries (10 `std/*` Modules)
+```ts
+import { Column, Row, Grid, Stack, Card, Scroll, Text, Code, Badge, Button, Input, Slider, Toggle, Shader, Icon, Image, Divider, Progress, Spacer, Vec2, Color } from "std/ui";
+import { Option, Result } from "std/core";
+import { Cmd, cmd_none, cmd_http_get, cmd_http_post, cmd_timer, cmd_storage_save, cmd_storage_load } from "std/cmd";
+import { Theme, theme_obsidian, theme_light, theme_nord, theme_solar } from "std/theme";
+import { Route, router_init, router_push, router_back, router_replace, router_is, router_can_back } from "std/router";
+import { is_compact, is_medium, is_wide, responsive_cols, responsive_pad } from "std/layout";
+import { assert_eq_i64, assert_near, assert_str_eq, assert_true, assert_false, assert_gt, assert_lt } from "std/testing";
+import { Vec3, smin, vec3_norm, vec3_dot, vec3_add, pi, tau } from "std/math";
+import { ease_out_cubic, ease_in_out_sine, smooth_damp } from "std/anim";
+import { fs_read, fs_write, fs_exists, fs_remove, json_is_valid, json_pretty, json_get, http_get, http_post } from "std/sys";
+
+// v0.4.0 ergonomic module imports: extension-less, `as` aliases, `* as ns`, barrel `index.tsk`, and `knr.toml` packages
+import { State, Action as AppAction, init, update } from "./state";
+import * as Shaders from "./shaders";
+import { TopBar, StudioView } from "./components"; // resolves ./components/index.tsk (`export { TopBar } from "./topbar.tsk";`)
+```
+
+### Functional Collection Combinators, Destructuring, Nullish Coalescing & Linear Safety
+- **Copyable (non-linear) types**: `i64`, `f64`, `bool`, `string`, `void`.
+- **Linear (move-only, deterministic auto-drop) types**: `type`/`interface` records, `enum` tagged unions, `T[]`, `Map<K, V>`, `Buffer`, `Channel<T>`.
+- **Zero-copy second-class borrows**: annotate read-only parameters as `s: readonly State` (lowers to `&State`). Borrowed values cannot escape (`BorrowEscape`), eliminating GC and lifetime annotations.
+- **Functional array methods** (lowered to verified monotonic SSA loops):
+  - `.map((item, idx) => ...)`, `.filter((item, idx) => ...)` (Copy elements), `.reduce((acc, item, idx) => ..., init)` (Copy & Linear accumulators), `.some((item, idx) => cond)`, `.every((item, idx) => cond)`, `.count((item, idx) => cond)`, `.findIndex((item, idx) => cond)`, `.includes(val)`, `.indexOf(val)`, `.flatMap((item, idx) => ...)`, `.slice(start, end)`, `.concat(other)`, `.reverse()`.
+- **Object & array destructuring**:
+  - `const { theme_idx, viewport_w } = s;` (non-consumingly borrows linear fields without moving `s`!)
+  - `const [first, second] = pair_arr;`
+- **Nullish coalescing `??` on `Option<T>` / `Result<T, E>`**:
+  - `const id = find_next_active_id(s) ?? 0;` unwraps `Some(v)`/`Ok(v)` or evaluates the fallback on `None`/`Err(_)`.
+- **Exhaustive enum matching & typed actions (`enum Action`)**:
+  - Pass `onClick={Action.AddJob}` — typos fail `knr check` immediately, and missing `switch (action)` cases fail with `NonExhaustiveMatch`.
+- **Interactive MVU Hooks**:
+  - `init(): State`, `view(s: readonly State): Widget`, `update(s: State, act: Action | string): State`
+  - Optional: `tick(s: State, dt: f64): State`, `on_input(s: State, act: string, val: string): State`, `on_slider(s: State, act: string, val: f64): State`, `on_key(s: State, key: string): State` (e.g. `"Ctrl+1"`, `"Ctrl+T"`, `"Space"`), `on_resize(s: State, w: f64, h: f64): State`, `effect(s: readonly State, act: string): Cmd`.
+- **Numeric discipline**: `f64` math (`sin`, `cos`, `tan`, `sqrt`, `abs`, `floor`, `ceil`, `fract`, `pow`, `atan2`, `min`, `max`, `clamp`, `lerp`, `mix`, `smoothstep`) requires `f64` operands (`0.0`, `1.0`). Convert with `toInt(x)`/`to_i64(x)`, `toFloat(x)`/`to_f64(x)`, `String(x)`/`to_str(x)`.
 
 ---
 
-## 3. Unconstrained GPU UI, 60/120 FPS Animations & `.knr` GPU Shaders (`shader fn`)
+## 3. Unified Flutter-Style GPU UI & Pure `@shader` Kernels
 
-Write ONE `.knr` app using `examples/std_ui.knr` (`Widget` + 40-field `Style` + `Vec2` + `Color`, or legacy `examples/ui.knr` `UiNode`) with optional `tick(state, dt, elapsed)`, `on_slider(state, action, val)`, `on_input(state, action, text)`, and pure `shader fn` kernels (see `examples/shader_studio.knr`):
-```knr
-import "./std_ui.knr";
+### Built-in JSX Elements & Props
+- **Containers**: `<Column>`, `<Row>`, `<Grid cols={responsive_cols(s.viewport_w, 1, 2, 3)}>`, `<Stack>`, `<Card>`, `<Scroll h={320} overflow="scroll">` / `overflow="scroll-x"` (real GPU `scissor` & CPU mask clipping!), `z={10}` (`z_index` layer sorting), `transitionMs={180}` (critically-damped spring physics).
+- **Leaves**:
+  - `<Text size={16} weight="bold" font="display" textAlign="left" color={t.text}>...</Text>`
+  - `<Code lang="tsx">{snippet}</Code>` (built-in GPU syntax highlighting)
+  - `<Badge bg={t.surface_alt} color={t.accent} border={t.border}>...</Badge>`
+  - `<Button key="btn_id" onClick={Action.Go} bg="..." color="..." border="..." hoverBg="..." hoverBorder="..." px={14} py={9} radius={10}>...</Button>`
+  - `<Input key="inp_id" value={s.draft} onInput="draft_input" bg={t.surface_alt} color={t.text} border={t.border} />` (full caret, Shift+arrow selection, Ctrl+A/C/X/V clipboard, Tab/Shift+Tab focus ring, Enter submit)
+  - `<Slider key="sl_id" value={s.energy} onChange="slider_energy" />`
+  - `<Toggle key="tgl_id" checked={s.paused} onToggle="TogglePause" label="Pause" bg={t.surface_alt} color={t.text} />`
+  - `<Shader key="sh_id" fn={neural_aurora_field} h={240} radius={12} uniforms={[s.energy, s.hue, s.density, s.glow]} />` (up to 16 float uniforms!)
+  - `<Image key="logo" src="assets/logo.png" w={36} h={36} radius={8} />` (PNG/JPEG/WebP & Base64 data URIs; audited via `MissingImage`)
+  - `<Icon name="sparkles" size={16} color={t.accent} />`
+  - `<Divider />`, `<Progress value={0.92} color="linear(90, #38bdf8, #818cf8)" h={6} />`, `<Spacer size={12} />`
+- **Supported 67 `<Icon name="..." />` set** (NEVER use raw Unicode symbols in text — always use `<Icon>` + safe ASCII text):
+  `activity`, `alert`, `arrow-left`, `arrow-right`, `bell`, `bookmark`, `box`, `calendar`, `chart`, `check`, `chevron-down`, `chevron-left`, `chevron-right`, `chevron-up`, `clock`, `code`, `command`, `copy`, `cpu`, `cube`, `database`, `diamond`, `download`, `edit`, `external`, `eye`, `file`, `filter`, `folder`, `git`, `git-branch`, `globe`, `heart`, `home`, `inbox`, `info`, `layers`, `lock`, `mail`, `menu`, `minus`, `moon`, `more`, `palette`, `pause`, `play`, `plus`, `refresh`, `rocket`, `search`, `send`, `settings`, `shield`, `sliders`, `sparkles`, `star`, `sun`, `tag`, `terminal`, `trash`, `unlock`, `upload`, `user`, `users`, `wifi`, `x`, `zap`.
 
-shader fn aurora(uv: Vec2, time: f64, speed: f64) -> Color {
-    let wave = 0.5 + 0.5 * sin(uv.x * 6.0 + time * speed);
-    return Color { r: 0.1, g: wave, b: 0.9, a: 1.0 };
+### Pure GPU `@shader` Kernels (16 Uniforms + Auto `res`/`dt` Binding)
+```ts
+@shader
+export function neural_aurora_field(
+    uv: Vec2, time: f64, mouse: Vec2, res: Vec2,
+    energy: f64, hue: f64, density: f64, glow: f64,
+): Color {
+    const aspect = clamp(res.x / max(res.y, 0.001), 0.85, 2.4);
+    const wave = 0.5 + 0.5 * sin((uv.x - 0.5) * aspect * (2.4 + density * 2.4) + time * (0.4 + energy));
+    return { r: clamp(wave * 0.25, 0.0, 1.0), g: clamp(wave * 0.65, 0.0, 1.0), b: clamp(0.15 + wave * glow, 0.0, 1.0), a: 1.0 };
 }
 ```
-- **Desktop GPU (`wgpu 23`)**: `knr run app.knr --gui` runs an analytical SDF quad + Dual Kawase `backdrop_blur` + GPU `GlyphAtlas` + custom WGSL shader pipeline at 60/120 FPS (automatic `softbuffer` + `tiny-skia` CPU and `KNR_HEADLESS=1` fallbacks).
-- **Web (`WASM + WebGPU / WebGL2`)**: `knr build app.knr --target web -o dist/` emits SSR `index.html`, zero-import `app.wasm`, key-reconciled DOM host, and `naga`-validated WGSL + `#version 300 es` WebGL2 fallback shaders.
-- **Static GPU Purity**: `knr check` rejects effects (`ShaderEffectForbidden`), heap allocations (`ShaderImpureOp`), and recursion (`ShaderRecursionForbidden`) inside `shader fn`, and validates generated WGSL + GLSL via `naga`.
-
----
-
-## 4. Canonical Linear SSA IR & Binary Codec (`.ssa` ↔ `.knrbin`)
-
-For low-level IR work (`.ssa` / `.ssa.schema`):
-- Monotonic SSA registers (`%0, %1, ...`), block parameters (`bb1(%3: i64):`), and branch args (`br bb1(%1)` / `br_if %c bb1(%1) bb2(%2)`).
-- Borrowed params in IR: `fn view(%0: &struct[State]) -> struct[UiNode]`.
-- Strict `.ssa.schema` (schemas only) vs `.ssa` (imports + functions) separation for legacy raw SSA files.
-- Full 1:1 roundtrip bijection between `.ssa` text and `.knrbin` binary encoding (`knr asm` / `knr disasm`).
+- Verified pure (no effects, no heap allocations, no recursion) and compiled via `naga` to both WGSL and WebGL2 GLSL ES 3.00.
+- Automatically binds `uv: Vec2`, `time: f64`, `mouse: Vec2`, `res`/`resolution: Vec2`, `dt: f64`, plus up to **16 custom float uniforms** via `params: array<vec4<f32>, 4>`.
+- Avoid `atan2(py, px)` multiplied by non-integers (branch-cut seam at `+/-pi`) and avoid high-frequency `sin(uv * 90)` moire patterns.

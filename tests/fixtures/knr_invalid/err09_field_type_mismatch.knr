@@ -1,11 +1,11 @@
 // Error: TypeMismatch
-schema Point {
-    0: x i64,
-    1: y i64,
-}
+type Point = {
+    x: i64,
+    y: i64,
+};
 
-fn test_field_ty() -> Point {
-    let pt = Point {
+function test_field_ty(): Point {
+    const pt: Point = {
         x: "wrong type",
         y: 20,
     };

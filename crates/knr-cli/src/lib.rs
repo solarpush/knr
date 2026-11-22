@@ -5,8 +5,9 @@ pub mod error;
 pub mod platform;
 
 pub use args::{
-    parse_args, BuildTarget, CheckArgs, CliCommand, Command, DevArgs, ExploreArgs, ExploreFormat,
-    InitArgs, NewArgs, RunArgs, SkillArgs, TestArgs,
+    parse_args, BenchArgs, BuildTarget, CheckArgs, CliCommand, Command, DevArgs, DoctorArgs,
+    ExploreArgs, ExploreFormat, FixArgs, FmtArgs, InitArgs, NewArgs, RenderArgs, RenderStep,
+    RunArgs, SkillArgs, TestArgs, ViewportSpec,
 };
 pub use error::CliError;
 
@@ -15,6 +16,7 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> Result<(), CliError> {
     match command {
         CliCommand::Help | CliCommand::Version => Ok(()),
         CliCommand::Check(args) => commands::check::execute(&args.file, args.json, args.graph),
+        CliCommand::Render(args) => commands::render::execute(&args),
         CliCommand::Run(args) => {
             if args.watch && args.gui {
                 commands::dev::execute_gui(Some(&args.file), 150, 200, args.gas, args.once)
@@ -29,7 +31,13 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> Result<(), CliError> {
                     args.once,
                 )
             } else {
-                commands::run::execute(&args.file, args.gas, args.trace, args.gui)
+                commands::run::execute_with_profile(
+                    &args.file,
+                    args.gas,
+                    args.trace,
+                    args.gui,
+                    args.profile,
+                )
             }
         }
         CliCommand::Build {
@@ -48,6 +56,8 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> Result<(), CliError> {
             version,
         } => commands::update::execute(check, force, version.as_deref()),
         CliCommand::Explore(args) => commands::explore::execute(&args),
+        CliCommand::Fmt(args) => commands::fmt::execute(&args),
+        CliCommand::Fix(args) => commands::fix::execute(&args),
         CliCommand::Skill(args) => commands::skill::execute(&args),
         CliCommand::Dev(args) => {
             if args.gui {
@@ -72,6 +82,9 @@ pub fn run<I: IntoIterator<Item = String>>(args: I) -> Result<(), CliError> {
         }
         CliCommand::Test(args) => commands::test::execute(&args.path, args.json, args.gas),
         CliCommand::Lsp => commands::lsp::execute(),
+        CliCommand::Mcp => commands::mcp::execute(),
+        CliCommand::Doctor(args) => commands::doctor::execute(&args),
+        CliCommand::Bench(args) => commands::bench::execute(&args),
         CliCommand::Init(args) => commands::init::execute(
             args.dir.as_deref(),
             args.name.as_deref(),

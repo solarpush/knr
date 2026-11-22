@@ -41,12 +41,67 @@ impl WgslBackend {
         Ok(out)
     }
 
+    /// Compiles every `shader fn` in `module` using parameter names from `source_map`
+    /// (enabling automatic `resolution`/`res`, `dt`, `mouse`, `uv`, `time` binding by name).
+    pub fn compile_all_shaders_with_source_map(
+        &self,
+        module: &Module,
+        source_map: &knr_core::SourceMap,
+    ) -> Result<Vec<CompiledShader>, CodegenError> {
+        let mut out = Vec::new();
+        for func in &module.functions {
+            if func.is_shader {
+                out.push(self.compile_shader_with_source_map(module, &func.name, source_map)?);
+            }
+        }
+        Ok(out)
+    }
+
     /// Compiles a single named `shader fn` (plus its transitive pure helpers & flat schemas)
     /// into validated WGSL and WebGL2 GLSL ES 3.00.
     pub fn compile_shader(
         &self,
         module: &Module,
         shader_name: &str,
+    ) -> Result<CompiledShader, CodegenError> {
+        self.compile_shader_inner(module, shader_name, None)
+    }
+
+    /// Compiles a single named `shader fn` using parameter names recorded in `source_map`.
+    pub fn compile_shader_with_source_map(
+        &self,
+        module: &Module,
+        shader_name: &str,
+        source_map: &knr_core::SourceMap,
+    ) -> Result<CompiledShader, CodegenError> {
+        let entry = module
+            .get_function(shader_name)
+            .ok_or_else(|| CodegenError::Wgsl(format!("Shader function '{shader_name}' not found")))?;
+        let names: Vec<Option<&str>> = entry
+            .params
+            .iter()
+            .map(|(reg, _)| source_map.get_var(&entry.name, *reg))
+            .collect();
+        self.compile_shader_inner(module, shader_name, Some(&names))
+    }
+
+    /// Compiles a single named `shader fn` with explicit entry parameter names
+    /// (for automatic `resolution`/`res`, `dt`, `uv`, `time`, `mouse` binding).
+    pub fn compile_shader_with_param_names<S: AsRef<str>>(
+        &self,
+        module: &Module,
+        shader_name: &str,
+        param_names: &[S],
+    ) -> Result<CompiledShader, CodegenError> {
+        let names: Vec<Option<&str>> = param_names.iter().map(|s| Some(s.as_ref())).collect();
+        self.compile_shader_inner(module, shader_name, Some(&names))
+    }
+
+    fn compile_shader_inner(
+        &self,
+        module: &Module,
+        shader_name: &str,
+        param_names: Option<&[Option<&str>]>,
     ) -> Result<CompiledShader, CodegenError> {
         let entry = module
             .get_function(shader_name)
@@ -77,6 +132,14 @@ impl WgslBackend {
                 }
                 for inst in &blk.instructions {
                     collect_type_schemas(module, &inst.ty, &mut visited_schemas, &mut needed_schemas);
+                    if let Op::StructNew(ref sname) = inst.op {
+                        collect_type_schemas(
+                            module,
+                            &Type::Struct(sname.clone()),
+                            &mut visited_schemas,
+                            &mut needed_schemas,
+                        );
+                    }
                 }
             }
         }
@@ -129,7 +192,7 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {{
         )
         .unwrap();
 
-        // Emit user flat struct definitions
+        // Emit user flat struct definitions (fields sorted by index to match constructors)
         let schema_map: HashMap<&str, &Schema> = module
             .schemas
             .iter()
@@ -138,9 +201,15 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {{
 
         for schema in &needed_schemas {
             writeln!(wgsl, "struct knr_s_{} {{", schema.name).unwrap();
-            for field in &schema.fields {
-                let fty = wgsl_type(&field.ty)?;
-                writeln!(wgsl, "    f{}: {fty},", field.index).unwrap();
+            let mut fields_sorted: Vec<&knr_core::FieldDef> = schema.fields.iter().collect();
+            fields_sorted.sort_by_key(|f| f.index);
+            if fields_sorted.is_empty() {
+                writeln!(wgsl, "    _pad: i32,").unwrap();
+            } else {
+                for field in fields_sorted {
+                    let fty = wgsl_type(&field.ty)?;
+                    writeln!(wgsl, "    f{}: {fty},", field.index).unwrap();
+                }
             }
             writeln!(wgsl, "}};\n").unwrap();
         }
@@ -151,7 +220,8 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {{
         }
 
         // Emit `@fragment fn fs_main` binding KnrUniforms -> entry shader params + rounded SDF clip
-        let (call_args, custom_param_count) = build_entry_call_args(entry, &schema_map)?;
+        let (call_args, custom_param_count) =
+            build_entry_call_args(entry, &schema_map, param_names)?;
         writeln!(
             wgsl,
             r#"fn knr_rounded_mask(uv: vec2<f32>, res: vec2<f32>, rad: vec4<f32>) -> f32 {{
@@ -329,62 +399,165 @@ fn validate_and_transpile_glsl(wgsl: &str) -> Result<(String, String), CodegenEr
     Ok((glsl_vert, glsl_frag))
 }
 
+fn is_vec2_f64_schema(sname: &str, schema_map: &HashMap<&str, &Schema>) -> bool {
+    schema_map.get(sname).is_some_and(|sc| {
+        sc.fields.len() == 2
+            && sc.fields.iter().all(|f| {
+                f.ty == Type::F64 && f.name.as_deref() != Some("__tag")
+            })
+    })
+}
+
+fn next_param_slot(custom_idx: &mut usize) -> Result<String, CodegenError> {
+    if *custom_idx >= 16 {
+        return Err(CodegenError::Wgsl(
+            "Shader exceeds maximum 16 custom uniform float slots (`u.params[0..4].xyzw`)"
+                .to_string(),
+        ));
+    }
+    let slot = *custom_idx / 4;
+    let comp = ["x", "y", "z", "w"][*custom_idx % 4];
+    *custom_idx += 1;
+    Ok(format!("u.params[{slot}].{comp}"))
+}
+
+fn unpack_custom_uniform(
+    ty: &Type,
+    schema_map: &HashMap<&str, &Schema>,
+    custom_idx: &mut usize,
+) -> Result<String, CodegenError> {
+    match ty {
+        Type::F64 => next_param_slot(custom_idx),
+        Type::I64 => Ok(format!("i32({})", next_param_slot(custom_idx)?)),
+        Type::Bool => Ok(format!("({} > 0.5)", next_param_slot(custom_idx)?)),
+        Type::Struct(sname) => {
+            let sc = schema_map.get(sname.as_str()).ok_or_else(|| {
+                CodegenError::Wgsl(format!("Unknown shader uniform schema '{sname}'"))
+            })?;
+            let mut fields_sorted: Vec<&knr_core::FieldDef> = sc.fields.iter().collect();
+            fields_sorted.sort_by_key(|f| f.index);
+            if fields_sorted.is_empty() {
+                return Ok(format!("knr_s_{sname}(0i)"));
+            }
+            let mut exprs = Vec::with_capacity(fields_sorted.len());
+            for f in fields_sorted {
+                exprs.push(unpack_custom_uniform(&f.ty, schema_map, custom_idx)?);
+            }
+            Ok(format!("knr_s_{sname}({})", exprs.join(", ")))
+        }
+        other => Err(CodegenError::Wgsl(format!(
+            "Unsupported shader uniform parameter type {other}"
+        ))),
+    }
+}
+
 fn build_entry_call_args(
     entry: &Function,
     schema_map: &HashMap<&str, &Schema>,
+    param_names: Option<&[Option<&str>]>,
 ) -> Result<(Vec<String>, usize), CodegenError> {
-    let mut args = Vec::new();
+    let mut args = Vec::with_capacity(entry.params.len());
     let mut custom_idx: usize = 0;
+    let mut first_was_uv_x = false;
+    let mut uv_bound = false;
+    let mut time_bound = false;
+    let mut mouse_bound = false;
+    let mut res_bound = false;
 
     for (idx, (_, ty)) in entry.params.iter().enumerate() {
+        let pname = param_names.and_then(|ns| ns.get(idx).copied().flatten());
+
+        // 1. Named automatic special parameters (when SourceMap or explicit param_names provided)
+        if let Some(name) = pname {
+            match (name, ty) {
+                ("uv", Type::Struct(sname)) if is_vec2_f64_schema(sname, schema_map) => {
+                    args.push(format!("knr_s_{sname}(in.uv.x, in.uv.y)"));
+                    uv_bound = true;
+                    continue;
+                }
+                ("resolution" | "res", Type::Struct(sname))
+                    if is_vec2_f64_schema(sname, schema_map) =>
+                {
+                    args.push(format!("knr_s_{sname}(u.resolution.x, u.resolution.y)"));
+                    res_bound = true;
+                    continue;
+                }
+                ("mouse", Type::Struct(sname)) if is_vec2_f64_schema(sname, schema_map) => {
+                    args.push(format!("knr_s_{sname}(u.mouse.x, u.mouse.y)"));
+                    mouse_bound = true;
+                    continue;
+                }
+                ("time", Type::F64) => {
+                    args.push("u.time".to_string());
+                    time_bound = true;
+                    continue;
+                }
+                ("dt" | "delta_time", Type::F64) => {
+                    args.push("u.dt".to_string());
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        // 2. Positional & schema-name bindings (100% backwards-compatible with legacy shaders!)
         match (idx, ty) {
-            (0, Type::Struct(sname)) if schema_map.get(sname.as_str()).is_some_and(|s| s.fields.len() == 2) => {
+            (_, Type::Struct(sname))
+                if is_vec2_f64_schema(sname, schema_map)
+                    && (sname.eq_ignore_ascii_case("resolution")
+                        || sname.eq_ignore_ascii_case("res")) =>
+            {
+                args.push(format!("knr_s_{sname}(u.resolution.x, u.resolution.y)"));
+                res_bound = true;
+            }
+            (0, Type::Struct(sname)) if is_vec2_f64_schema(sname, schema_map) && !uv_bound => {
                 args.push(format!("knr_s_{sname}(in.uv.x, in.uv.y)"));
+                uv_bound = true;
             }
             (0, Type::F64) => {
                 args.push("in.uv.x".to_string());
+                first_was_uv_x = true;
             }
-            (1, Type::F64) => {
-                if matches!(entry.params.first().map(|(_, t)| t), Some(Type::F64)) {
-                    args.push("in.uv.y".to_string());
-                } else {
-                    args.push("u.time".to_string());
-                }
+            (1, Type::F64) if first_was_uv_x => {
+                args.push("in.uv.y".to_string());
             }
-            (2, Type::F64) if matches!(entry.params.first().map(|(_, t)| t), Some(Type::F64)) => {
+            (1, Type::F64)
+                if !time_bound && (pname.is_none() || matches!(pname, Some("t" | "elapsed"))) =>
+            {
                 args.push("u.time".to_string());
+                time_bound = true;
             }
-            (_, Type::Struct(sname)) if schema_map.get(sname.as_str()).is_some_and(|s| s.fields.len() == 2) => {
-                // Second Vec2 param -> mouse UV
+            (2, Type::F64)
+                if first_was_uv_x
+                    && !time_bound
+                    && (pname.is_none() || matches!(pname, Some("t" | "elapsed"))) =>
+            {
+                args.push("u.time".to_string());
+                time_bound = true;
+            }
+            (_, Type::Struct(sname))
+                if pname.is_none()
+                    && is_vec2_f64_schema(sname, schema_map)
+                    && !mouse_bound
+                    && custom_idx == 0 =>
+            {
+                // First extra Vec2 param before custom uniforms -> mouse UV
                 args.push(format!("knr_s_{sname}(u.mouse.x, u.mouse.y)"));
+                mouse_bound = true;
             }
-            (_, Type::F64) => {
-                let slot = custom_idx / 4;
-                let comp = ["x", "y", "z", "w"][custom_idx % 4];
-                if slot >= 4 {
-                    return Err(CodegenError::Wgsl(
-                        "Shader exceeds maximum 16 custom f64 uniform parameters".to_string(),
-                    ));
-                }
-                args.push(format!("u.params[{slot}].{comp}"));
-                custom_idx += 1;
+            (_, Type::Struct(sname))
+                if pname.is_none()
+                    && is_vec2_f64_schema(sname, schema_map)
+                    && mouse_bound
+                    && !res_bound
+                    && custom_idx == 0 =>
+            {
+                // Second extra Vec2 param before custom uniforms -> resolution
+                args.push(format!("knr_s_{sname}(u.resolution.x, u.resolution.y)"));
+                res_bound = true;
             }
-            (_, Type::I64) => {
-                let slot = custom_idx / 4;
-                let comp = ["x", "y", "z", "w"][custom_idx % 4];
-                if slot >= 4 {
-                    return Err(CodegenError::Wgsl(
-                        "Shader exceeds maximum 16 custom uniform parameters".to_string(),
-                    ));
-                }
-                args.push(format!("i32(u.params[{slot}].{comp})"));
-                custom_idx += 1;
-            }
-            (_, Type::Bool) => {
-                let slot = custom_idx / 4;
-                let comp = ["x", "y", "z", "w"][custom_idx % 4];
-                args.push(format!("(u.params[{slot}].{comp} > 0.5)"));
-                custom_idx += 1;
+            (_, Type::F64 | Type::I64 | Type::Bool | Type::Struct(_)) => {
+                args.push(unpack_custom_uniform(ty, schema_map, &mut custom_idx)?);
             }
             _ => {
                 return Err(CodegenError::Wgsl(format!(
@@ -461,8 +634,13 @@ fn wgsl_zero(ty: &Type, schema_map: &HashMap<&str, &Schema>) -> Result<String, C
             let sc = schema_map.get(name.as_str()).ok_or_else(|| {
                 CodegenError::Wgsl(format!("Unknown schema '{name}' in WGSL zero init"))
             })?;
-            let mut fields_zero = Vec::with_capacity(sc.fields.len());
-            for f in &sc.fields {
+            let mut fields_sorted: Vec<&knr_core::FieldDef> = sc.fields.iter().collect();
+            fields_sorted.sort_by_key(|f| f.index);
+            if fields_sorted.is_empty() {
+                return Ok(format!("knr_s_{name}(0i)"));
+            }
+            let mut fields_zero = Vec::with_capacity(fields_sorted.len());
+            for f in fields_sorted {
                 fields_zero.push(wgsl_zero(&f.ty, schema_map)?);
             }
             Ok(format!("knr_s_{name}({})", fields_zero.join(", ")))
@@ -470,6 +648,38 @@ fn wgsl_zero(ty: &Type, schema_map: &HashMap<&str, &Schema>) -> Result<String, C
         other => Err(CodegenError::Wgsl(format!(
             "Cannot zero-initialize '{other}' in WGSL"
         ))),
+    }
+}
+
+fn wgsl_eq_expr(
+    a_expr: &str,
+    b_expr: &str,
+    ty: &Type,
+    schema_map: &HashMap<&str, &Schema>,
+    depth: usize,
+) -> Result<String, CodegenError> {
+    if depth > 16 {
+        return Ok("true".to_string());
+    }
+    match ty {
+        Type::Struct(name) => {
+            let sc = schema_map.get(name.as_str()).ok_or_else(|| {
+                CodegenError::Wgsl(format!("Unknown schema '{name}' in WGSL equality"))
+            })?;
+            let mut fields_sorted: Vec<&knr_core::FieldDef> = sc.fields.iter().collect();
+            fields_sorted.sort_by_key(|f| f.index);
+            if fields_sorted.is_empty() {
+                return Ok("true".to_string());
+            }
+            let mut parts = Vec::with_capacity(fields_sorted.len());
+            for f in fields_sorted {
+                let fa = format!("{a_expr}.f{}", f.index);
+                let fb = format!("{b_expr}.f{}", f.index);
+                parts.push(wgsl_eq_expr(&fa, &fb, &f.ty, schema_map, depth + 1)?);
+            }
+            Ok(format!("({})", parts.join(" && ")))
+        }
+        _ => Ok(format!("({a_expr} == {b_expr})")),
     }
 }
 
@@ -605,15 +815,34 @@ fn emit_wgsl_inst(
     };
 
     match &inst.op {
-        Op::ConstI64(v) => assign(format!("{}i", (*v).clamp(i32::MIN as i64, i32::MAX as i64)), out),
+        Op::ConstI64(v) => {
+            let clamped = (*v).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+            let lit = if clamped == i32::MIN {
+                "(-2147483647i - 1i)".to_string()
+            } else {
+                format!("{clamped}i")
+            };
+            assign(lit, out);
+        }
         Op::ConstF64(v) => assign(format_f32_lit(*v), out),
         Op::ConstBool(b) => assign(if *b { "true" } else { "false" }.to_string(), out),
         Op::Add(a, b) => assign(format!("(r_{a} + r_{b})"), out),
         Op::Sub(a, b) => assign(format!("(r_{a} - r_{b})"), out),
         Op::Mul(a, b) => assign(format!("(r_{a} * r_{b})"), out),
         Op::Div(a, b) => assign(format!("(r_{a} / r_{b})"), out),
-        Op::Rem(a, b) => assign(format!("(r_{a} % r_{b})"), out),
-        Op::CmpEq(a, b) => assign(format!("(r_{a} == r_{b})"), out),
+        Op::Rem(a, b) => {
+            let ty_a = reg_types.get(a).unwrap_or(&inst.ty);
+            if *ty_a == Type::F64 || inst.ty == Type::F64 {
+                assign(format!("(r_{a} - r_{b} * floor(r_{a} / r_{b}))"), out);
+            } else {
+                assign(format!("(r_{a} % r_{b})"), out);
+            }
+        }
+        Op::CmpEq(a, b) => {
+            let ty_a = reg_types.get(a).unwrap_or(&Type::I64);
+            let expr = wgsl_eq_expr(&format!("r_{a}"), &format!("r_{b}"), ty_a, schema_map, 0)?;
+            assign(expr, out);
+        }
         Op::CmpLt(a, b) => assign(format!("(r_{a} < r_{b})"), out),
         Op::Sin(a) => assign(format!("sin(r_{a})"), out),
         Op::Cos(a) => assign(format!("cos(r_{a})"), out),
@@ -674,14 +903,21 @@ fn emit_wgsl_term(
 ) -> Result<(), CodegenError> {
     let emit_edge = |target: u32, args: &[RegId], ind: &str, out: &mut String| -> Result<(), CodegenError> {
         if let Some(t_blk) = block_map.get(&target) {
-            if !args.is_empty() {
+            let count = args.len().min(t_blk.params.len());
+            if count > 0 {
                 // Parallel copy via temp locals to avoid clobbering cycles
-                for (i, &arg) in args.iter().enumerate() {
-                    let ty = reg_types.get(&arg).cloned().unwrap_or(Type::F64);
+                for (i, (&arg, (_, pty))) in args[..count].iter().zip(&t_blk.params[..count]).enumerate() {
+                    if *pty == Type::Void {
+                        continue;
+                    }
+                    let ty = reg_types.get(&arg).cloned().unwrap_or_else(|| pty.clone());
                     let wty = wgsl_type(&ty)?;
                     writeln!(out, "{ind}let _tmp_{i}: {wty} = r_{arg};").unwrap();
                 }
-                for (i, (preg, _)) in t_blk.params.iter().enumerate() {
+                for (i, (preg, pty)) in t_blk.params[..count].iter().enumerate() {
+                    if *pty == Type::Void {
+                        continue;
+                    }
                     writeln!(out, "{ind}r_{preg} = _tmp_{i};").unwrap();
                 }
             }

@@ -88,7 +88,7 @@ fn test_cli_check_help_lists_graph() {
 
 #[test]
 fn test_cli_explore_directory_ai() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap()])
         .output()
@@ -105,7 +105,7 @@ fn test_cli_explore_directory_ai() {
 
 #[test]
 fn test_cli_explore_single_file_ai() {
-    let site_file = repo_root().join("site").join("site.ssa");
+    let site_file = repo_root().join("tests/fixtures/legacy_site").join("site.ssa");
     let output = knr_bin()
         .args(["explore", site_file.to_str().unwrap()])
         .output()
@@ -118,7 +118,7 @@ fn test_cli_explore_single_file_ai() {
 
 #[test]
 fn test_cli_explore_json() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--json"])
         .output()
@@ -134,7 +134,7 @@ fn test_cli_explore_json() {
 
 #[test]
 fn test_cli_explore_mermaid() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--format", "mermaid"])
         .output()
@@ -148,7 +148,7 @@ fn test_cli_explore_mermaid() {
 
 #[test]
 fn test_cli_explore_symbol_filters() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
 
     // Short flag -s
     let out_short = knr_bin()
@@ -171,7 +171,7 @@ fn test_cli_explore_symbol_filters() {
 
 #[test]
 fn test_cli_explore_callers_and_callees() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
 
     let out_callers = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--callers", "build_nav"])
@@ -194,7 +194,7 @@ fn test_cli_explore_callers_and_callees() {
 
 #[test]
 fn test_cli_explore_effects() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--effects", "ui"])
         .output()
@@ -206,7 +206,7 @@ fn test_cli_explore_effects() {
 
 #[test]
 fn test_cli_explore_orphans() {
-    let http_schema = repo_root().join("site").join("schemas").join("http.ssa.schema");
+    let http_schema = repo_root().join("tests/fixtures/legacy_site").join("schemas").join("http.ssa.schema");
     let output = knr_bin()
         .args(["explore", http_schema.to_str().unwrap(), "--orphans"])
         .output()
@@ -225,7 +225,7 @@ fn test_cli_explore_argument_errors() {
     assert!(!out_missing.status.success());
 
     // Conflicting --format and --json
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let out_conflict = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--format", "mermaid", "--json"])
         .output()
@@ -246,7 +246,7 @@ fn test_cli_explore_argument_errors() {
 
 #[test]
 fn test_cli_check_graph_valid_ai() {
-    let site_file = repo_root().join("site").join("site.ssa");
+    let site_file = repo_root().join("tests/fixtures/legacy_site").join("site.ssa");
     let output = knr_bin()
         .args(["check", site_file.to_str().unwrap(), "--graph"])
         .output()
@@ -259,7 +259,7 @@ fn test_cli_check_graph_valid_ai() {
 
 #[test]
 fn test_cli_check_graph_valid_json() {
-    let site_file = repo_root().join("site").join("site.ssa");
+    let site_file = repo_root().join("tests/fixtures/legacy_site").join("site.ssa");
     let output = knr_bin()
         .args(["check", site_file.to_str().unwrap(), "--json", "--graph"])
         .output()

@@ -1,0 +1,365 @@
+// GPU Shader Studio in Strict TSX (`examples/shader_studio.tsk`)
+// Pure `@shader` Kernels (`aurora_waves` + `plasma_orbit`) Compiled via `naga`
+//
+// Run live with hot-reload UI & WGSL shaders:
+//   knr dev examples/shader_studio.tsk --gui
+// Render headless PNG + visual audit:
+//   knr render examples/shader_studio.tsk --png /tmp/shader_studio.png --audit
+// Export standalone Web GPU + zero-import WASM app:
+//   knr build examples/shader_studio.tsk --target web -o dist_shader/
+// Run built-in deterministic unit tests:
+//   knr test examples/shader_studio.tsk
+
+import {
+    Column,
+    Row,
+    Grid,
+    Card,
+    Badge,
+    Text,
+    Button,
+    Input,
+    Slider,
+    Toggle,
+    Shader,
+    Icon,
+    Divider,
+} from "std/ui";
+
+// ============================================================================
+// 1. PURE GPU SHADERS WRITTEN DIRECTLY IN STRICT TSX
+// ============================================================================
+
+export function palette_cos(t: f64, phase: f64): f64 {
+    return 0.5 + 0.5 * cos(6.283185307179586 * (t + phase));
+}
+
+@shader
+export function aurora_waves(
+    uv: Vec2,
+    time: f64,
+    speed: f64,
+    intensity: f64,
+    zoom: f64,
+): Color {
+    const t = time * (0.24 + speed * 1.85);
+    const z = 0.8 + zoom * 2.2;
+    const x = (uv.x - 0.5) * z * 1.65;
+    const y = (uv.y - 0.5) * z;
+
+    const wx = x + 0.28 * sin(y * 2.4 + t * 0.72);
+    const wy = y + 0.24 * cos(x * 2.1 - t * 0.60);
+
+    const w1 = sin(wx * 3.1 + cos(wy * 2.5 - t * 0.65) + t * 0.55);
+    const w2 = cos(wy * 3.4 - wx * 2.0 + t * 0.78);
+    const w3 = sin((wx + wy) * 2.6 - t * 0.92);
+
+    const field = 0.5 + 0.5 * (w1 * 0.46 + w2 * 0.34 + w3 * 0.20);
+    const ribbon = smoothstep(0.18, 0.94, field);
+    const glow = ribbon * (0.34 + intensity * 0.82);
+
+    const r = clamp(0.028 + glow * palette_cos(ribbon * 0.5 + t * 0.06, 0.66) * 0.52, 0.0, 1.0);
+    const g = clamp(0.044 + glow * palette_cos(ribbon * 0.5 + t * 0.06, 0.14) * 0.84, 0.0, 1.0);
+    const b = clamp(0.095 + glow * palette_cos(ribbon * 0.5 + t * 0.06, 0.90) * 1.02, 0.0, 1.0);
+    return { r, g, b, a: 1.0 };
+}
+
+@shader
+export function plasma_orbit(
+    uv: Vec2,
+    time: f64,
+    speed: f64,
+    intensity: f64,
+    zoom: f64,
+): Color {
+    const t = time * (0.28 + speed * 2.0);
+    const z = 1.2 + zoom * 2.6;
+    const dx = (uv.x - 0.5) * z * 1.6;
+    const dy = (uv.y - 0.5) * z;
+    const dist = sqrt(dx * dx + dy * dy);
+
+    // Smooth branch-cut-free rotating harmonic interference
+    const ca = cos(t * 0.65);
+    const sa = sin(t * 0.65);
+    const rx = dx * ca - dy * sa;
+    const ry = dx * sa + dy * ca;
+
+    const rings = sin(dist * 6.2 - t * 2.2 + sin(rx * 2.6 + ry * 2.2) * 0.8);
+    const lobes = cos(rx * 3.4 - ry * 2.8 + cos(dist * 3.0 - t * 1.1));
+    const field = (0.5 + 0.5 * (rings * 0.55 + lobes * 0.45)) * (0.32 + intensity * 0.84);
+    const core = 0.20 / (dist * dist + 0.14);
+
+    const r = clamp(0.03 + field * 0.62 + core * 0.34, 0.0, 1.0);
+    const g = clamp(0.04 + field * 0.42 + core * 0.52, 0.0, 1.0);
+    const b = clamp(0.11 + field * 0.92 + core * 0.86, 0.0, 1.0);
+    return { r, g, b, a: 1.0 };
+}
+
+// ============================================================================
+// 2. MVU STATE, TICK, AND INTERACTIVE HANDLERS
+// ============================================================================
+
+export type State = {
+    shader_idx: i64;
+    speed: f64;
+    intensity: f64;
+    zoom: f64;
+    paused: bool;
+    elapsed: f64;
+    pulse: f64;
+    banner: string;
+};
+
+export function init(): State {
+    return {
+        shader_idx: 0,
+        speed: 0.48,
+        intensity: 0.76,
+        zoom: 0.42,
+        paused: false,
+        elapsed: 0.0,
+        pulse: 0.5,
+        banner: "knr GPU Shader Studio",
+    };
+}
+
+export function tick(s: State, dt: f64, _wall_elapsed: f64): State {
+    const next_elapsed = s.paused ? s.elapsed : s.elapsed + dt;
+    const next_pulse = 0.5 + 0.5 * sin(next_elapsed * 2.4);
+    return {
+        ...s,
+        elapsed: next_elapsed,
+        pulse: next_pulse,
+    };
+}
+
+export function update(s: State, action: string): State {
+    switch (action) {
+        case "shader_aurora":
+            return { ...s, shader_idx: 0 };
+        case "shader_plasma":
+            return { ...s, shader_idx: 1 };
+        case "toggle_pause":
+            return { ...s, paused: !s.paused };
+        case "preset_calm":
+            return { ...s, speed: 0.22, intensity: 0.60, zoom: 0.30 };
+        case "preset_hyper":
+            return { ...s, speed: 0.86, intensity: 0.94, zoom: 0.72 };
+        case "reset":
+            return init();
+        default:
+            return s;
+    }
+}
+
+export function on_slider(s: State, action: string, val: f64): State {
+    const v = clamp(val, 0.0, 1.0);
+    switch (action) {
+        case "slider_speed":
+            return { ...s, speed: v };
+        case "slider_intensity":
+            return { ...s, intensity: v };
+        case "slider_zoom":
+            return { ...s, zoom: v };
+        default:
+            return s;
+    }
+}
+
+export function on_input(s: State, action: string, text: string): State {
+    if (action === "input_banner") {
+        return { ...s, banner: text };
+    }
+    return s;
+}
+
+// ============================================================================
+// 3. DECLARATIVE TSX VIEW
+// ============================================================================
+
+export function view(s: readonly State): Widget {
+    const active_label = s.shader_idx === 0 ? "Aurora Waves" : "Plasma Orbit";
+    const speed_pct = toInt(s.speed * 100.0);
+    const intensity_pct = toInt(s.intensity * 100.0);
+    const zoom_pct = toInt(s.zoom * 100.0);
+
+    return (
+        <Column key="studio_root" w="full" bg="#06080f" p={28} gap={18}>
+            <Row align="center" justify="between" gap={12}>
+                <Column gap={6}>
+                    <Row align="center" gap={8}>
+                        <Icon name="sparkles" size={18} color="#38bdf8" />
+                        <Text size={26} weight="extrabold" font="display" letterSpacing={-0.6} color="#f8fafc">
+                            {s.banner}
+                        </Text>
+                    </Row>
+                    <Text size={14} color="#94a3b8">
+                        {`Active Kernel: ${active_label} | Speed ${speed_pct}% | Glow ${intensity_pct}% | Zoom ${zoom_pct}%`}
+                    </Text>
+                </Column>
+                <Badge bg="#0e1628" color="#38bdf8" border="#38bdf833">
+                    Strict TSX | Unified GPU Engine
+                </Badge>
+            </Row>
+
+            {s.shader_idx === 0 ? (
+                <Shader
+                    key="gpu_viewport_aurora"
+                    fn={aurora_waves}
+                    h={300}
+                    radius={16}
+                    border="#ffffff18"
+                    uniforms={[s.speed, s.intensity, s.zoom]}
+                />
+            ) : (
+                <Shader
+                    key="gpu_viewport_plasma"
+                    fn={plasma_orbit}
+                    h={300}
+                    radius={16}
+                    border="#ffffff18"
+                    uniforms={[s.speed, s.intensity, s.zoom]}
+                />
+            )}
+
+            <Grid cols={2} gap={16}>
+                <Card bg="#0b0f1c" border="#ffffff14" radius={14} p={20} gap={12}>
+                    <Row align="center" gap={8}>
+                        <Icon name="layers" size={16} color="#818cf8" />
+                        <Text size={16} weight="bold" color="#f8fafc">
+                            Shader Kernel & Presets
+                        </Text>
+                    </Row>
+                    <Row gap={8}>
+                        <Button
+                            onClick="shader_aurora"
+                            bg={s.shader_idx === 0 ? "#15233d" : "#0e1322"}
+                            border={s.shader_idx === 0 ? "#38bdf866" : "#ffffff14"}
+                            hoverBorder="#38bdf855"
+                            px={14}
+                            py={9}
+                            radius={9}
+                        >
+                            Aurora Waves
+                        </Button>
+                        <Button
+                            onClick="shader_plasma"
+                            bg={s.shader_idx === 1 ? "#1e1a3a" : "#0e1322"}
+                            border={s.shader_idx === 1 ? "#818cf866" : "#ffffff14"}
+                            hoverBorder="#818cf855"
+                            px={14}
+                            py={9}
+                            radius={9}
+                        >
+                            Plasma Orbit
+                        </Button>
+                    </Row>
+                    <Row gap={8}>
+                        <Button
+                            onClick="preset_calm"
+                            bg="#0e1322"
+                            border="#ffffff14"
+                            hoverBorder="#38bdf844"
+                            px={12}
+                            py={8}
+                            radius={8}
+                        >
+                            Calm Drift
+                        </Button>
+                        <Button
+                            onClick="preset_hyper"
+                            bg="#0e1322"
+                            border="#ffffff14"
+                            hoverBorder="#818cf844"
+                            px={12}
+                            py={8}
+                            radius={8}
+                        >
+                            Hyperdrive
+                        </Button>
+                        <Button
+                            onClick="reset"
+                            bg="#0e1322"
+                            border="#ffffff14"
+                            hoverBorder="#ffffff2a"
+                            px={12}
+                            py={8}
+                            radius={8}
+                        >
+                            Reset
+                        </Button>
+                    </Row>
+                    <Divider />
+                    <Text size={13} color="#94a3b8">
+                        Studio Headline (Live Input)
+                    </Text>
+                    <Input value={s.banner} onInput="input_banner" />
+                    <Toggle
+                        checked={s.paused}
+                        onToggle="toggle_pause"
+                        label="Freeze Simulation Clock"
+                    />
+                </Card>
+
+                <Card bg="#0b0f1c" border="#ffffff14" radius={14} p={20} gap={12}>
+                    <Row align="center" gap={8}>
+                        <Icon name="sliders" size={16} color="#38bdf8" />
+                        <Text size={16} weight="bold" color="#f8fafc">
+                            Live GPU Uniforms
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8">
+                        {`Wave Speed (${speed_pct}%)`}
+                    </Text>
+                    <Slider value={s.speed} onChange="slider_speed" />
+                    <Text size={13} color="#94a3b8">
+                        {`Glow Intensity (${intensity_pct}%)`}
+                    </Text>
+                    <Slider value={s.intensity} onChange="slider_intensity" />
+                    <Text size={13} color="#94a3b8">
+                        {`Spatial Zoom (${zoom_pct}%)`}
+                    </Text>
+                    <Slider value={s.zoom} onChange="slider_zoom" />
+                </Card>
+            </Grid>
+        </Column>
+    );
+}
+
+// ============================================================================
+// 4. BUILT-IN DETERMINISTIC UNIT TESTS (`knr test examples/shader_studio.tsk`)
+// ============================================================================
+
+export function test_studio_state_and_controls(): bool {
+    let s = init();
+    s = tick(s, 0.016, 0.016);
+    s = tick(s, 0.500, 0.516);
+    s = update(s, "shader_plasma");
+    s = on_slider(s, "slider_speed", 0.90);
+    s = on_input(s, "input_banner", "Custom Studio");
+    const v = view(s);
+    return (
+        s.elapsed > 0.5
+        && s.pulse >= 0.0
+        && s.pulse <= 1.0
+        && s.shader_idx === 1
+        && s.speed > 0.85
+        && s.banner === "Custom Studio"
+        && v.kind === "col"
+    );
+}
+
+export function test_studio_shaders_cpu_parity(): bool {
+    const uv1: Vec2 = { x: 0.5, y: 0.5 };
+    const c1 = aurora_waves(uv1, 1.25, 0.5, 0.8, 0.5);
+    const uv2: Vec2 = { x: 0.25, y: 0.75 };
+    const c2 = plasma_orbit(uv2, 2.0, 0.6, 0.9, 0.4);
+    return (
+        c1.a === 1.0
+        && c1.g >= 0.0
+        && c1.g <= 1.0
+        && c2.a === 1.0
+        && c2.b >= 0.0
+        && c2.b <= 1.0
+    );
+}

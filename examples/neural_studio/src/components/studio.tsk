@@ -1,0 +1,277 @@
+// ============================================================================
+// knr Neural Studio v0.4.0 -- Overview Studio View (`src/components/studio.tsk`)
+// ============================================================================
+
+import {
+    Column,
+    Row,
+    Grid,
+    Stack,
+    Card,
+    Badge,
+    Text,
+    Button,
+    Toggle,
+    Shader,
+    Icon,
+    Divider,
+    Progress,
+} from "std/ui";
+import {
+    Action,
+    State,
+    active_theme,
+    primary_btn_bg,
+    primary_btn_fg,
+    accent_text_color,
+    card_shadow_color,
+    studio_cols,
+    count_done_jobs,
+    count_active_jobs,
+    has_active_jobs,
+    total_epochs,
+    fast_latency_count,
+    next_active_id_or_zero,
+} from "../state.tsk";
+import { neural_aurora_field } from "../shaders.tsk";
+
+export function StudioView(s: readonly State): Widget {
+    const t = active_theme(s);
+    const { theme_idx } = s;
+    const accent_fg = accent_text_color(theme_idx);
+    const cta_bg = primary_btn_bg(theme_idx);
+    const cta_fg = primary_btn_fg(theme_idx);
+    const cols = studio_cols(s);
+    const total = s.jobs.length;
+    const done = count_done_jobs(s);
+    const active = count_active_jobs(s);
+    const epochs = total_epochs(s);
+    const fast_count = fast_latency_count(s);
+    const has_open = has_active_jobs(s);
+    const next_id = next_active_id_or_zero(s);
+    const completion = total > 0 ? toFloat(done) / toFloat(total) : 1.0;
+    const eff_energy = s.paused ? 0.12 : s.energy;
+    const eff_glow = s.pulse_active ? 1.0 : s.glow;
+    const sh = card_shadow_color(theme_idx);
+    return (
+        <Column key="ns_studio_view" w="full" gap={16}>
+            <Card
+                key="ns_hero_card"
+                w="full"
+                bg={t.surface}
+                border={t.border}
+                shadowColor={sh}
+                shadowBlur={16}
+                shadowY={6}
+                radius={t.radius_lg}
+                p={16}
+                gap={14}
+            >
+                <Stack key="ns_hero_shader_stack" w="full" radius={t.radius_md}>
+                    <Shader
+                        key="ns_hero_aurora"
+                        fn={neural_aurora_field}
+                        h={170}
+                        radius={12}
+                        uniforms={[eff_energy, s.hue, s.density, eff_glow]}
+                    />
+                    <Row
+                        key="ns_hero_badges"
+                        w="full"
+                        p={12}
+                        justify="between"
+                        align="center"
+                        z={2}
+                    >
+                        <Badge bg="#06080fe6" color="#f8fafc" border="#38bdf866">
+                            {s.paused ? "PAUSED" : "LIVE GPU"}
+                        </Badge>
+                        <Badge bg="#06080fe6" color="#38bdf8" border="#ffffff33">
+                            {s.pulse_active ? "PULSE ACTIVE" : `Pulses: ${s.pulse_count}`}
+                        </Badge>
+                    </Row>
+                </Stack>
+                <Row w="full" justify="between" align="center" gap={12}>
+                    <Column gap={4}>
+                        <Text size={20} weight="extrabold" font="display" color={t.text}>
+                            Linear Neural Compute & Shader Workbench
+                        </Text>
+                        <Text size={13} color={t.text_muted} lineHeight={1.45}>
+                            Zero-GC Strict TSX with std/theme, std/router, std/layout, std/cmd async timers, and live WGSL/GLSL kernels.
+                        </Text>
+                    </Column>
+                    <Row align="center" gap={8}>
+                        <Button
+                            key="btn_trigger_pulse"
+                            onClick={Action.TriggerPulse}
+                            bg={cta_bg}
+                            color={cta_fg}
+                            border={cta_bg}
+                            px={14}
+                            py={9}
+                            radius={9}
+                            gap={6}
+                            align="center"
+                        >
+                            <Icon name="send" size={14} color={cta_fg} />
+                            <Text size={13} weight="bold" color={cta_fg}>Pulse Cmd</Text>
+                        </Button>
+                        <Button
+                            key="btn_studio_pipeline"
+                            onClick={Action.RoutePipeline}
+                            bg={t.surface_alt}
+                            color={t.text}
+                            border={t.border}
+                            hoverBorder={t.accent}
+                            px={13}
+                            py={9}
+                            radius={9}
+                            gap={6}
+                            align="center"
+                        >
+                            <Icon name="database" size={14} color={accent_fg} />
+                            <Text size={13} weight="semibold" color={t.text}>
+                                Open Pipeline
+                            </Text>
+                        </Button>
+                    </Row>
+                </Row>
+            </Card>
+            <Grid key="ns_kpi_grid" cols={cols} gap={14}>
+                <Card
+                    key="ns_kpi_progress"
+                    bg={t.surface}
+                    border={t.border}
+                    shadowColor={sh}
+                    shadowBlur={14}
+                    shadowY={4}
+                    radius={t.radius_md}
+                    p={16}
+                    gap={8}
+                >
+                    <Row justify="between" align="center">
+                        <Text size={12} weight="bold" color={t.text_muted}>
+                            PIPELINE PROGRESS
+                        </Text>
+                        <Icon name="check" size={15} color={accent_fg} />
+                    </Row>
+                    <Text size={26} weight="extrabold" font="display" color={t.text}>
+                        {`${toInt(completion * 100.0)}%`}
+                    </Text>
+                    <Progress value={completion} h={6} color="linear(90, #38bdf8, #818cf8)" />
+                    <Text size={12} font="mono" color={t.text_muted}>
+                        {`${done}/${total} verified (${active} active)`}
+                    </Text>
+                </Card>
+                <Card
+                    key="ns_kpi_epochs"
+                    bg={t.surface}
+                    border={t.border}
+                    shadowColor={sh}
+                    shadowBlur={14}
+                    shadowY={4}
+                    radius={t.radius_md}
+                    p={16}
+                    gap={8}
+                >
+                    <Row justify="between" align="center">
+                        <Text size={12} weight="bold" color={t.text_muted}>TOTAL EPOCHS</Text>
+                        <Icon name="database" size={15} color={accent_fg} />
+                    </Row>
+                    <Text size={26} weight="extrabold" font="display" color={t.text}>
+                        {`${epochs} ep`}
+                    </Text>
+                    <Text size={12} font="mono" color={t.text_muted}>
+                        {has_open ? `Next queued job: #${next_id}` : "All queue jobs complete"}
+                    </Text>
+                </Card>
+                <Card
+                    key="ns_kpi_latency"
+                    bg={t.surface}
+                    border={t.border}
+                    shadowColor={sh}
+                    shadowBlur={14}
+                    shadowY={4}
+                    radius={t.radius_md}
+                    p={16}
+                    gap={8}
+                >
+                    <Row justify="between" align="center">
+                        <Text size={12} weight="bold" color={t.text_muted}>FAST SAMPLES</Text>
+                        <Icon name="chart" size={15} color={accent_fg} />
+                    </Row>
+                    <Text size={26} weight="extrabold" font="display" color={t.text}>
+                        {`${fast_count}/${s.latencies_ms.length} <= 18ms`}
+                    </Text>
+                    <Text size={12} font="mono" color={t.text_muted}>
+                        {`Route: ${s.route.current} (depth ${s.route.depth})`}
+                    </Text>
+                </Card>
+            </Grid>
+            <Card
+                key="ns_controls_bar"
+                w="full"
+                bg={t.surface}
+                border={t.border}
+                shadowColor={sh}
+                shadowBlur={14}
+                shadowY={4}
+                radius={t.radius_md}
+                p={16}
+                gap={12}
+            >
+                <Row w="full" justify="between" align="center" gap={12}>
+                    <Row align="center" gap={8}>
+                        <Icon name={s.paused ? "play" : "pause"} size={15} color={accent_fg} />
+                        <Text size={14} weight="bold" color={t.text}>
+                            Simulation & Shortcuts
+                        </Text>
+                    </Row>
+                    <Row align="center" gap={8}>
+                        <Toggle
+                            key="tgl_pause_sim"
+                            checked={s.paused}
+                            onToggle="TogglePause"
+                            label="Pause Clock"
+                            bg={t.surface_alt}
+                            color={t.text}
+                        />
+                        <Button
+                            key="btn_studio_shaders"
+                            onClick={Action.RouteShaders}
+                            bg={t.surface_alt}
+                            color={t.text}
+                            border={t.border}
+                            hoverBorder={t.accent}
+                            px={12}
+                            py={7}
+                            radius={8}
+                            gap={5}
+                            align="center"
+                        >
+                            <Icon name="sliders" size={13} color={accent_fg} />
+                            <Text size={12} weight="semibold" color={t.text}>Shader Deck</Text>
+                        </Button>
+                        <Button
+                            key="btn_reset_studio"
+                            onClick={Action.ResetAll}
+                            bg={t.surface_alt}
+                            color={t.text}
+                            border={t.border}
+                            hoverBorder={t.accent}
+                            px={12}
+                            py={7}
+                            radius={8}
+                        >
+                            Reset
+                        </Button>
+                    </Row>
+                </Row>
+                <Divider />
+                <Text size={12} font="mono" color={t.text_muted}>
+                    Keys: Ctrl+1 Studio | Ctrl+2 Pipeline | Ctrl+3 Shaders | Ctrl+T Theme | Space Pause
+                </Text>
+            </Card>
+        </Column>
+    );
+}

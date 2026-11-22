@@ -1,6 +1,6 @@
 // Error: UnknownSchema
-fn test_schema() -> void {
-    let s = NonExistentSchema {
+function test_schema(): void {
+    const s: NonExistentSchema = {
         field: 42,
     };
     return;

@@ -1,11 +1,11 @@
 // Error: UndeclaredField
-schema Point {
-    0: x i64,
-    1: y i64,
-}
+type Point = {
+    x: i64,
+    y: i64,
+};
 
-fn test_field() -> Point {
-    let pt = Point {
+function test_field(): Point {
+    const pt: Point = {
         x: 10,
         y: 20,
         unknown_z: 30,

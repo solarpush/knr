@@ -1,113 +1,146 @@
-# `knr` — Langage Linéaire Zero-GC, IR SSA Vérifiée, GPU UI & Multi-Cibles (v0.1.0)
+# `knr` — Strict TypeScript/TSX (`.tsk`), Zero-GC Linear SSA & Unified GPU Engine (v0.4.0)
 
-`knr` est un langage de programmation complet (`.knr`) compilant vers une représentation intermédiaire SSA linéaire vérifiée statiquement (`.ssa` / `.knrbin`), conçu pour l'exécution système, réseau et graphique GPU **sans Garbage Collector ni annotations de durée de vie (`'a`)**, et pensé dès l'origine pour le tooling et les agents IA.
+`knr` is an **Agentic Flutter** cross-platform programming language with a **Strict TypeScript / TSX** surface syntax (`.tsk` — zero `tsserver` conflicts) compiling to a canonical monotonic SSA IR (`.ssa` / `.knrbin`). It delivers zero-GC memory safety without lifetime annotations (`'a`), a **Unified GPU UI Engine** across Desktop, Web, and Headless PNG, a built-in **MCP Server (`knr mcp`)** with 8 native tools, and a complete **Agentic Verification, Flow & Visual Audit Loop** (`knr explore` · `knr check` · `knr fix` · `knr fmt` · `knr test` · `knr bench` · `knr doctor` · `knr render --flow --viewports --diff-out --assert-audit`).
 
-📄 **Spécification** : voir [`SPEC.md`](./SPEC.md) · 🤖 **Skill IA** : voir [`.agents/skills/knr-ssa/SKILL.md`](./.agents/skills/knr-ssa/SKILL.md).
+Spec: [`SPEC.md`](./SPEC.md) | AI Agent Skill: [`.agents/skills/knr-ssa/SKILL.md`](./.agents/skills/knr-ssa/SKILL.md) | Flagship v0.4.0 App: [`examples/neural_studio/`](./examples/neural_studio/)
 
 ---
 
-## Installation & Mise à jour
+## Installation & Updates
 
-Binaires précompilés disponibles pour **Linux (`x86_64`, `aarch64`)** et **macOS Apple Silicon (`aarch64`)** (inclut `knr` + `libknr_runtime.a` pour compiler en natif sans installer Rust) :
+Prebuilt binaries for **Linux (`x86_64`, `aarch64`)** and **macOS Apple Silicon (`aarch64`)** bundle `knr` + `libknr_runtime.a` so you can build standalone native binaries without installing Rust:
 
 ```bash
-# Installer la dernière version publiée sur GitHub Releases (dans ~/.local/bin)
+# Install the latest release into ~/.local/bin
 curl -fsSL https://raw.githubusercontent.com/solarpush/knr/main/install.sh | sh
 
-# Installer une version précise (ex: v0.1.0) ou choisir le dossier d'installation
-curl -fsSL https://raw.githubusercontent.com/solarpush/knr/main/install.sh | KNR_VERSION=v0.1.0 KNR_INSTALL_DIR="$HOME/.local/bin" sh
+# Pin a specific version or install directory
+curl -fsSL https://raw.githubusercontent.com/solarpush/knr/main/install.sh | KNR_VERSION=v0.4.0 KNR_INSTALL_DIR="$HOME/.local/bin" sh
 
-# Vérifier les mises à jour et mettre à jour depuis la CLI
+# Verify environment health & self-update
+knr doctor
 knr update --check
 knr update
 ```
 
 ---
 
-## Caractéristiques Clés (v0.1.0)
+## What's New in v0.4.0
 
-- **Source ergonomique `.knr` → IR SSA canonique `.ssa` / `.knrbin`** : Boucles `while` (`break`/`continue`), variables mutables par paramètres de blocs SSA, `schema` / `enum` + `match` exhaustif, `if`/`else` expressions, spread de structs (`Style { bg: #111827, ..style_card() }`), littéraux couleur `#hex`, et imports multi-fichiers `.knr`.
-- **Sécurité Mémoire Sans GC ni Lifetimes** : Propriété linéaire unique + auto-drop déterministe en fin de scope + **emprunts de seconde classe (`&T`)** qui permettent de lire une structure sans la déplacer et interdisent statiquement toute fuite (`BorrowEscape`) en moins de 100 µs.
-- **Système d'Effets Explicite** : Contrôle statique et transitif des capacités (`Net`, `Ui`, `Hw`, `Async`).
-- **Bibliothèques Standard Intégrées (`std/*`)** : Intégrées directement dans `knr-core` (aucun chemin relatif requis) :
-  - `import "std/ui";` — Primitives UI déclaratives non contraintes (`Widget`, `Style` 40 champs, `Color`, `Vec2`, Flex/Grid, dégradés, ombres, `backdrop_blur`).
-  - `import "std/anim";` — Courbes d'easing, interpolation et amortissement purs pour animations 60/120 FPS.
-  - `import "std/math";` — Fonctions mathématiques 2D/3D et primitives SDF à parité CPU/GPU (`sin`, `cos`, `sqrt`, `atan2`, `smoothstep`, `smin`, `clamp`, `lerp`/`mix`).
-  - `import "std/sys";` — Primitives système natives : système de fichiers (lecture/écriture), JSON et client HTTP.
-- **UI GPU Non Contrainte (`wgpu 23`) & Compilateur de Shaders `.knr` (`shader fn`)** :
-  - **Moteur GPU natif (`wgpu 23`)** : Rendu Vulkan / Metal / DX12 avec quads SDF analytiques, `backdrop_blur` Dual Kawase et atlas de glyphes GPU, avec **fallback CPU automatique** (`softbuffer` + `tiny-skia` + `ab_glyph`) et mode headless déterministe (`KNR_HEADLESS=1`).
-  - **Shaders GPU écrits en pur `.knr`** : Déclarez `shader fn my_fx(uv: Vec2, time: f64, ...) -> Color`, vérifiés GPU-purs par `knr-verify` puis compilés et validés par **`naga`** vers **WGSL** (Desktop `wgpu` + WebGPU) et **GLSL ES 3.00** (WebGL2 universel dans le navigateur).
-- **Compilation Multi-Cibles (Parité VM == Natif Cranelift == WebAssembly == Web)** :
-  - **Binaires natifs autonomes (`--target native` et `--target native --gui`)** : Compilés AOT via Cranelift et liés statiquement contre `libknr_runtime.a` (serveurs HTTP Tokio, outils CLI/système et applications Desktop autonomes).
-  - **WebAssembly autonome (`--target wasm`)** : Allocateur linéaire, structs, chaînes et vecteurs embarqués dans le `.wasm` (**zéro import JS requis**).
-  - **Applications Web complètes (`--target web`)** : Exporte `index.html` (SSR initial + pont WebGPU/WebGL2) + `app.wasm` autonome (zéro HTML/CSS/GLSL écrit à la main).
-- **Hot-Reload Live, LSP & Extensions Éditeurs** :
-  - **Hot-reload Desktop & Shaders (`knr dev app.knr --gui`)** : Recompilation et mise à jour instantanées de l'UI MVU et des shaders WGSL à chaque sauvegarde.
-  - **Serveur LSP intégré (`knr lsp`)** : Diagnostics temps réel, complétion (`std/*`, champs `Style`/`Widget`, mots-clés), hover, go-to-definition et symboles sur stdio (JSON-RPC 2.0).
-  - **Extensions éditeurs** : Support prêt à l'emploi pour VS Code ([`editors/vscode`](./editors/vscode)), Neovim ([`editors/neovim`](./editors/neovim)) et Zed ([`editors/zed`](./editors/zed)).
-- **Outillage AI-First** : `knr explore` (`--format ai|json|mermaid`), `knr check --json`, `knr test --json`, `knr skill`, `knr asm`/`disasm`.
+- **Expressive Strict TSX Language & Module Ergonomics**:
+  - Full functional collection suite lowered to verified monotonic SSA loops: `.map((item, idx) => ...)`, `.filter((item, idx) => ...)` (Copy arrays), `.reduce((acc, item, idx) => ..., init)`, `.some`, `.every`, `.count`, `.findIndex`, `.includes`, `.indexOf`, `.flatMap`, `.slice`, `.concat`, and `.reverse`.
+  - Non-consuming **object & array destructuring** (`const { theme_idx, viewport_w } = s;`, `const [a, b] = arr;`), **nullish coalescing `??`** on `Option<T>` / `Result<T, E>`, and compiler-enforced **exhaustive enum matching** (`NonExhaustiveMatch`).
+  - Ergonomic modular imports: extension-less imports (`"./state"`), `as` aliases, `* as ns` namespace imports, barrel re-exports (`export { ... } from ...` / `export * from ...` / `index.tsk`), and `knr.toml` package imports.
+- **10 Built-in Standard Library Modules (`std/*`)**:
+  - Added **`std/theme`** (`Theme`, `theme_obsidian`, `theme_light`, `theme_nord`, `theme_solar`), **`std/router`** (`Route`, `router_init`, `router_push`, `router_back`, `router_replace`, `router_is`, `router_can_back`), **`std/layout`** (`is_compact`, `is_medium`, `is_wide`, `responsive_cols`, `responsive_pad`), and **`std/testing`** (`assert_eq_i64`, `assert_near`, `assert_str_eq`, `assert_true`, `assert_false`, `assert_gt`, `assert_lt`) alongside `std/ui`, `std/core`, `std/cmd`, `std/math`, `std/anim`, and `std/sys`.
+- **Unified GPU Engine, Spring Physics, 67 Icons & Visual Auditor Pro v2**:
+  - `z_index` (`z={...}`) layer sorting, horizontal & vertical `<Scroll>` clipping (`overflow="scroll"` / `"scroll-x"`), critically-damped **spring physics** (`UiAnimator` / `spring_step`), **67 crisp analytical vector icons**, full keyboard accessibility (`Tab`/`Shift+Tab` focus ring + `on_key(s, key)` shortcuts + `on_resize(s, w, h)` responsive callback), and **16-uniform GPU `@shader` buffers** with automatic `res`/`resolution: Vec2` and `dt: f64` binding.
+  - **Visual Auditor Pro v2** adds `DuplicateKey`, `TextTruncation`, `EmptyInteractiveAction`, `OffscreenInteractive`, and a structured `AccessibilitySummary` (`focusable_count`, `interactive_keys`, `min_contrast_ratio`, `duplicate_keys`).
+- **Built-in MCP Server, E2E Flows, Multi-Viewport Audit, Benchmarks & IDE-Ultra LSP**:
+  - **`knr mcp`**: Native Model Context Protocol (2024-11-05) JSON-RPC 2.0 server over stdio exposing **8 native AI tools** (`knr_check`, `knr_explore`, `knr_test`, `knr_render_audit`, `knr_fmt`, `knr_fix`, `knr_bench`, `knr_get_skill`).
+  - **`knr render --flow` / `--viewports` / `--diff-out`**: Declarative E2E user-journey JSON scripts, single-command responsive audits (`mobile,tablet,desktop` or `WxH`), and 3-panel magenta visual regression diff PNGs.
+  - **`knr doctor`**, **`knr bench`**, and **`knr new --template app|dashboard|shader|ui|minimal`**.
+  - **IDE-Ultra `knr lsp`**: Cross-file hover, Go-to-Definition, completions & auto-imports, Find References, Safe Rename, QuickFix CodeActions, Format Document, **SignatureHelp**, **InlayHints**, **WorkspaceSymbol**, and **FoldingRange**.
 
 ---
 
-## Démarrage Rapide
+## Quick Start & Agentic Workflow
 
 ```bash
-# 1. Vérifier statiquement un projet multi-fichiers .knr (diagnostics JSON optionnels)
-knr check examples/counter_app.knr --json
+# 0. Verify environment health or scaffold a new modular project
+knr doctor
+knr new my_studio --template dashboard
 
-# 2. Exécuter les tests unitaires déterministes (sans navigateur ni réseau)
-knr test examples/counter_app.knr
+# 1. Map project architecture, symbols, callers, and effects in one shot
+knr explore examples/neural_studio/ --format ai
 
-# 3. Lancer une app GPU UI MVU + shaders en fenêtre native Desktop (wgpu + fallback CPU)
-knr run examples/raymarch_3d.knr --gui
+# 2. Verify SSA, linear ownership, readonly borrows, exhaustive enums, effects & @shader purity (< 100 us)
+knr check examples/neural_studio/src/app.tsk --json
+knr fix broken.tsk --write --json
+knr fmt --check examples/neural_studio/
 
-# 4. Développer en live avec hot-reload UI & shaders WGSL
-knr dev examples/shader_studio.knr --gui
+# 3. Run deterministic unit tests & VM/Cranelift JIT/WASM benchmarks
+knr test examples/neural_studio/src/app.tsk
+knr bench examples/neural_studio/src/app.tsk
 
-# 5. Compiler en binaire natif autonome (CLI / serveur HTTP ou application Desktop GUI)
-knr build examples/http_server.knr --target native -o ./http_server
-knr build examples/raymarch_3d.knr --target native --gui -o ./raymarch_3d
+# 4. Headless E2E user-flow journey, multi-viewport audit & visual diff regression check
+knr render examples/neural_studio/src/app.tsk --flow examples/neural_studio/flow.json --assert-audit
+knr render examples/neural_studio/src/app.tsk --viewports mobile,desktop --assert-audit
+knr render site/app.tsk --baseline /tmp/ref.png --diff-out /tmp/diff.png --assert-audit
 
-# 6. Exporter en WebAssembly zéro-import ou application Web complète (SSR + WASM + WebGPU/WebGL2)
-knr build examples/counter_app.knr --target wasm -o counter.wasm
-knr build site/site.knr --target web -o dist_site/
+# 5. Launch native GPU desktop studio with live hot-reload
+knr dev examples/neural_studio/src/app.tsk --gui
+knr dev site/app.tsk --gui
 
-# 7. Explorer l'architecture et le graphe d'appels d'un projet (format AI / JSON / Mermaid)
-knr explore examples/raymarch_3d.knr --format ai
+# 6. Compile standalone native binary, zero-import WASM, or Unified Web GPU bundle
+knr build examples/http_server.tsk --target native -o ./http_server
+knr build examples/raymarch_3d.tsk --target native --gui -o ./raymarch_3d
+knr build examples/counter_app.tsk --target wasm -o counter.wasm
+knr build site/app.tsk --target web -o dist_site/
 ```
 
 ---
 
-## Exemples Inclus
+## Built-in AI Agent MCP Server (`knr mcp`)
 
-| Exemple | Description | Commandes |
-| :--- | :--- | :--- |
-| [`examples/counter_app.knr`](./examples/counter_app.knr) | App MVU interactive (`UiNode`, emprunts `&State`, tests déterministes) | `knr run examples/counter_app.knr --gui` · `knr test examples/counter_app.knr` |
-| [`examples/http_server.knr`](./examples/http_server.knr) | Serveur HTTP SSR multi-fichiers compilé en binaire natif autonome (Cranelift + Tokio) | `knr build examples/http_server.knr --target native -o ./http_server` |
-| [`examples/shader_studio.knr`](./examples/shader_studio.knr) | Studio de shaders GPU 2D en pur `.knr` (`aurora_waves`, `plasma_orbit` → WGSL + WebGL2) | `knr dev examples/shader_studio.knr --gui` · `knr build examples/shader_studio.knr --target web -o dist_shader/` |
-| [`examples/raymarch_3d.knr`](./examples/raymarch_3d.knr) | Démo flagship de Raymarching SDF 3D temps réel (`std/ui` + `std/math` + `shader fn`) | `knr run examples/raymarch_3d.knr --gui` · `knr build examples/raymarch_3d.knr --target native --gui -o ./raymarch_3d` |
-| [`examples/sys_demo.knr`](./examples/sys_demo.knr) | Démonstration `std/sys` : système de fichiers, parsing/sérialisation JSON et client HTTP | `knr run examples/sys_demo.knr` · `knr build examples/sys_demo.knr --target native -o ./sys_demo` |
-| [`site/site.knr`](./site/site.knr) | Site vitrine officiel de `knr` avec shader GPU `knr_hero_nebula` (zéro HTML/CSS/GLSL) | `knr run site/site.knr --gui` · `knr build site/site.knr --target web -o dist_site/` |
+Register `knr mcp` directly in Claude Code, Cursor, Windsurf, or Antigravity (run `make mcp-info` to print this snippet):
+
+```json
+{
+  "mcpServers": {
+    "knr": {
+      "command": "knr",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+| MCP Tool | Capability |
+| :--- | :--- |
+| `knr_check` | 4-pass static verifier + `naga` WGSL/GLSL shader validation with JSON diagnostics |
+| `knr_explore` | Project graph, schemas, callers/callees, `@effects` boundaries, and orphans |
+| `knr_test` | Deterministic VM test discovery and execution with mocked effects |
+| `knr_render_audit` | Headless HiDPI render + interaction simulation + Visual Auditor Pro v2 (+ optional base64 PNG) |
+| `knr_fmt` | Canonical `.tsk`/`.knr` formatter and check mode |
+| `knr_fix` | Deterministic compiler-verified QuickFix auto-healer |
+| `knr_bench` | VM gas/steps, Cranelift JIT native latency & speedup, and `.knrbin`/`.wasm` binary sizes |
+| `knr_get_skill` | Returns the complete embedded `SKILL.md` language & toolchain reference |
 
 ---
 
-## Support Éditeurs & Serveur LSP (`knr lsp`)
+## Included Examples
 
-`knr` embarque un serveur Language Server Protocol (`knr lsp`) sans dépendance externe, utilisable directement avec les extensions fournies :
-
-- **VS Code** : [`editors/vscode`](./editors/vscode) — Coloration syntaxique TextMate `.knr`/`.ssa`, snippets et client LSP automatique.
-- **Neovim** : [`editors/neovim`](./editors/neovim) — Configuration `nvim-lspconfig` / `vim.lsp` et détection filetype `.knr`.
-- **Zed** : [`editors/zed`](./editors/zed) — Extension langage `.knr` connectée à `knr lsp`.
+| Example | Description | Commands |
+| :--- | :--- | :--- |
+| [`examples/neural_studio/`](./examples/neural_studio/) | **v0.4.0 Multi-File Flagship**: `knr.toml`, barrel `index.tsk`, `std/theme` (4 live themes), `std/router`, `std/layout`, `std/cmd`, `std/testing`, `on_key`/`on_resize`, functional array ops, 2 GPU `@shader` kernels (`res: Vec2` + 40-step 3D SDF orb), E2E `flow.json` | `knr dev examples/neural_studio/src/app.tsk --gui` · `knr render examples/neural_studio/src/app.tsk --flow examples/neural_studio/flow.json --assert-audit` |
+| [`examples/task_studio.tsk`](./examples/task_studio.tsk) | **Single-File Studio**: `.map()` dynamic lists, typed `enum Action`, `Option<i64>`, async `std/cmd`, clipped `<Scroll>`, decoded `<Image>`, `@shader` | `knr dev examples/task_studio.tsk --gui` · `knr render examples/task_studio.tsk --click btn_complete_next -o /tmp/tasks.png --assert-audit` |
+| [`examples/counter_app.tsk`](./examples/counter_app.tsk) | Interactive Strict TSX MVU counter (`readonly State`, `<Icon>`, deterministic tests) | `knr test examples/counter_app.tsk` · `knr render examples/counter_app.tsk -o /tmp/counter.png --assert-audit` |
+| [`examples/raymarch_3d.tsk`](./examples/raymarch_3d.tsk) | 48-step 3D SDF raymarching flagship (`std/ui` + `std/math` + `@shader`) | `knr run examples/raymarch_3d.tsk --gui` · `knr build examples/raymarch_3d.tsk --target native --gui -o ./raymarch_3d` |
+| [`examples/shader_studio.tsk`](./examples/shader_studio.tsk) | Dual-kernel 2D GPU shader workbench (`aurora_waves`, `plasma_orbit` -> WGSL + GLSL ES 3.00) | `knr dev examples/shader_studio.tsk --gui` · `knr build examples/shader_studio.tsk --target web -o dist_shader/` |
+| [`examples/http_server.tsk`](./examples/http_server.tsk) | Multi-file native HTTP server (`@effects("net")`, `enum Route`, Cranelift + Tokio) | `knr build examples/http_server.tsk --target native -o ./http_server` |
+| [`examples/sys_demo.tsk`](./examples/sys_demo.tsk) | `std/sys` demonstration (`@effects("hw")`: filesystem + JSON validation/extraction) | `knr run examples/sys_demo.tsk` · `knr test examples/sys_demo.tsk` |
+| [`site/app.tsk`](./site/app.tsk) | Official modular `knr` showcase in 100% pure `.tsk` with 3 live GPU shaders | `knr dev site/app.tsk --gui` · `knr build site/app.tsk --target web -o site/` |
 
 ---
 
-## Architecture du Workspace
+## Editor Support & IDE-Ultra Built-in LSP (`knr lsp`)
 
-| Crate | Chemin | Rôle |
+`knr` ships a zero-dependency JSON-RPC 2.0 Language Server (`knr lsp`) dedicated to `.tsk`, `.knr`, `.ssa`, and `.ssa.schema` (diagnostics, cross-file hover/definition/references/rename/completions/auto-import, SignatureHelp, InlayHints, WorkspaceSymbol, FoldingRange, QuickFix CodeActions, and Format Document):
+
+- **VS Code**: [`editors/vscode`](./editors/vscode) — Zero-npm extension with full Strict TSX TextMate grammar (`source.tsk`).
+- **Neovim 0.10+**: [`editors/neovim`](./editors/neovim) — Drop-in `vim.lsp` + Tree-sitter TSX plugin with `:KnrLspRestart`.
+- **Zed**: [`editors/zed`](./editors/zed) — Dev extension wired exclusively to `knr lsp`.
+
+---
+
+## Workspace Architecture
+
+| Crate | Path | Role |
 | :--- | :--- | :--- |
-| **`knr-core`** | `crates/knr-core` | Syntaxe `.knr`, bibliothèques standard intégrées (`std/ui`, `std/anim`, `std/math`, `std/sys`), AST SSA (`&T`, `enum`/`match`, `shader fn`), abaissement, `explore`, codec binaire `.knrbin` |
-| **`knr-verify`** | `crates/knr-verify` | Vérificateur statique en 4 passes (SSA, propriété linéaire + emprunts `&T`, types, effets, pureté GPU `shader fn`) + diagnostics JSON |
-| **`knr-interp`** | `crates/knr-interp` | Machine virtuelle déterministe de référence avec gas metering et traces pas à pas |
-| **`knr-runtime`** | `crates/knr-runtime` | Runtime Rust (`rlib` + `staticlib` C-ABI sans `wgpu` par défaut) : `Net` (Tokio), `Hw`, `Sys` (FS/JSON/HTTP), moteur GPU `wgpu 23` (feature `gpu`) + fallback CPU `winit`/`softbuffer`/`tiny-skia`/`ab_glyph` + headless (`KNR_HEADLESS=1`) |
-| **`knr-codegen`** | `crates/knr-codegen` | Backends AOT & JIT Cranelift natif, WebAssembly autonome (`wasm-encoder`), et compilateur de shaders `.knr` → WGSL / GLSL ES 3.00 validés par `naga` |
-| **`knr-cli`** | `crates/knr-cli` | CLI unifiée `knr` (`check`, `test`, `run`, `build`, `dev`, `lsp`, `explore`, `asm`, `disasm`, `init`, `new`, `skill`, `update`) |
+| **`knr-core`** | `crates/knr-core` | Strict TSX (`.tsk`) parser, generics monomorphizer, functional array & destructuring lowering, `??`, barrel/alias/namespace/package imports, canonical formatter, 10 built-in `std/*` modules, `explore`, lossless `.knrbin` codec |
+| **`knr-verify`** | `crates/knr-verify` | Sub-100 us 4-pass static verifier (SSA, linear ownership + `readonly` borrows, exhaustive enums, types, `@effects`, GPU purity) + JSON diagnostics |
+| **`knr-interp`** | `crates/knr-interp` | Deterministic gas-metered reference VM with step-by-step tracing and mocked effects |
+| **`knr-runtime`** | `crates/knr-runtime` | Rust runtime (`rlib` + `staticlib` C-ABI): `Net` (Tokio), `Hw`/`Sys`, Unified GPU Engine (`wgpu` + CPU fallback + `z_index` sorting + spring physics + 67 vector icons + H/V `<Scroll>` + keyboard focus/shortcuts + `<Image>` + async `UiCmd` + Visual Auditor Pro v2) |
+| **`knr-codegen`** | `crates/knr-codegen` | Cranelift native AOT/JIT, zero-import WebAssembly (`wasm-encoder` with `__knr_heap` arena reset), and `naga`-validated WGSL / GLSL ES 3.00 shader compiler (16 uniforms + `res`/`dt` auto-binding) |
+| **`knr-cli`** | `crates/knr-cli` | Unified `knr` CLI (`mcp`, `doctor`, `bench`, `explore`, `check`, `fix`, `fmt`, `test`, `render`, `run`, `dev`, `build`, `lsp`, `asm`, `disasm`, `init`, `new`, `skill`, `update`) |

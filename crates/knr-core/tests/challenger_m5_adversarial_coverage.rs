@@ -59,7 +59,7 @@ impl Drop for TempDir {
 #[test]
 fn test_adv_syntax_pratt_precedence_hierarchy_and_left_associativity() {
     // Left-associativity of Sub: a - b - c - d => (((a - b) - c) - d)
-    let src = "fn test(a: i64, b: i64, c: i64, d: i64) -> i64 { return a - b - c - d; }";
+    let src = "function test(a: i64, b: i64, c: i64, d: i64): i64 { return a - b - c - d; }";
     let prog = parse_knr(src).expect("parse sub chain");
     if let knr_core::syntax::ast::Declaration::Function(ref f) = prog.declarations[0] {
         if let StmtKind::Return { value: Some(ref expr) } = f.body.stmts[0].kind {
@@ -86,7 +86,7 @@ fn test_adv_syntax_pratt_precedence_hierarchy_and_left_associativity() {
     }
 
     // Precedence: Mul precedes Add: 2 + 3 * 4 => 2 + (3 * 4)
-    let src2 = "fn test() -> i64 { return 2 + 3 * 4; }";
+    let src2 = "function test(): i64 { return 2 + 3 * 4; }";
     let prog2 = parse_knr(src2).expect("parse precedence");
     if let knr_core::syntax::ast::Declaration::Function(ref f) = prog2.declarations[0] {
         if let StmtKind::Return { value: Some(ref expr) } = f.body.stmts[0].kind {
@@ -98,8 +98,8 @@ fn test_adv_syntax_pratt_precedence_hierarchy_and_left_associativity() {
         }
     }
 
-    // Relational precedes Equality: a < b == c > d => (a < b) == (c > d)
-    let src3 = "fn test(a: i64, b: i64, c: i64, d: i64) -> bool { return a < b == c > d; }";
+    // Relational precedes Equality: a < b === c > d => (a < b) === (c > d)
+    let src3 = "function test(a: i64, b: i64, c: i64, d: i64): bool { return a < b === c > d; }";
     let prog3 = parse_knr(src3).expect("parse rel vs eq");
     if let knr_core::syntax::ast::Declaration::Function(ref f) = prog3.declarations[0] {
         if let StmtKind::Return { value: Some(ref expr) } = f.body.stmts[0].kind {
@@ -115,7 +115,7 @@ fn test_adv_syntax_pratt_precedence_hierarchy_and_left_associativity() {
 #[test]
 fn test_adv_syntax_lexer_string_escapes_and_unterminated_rejection() {
     // Valid escapes: \n, \t, \r, \", \\
-    let src = r#"let s = "line1\nline2\ttabbed\r\n\"quote\"\\backslash";"#;
+    let src = r#"const s = "line1\nline2\ttabbed\r\n\"quote\"\\backslash";"#;
     let mut lexer = knr_core::syntax::lexer::Lexer::new(src);
     let tokens = lexer.tokenize_all().expect("tokenize valid string escapes");
     let str_tok = tokens
@@ -127,33 +127,39 @@ fn test_adv_syntax_lexer_string_escapes_and_unterminated_rejection() {
     }
 
     // Unterminated string literal rejected
-    let unclosed = r#"let s = "unclosed string without end;"#;
+    let unclosed = r#"const s = "unclosed string without end;"#;
     let mut lexer_unclosed = knr_core::syntax::lexer::Lexer::new(unclosed);
     let err = lexer_unclosed.tokenize_all().unwrap_err();
-    assert!(matches!(err, ParseError::UnterminatedString { .. }));
+    assert!(
+        matches!(err, ParseError::InvalidSyntax { ref msg, .. } if msg.contains("Unterminated")),
+        "Expected unterminated string error, got: {err:?}"
+    );
 
     // Unterminated escape at EOF
-    let bad_esc = r#"let s = "ends with backslash\"#;
+    let bad_esc = r#"const s = "ends with backslash\"#;
     let mut lexer_esc = knr_core::syntax::lexer::Lexer::new(bad_esc);
     let err_esc = lexer_esc.tokenize_all().unwrap_err();
-    assert!(matches!(err_esc, ParseError::UnterminatedString { .. }));
+    assert!(
+        matches!(err_esc, ParseError::InvalidSyntax { ref msg, .. } if msg.contains("Unterminated")),
+        "Expected unterminated escape error, got: {err_esc:?}"
+    );
 }
 
 #[test]
 fn test_adv_syntax_comments_and_whitespace_invariance() {
     // Comment at EOF without trailing newline
-    let src = "// initial comment\nfn test() -> void {}\n// comment at eof";
+    let src = "// initial comment\nfunction test(): void {}\n// comment at eof";
     let prog = parse_knr(src).expect("parse with EOF comment");
     assert_eq!(prog.declarations.len(), 1);
 
     // Comments between operands
     let src2 = r#"
-        fn add(
+        function add(
             // comment in params
             a: i64,
             // another comment
             b: i64
-        ) -> i64 {
+        ): i64 {
             return a // inline comment
                 + // another comment
                 b;
@@ -165,7 +171,7 @@ fn test_adv_syntax_comments_and_whitespace_invariance() {
 
 #[test]
 fn test_adv_syntax_spans_and_merging_accuracy() {
-    let src = "fn calc() -> i64 {\n    let val = 100 + 200;\n    return val;\n}";
+    let src = "function calc(): i64 {\n    const val = 100 + 200;\n    return val;\n}";
     let prog = parse_knr(src).expect("parse spans");
     assert_eq!(prog.span.start, 0);
     assert_eq!(prog.span.line, 1);
@@ -184,9 +190,9 @@ fn test_adv_syntax_spans_and_merging_accuracy() {
 #[test]
 fn test_adv_lower_monotonic_register_synthesis_no_gaps() {
     let src = r#"
-        fn complex_math(a: i64, b: i64, c: i64) -> i64 {
-            let x = a + b * c - (a - b);
-            let y = (x * 2) + (x * 3) - (x / 2);
+        function complex_math(a: i64, b: i64, c: i64): i64 {
+            const x = a + b * c - (a - b);
+            const y = (x * 2) + (x * 3) - (x / 2);
             return y;
         }
     "#;
@@ -218,17 +224,17 @@ fn test_adv_lower_monotonic_register_synthesis_no_gaps() {
 #[test]
 fn test_adv_lower_branch_linear_isolation_mutually_exclusive_consumption() {
     let src = r#"
-        schema Packet { 0: len i64, }
-        fn drop_packet(p: Packet) -> i64 {
+        type Packet = { len: i64 };
+        function drop_packet(p: Packet): i64 {
             return p.len;
         }
-        fn route_packet(flag: bool) -> i64 {
-            let pkt = Packet { len: 64 };
-            if flag {
-                let r1 = drop_packet(pkt);
+        function route_packet(flag: bool): i64 {
+            const pkt: Packet = { len: 64 };
+            if (flag) {
+                const r1 = drop_packet(pkt);
                 return r1;
             } else {
-                let r2 = drop_packet(pkt);
+                const r2 = drop_packet(pkt);
                 return r2;
             }
         }
@@ -245,12 +251,12 @@ fn test_adv_lower_branch_linear_isolation_mutually_exclusive_consumption() {
 #[test]
 fn test_adv_lower_branch_linear_imbalance_rejected() {
     let src = r#"
-        schema Box { 0: val i64, }
-        fn consume(b: Box) -> i64 { return b.val; }
-        fn imbalanced(flag: bool) -> i64 {
-            let b = Box { val: 42 };
-            if flag {
-                let x = consume(b);
+        type Box = { val: i64 };
+        function consume(b: Box): i64 { return b.val; }
+        function imbalanced(flag: bool): i64 {
+            const b: Box = { val: 42 };
+            if (flag) {
+                const x = consume(b);
             } else {
                 // b is alive here, not consumed
             }
@@ -270,11 +276,11 @@ fn test_adv_lower_branch_linear_imbalance_rejected() {
 #[test]
 fn test_adv_lower_scope_local_autodrop_nested_scopes() {
     let src = r#"
-        schema Resource { 0: id i64, }
-        fn nested_scopes() -> i64 {
-            let r_outer = Resource { id: 1 };
+        type Resource = { id: i64 };
+        function nested_scopes(): i64 {
+            const r_outer: Resource = { id: 1 };
             {
-                let r_inner = Resource { id: 2 };
+                const r_inner: Resource = { id: 2 };
             }
             return 42;
         }
@@ -299,10 +305,10 @@ fn test_adv_lower_scope_local_autodrop_nested_scopes() {
 #[test]
 fn test_adv_lower_while_loop_cfg_structure() {
     let src = r#"
-        fn loop_cfg(limit: i64) -> i64 {
-            let counter = 0;
-            while counter < limit {
-                if counter == 5 {
+        function loop_cfg(limit: i64): i64 {
+            const counter = 0;
+            while (counter < limit) {
+                if (counter === 5) {
                     return counter;
                 }
             }
@@ -328,8 +334,9 @@ fn test_adv_lower_while_loop_cfg_structure() {
 #[test]
 fn test_adv_lower_undeclared_syscall_effect_rejected() {
     let src = r#"
-        fn send_bad() -> void effects(Ui) {
-            syscall Net "net.listen" 8080;
+        @effects("ui")
+        function send_bad(): void {
+            syscall("net", "net.listen", 8080);
         }
     "#;
     let prog = parse_knr(src).expect("parse");
@@ -340,7 +347,7 @@ fn test_adv_lower_undeclared_syscall_effect_rejected() {
 #[test]
 fn test_adv_lower_variable_reassignment_type_mismatch() {
     let src = r#"
-        fn bad_assign() -> i64 {
+        function bad_assign(): i64 {
             let x = 42;
             x = true;
             return x;
@@ -361,8 +368,8 @@ fn test_adv_explore_direct_circular_import_detection() {
     let a_path = temp.path().join("a.knr");
     let b_path = temp.path().join("b.knr");
 
-    fs::write(&a_path, "import \"b.knr\";\nfn fa() -> i64 { return 1; }\n").unwrap();
-    fs::write(&b_path, "import \"a.knr\";\nfn fb() -> i64 { return 2; }\n").unwrap();
+    fs::write(&a_path, "import \"b.knr\";\nfunction fa(): i64 { return 1; }\n").unwrap();
+    fs::write(&b_path, "import \"a.knr\";\nfunction fb(): i64 { return 2; }\n").unwrap();
 
     let res = explore_path(&a_path);
     assert!(res.is_err(), "Direct circular import must be detected");
@@ -382,9 +389,9 @@ fn test_adv_explore_transitive_circular_import_detection() {
     let b_path = temp.path().join("b.knr");
     let c_path = temp.path().join("c.knr");
 
-    fs::write(&a_path, "import \"b.knr\";\nfn fa() -> i64 { return 1; }\n").unwrap();
-    fs::write(&b_path, "import \"c.knr\";\nfn fb() -> i64 { return 2; }\n").unwrap();
-    fs::write(&c_path, "import \"a.knr\";\nfn fc() -> i64 { return 3; }\n").unwrap();
+    fs::write(&a_path, "import \"b.knr\";\nfunction fa(): i64 { return 1; }\n").unwrap();
+    fs::write(&b_path, "import \"c.knr\";\nfunction fb(): i64 { return 2; }\n").unwrap();
+    fs::write(&c_path, "import \"a.knr\";\nfunction fc(): i64 { return 3; }\n").unwrap();
 
     let res = explore_path(&a_path);
     assert!(res.is_err(), "Transitive circular import must be detected");
@@ -406,10 +413,10 @@ fn test_adv_explore_diamond_import_deduplicated() {
     let c_path = temp.path().join("c.knr");
     let a_path = temp.path().join("a.knr");
 
-    fs::write(&d_path, "fn fd() -> i64 { return 4; }\n").unwrap();
-    fs::write(&b_path, "import \"d.knr\";\nfn fb() -> i64 { return 2; }\n").unwrap();
-    fs::write(&c_path, "import \"d.knr\";\nfn fc() -> i64 { return 3; }\n").unwrap();
-    fs::write(&a_path, "import \"b.knr\";\nimport \"c.knr\";\nfn fa() -> i64 { return 1; }\n").unwrap();
+    fs::write(&d_path, "function fd(): i64 { return 4; }\n").unwrap();
+    fs::write(&b_path, "import \"d.knr\";\nfunction fb(): i64 { return 2; }\n").unwrap();
+    fs::write(&c_path, "import \"d.knr\";\nfunction fc(): i64 { return 3; }\n").unwrap();
+    fs::write(&a_path, "import \"b.knr\";\nimport \"c.knr\";\nfunction fa(): i64 { return 1; }\n").unwrap();
 
     let graph = explore_path(&a_path).expect("Diamond imports must succeed without false circular import");
     let file_paths: Vec<&str> = graph.files.iter().map(|f| f.path.as_str()).collect();
@@ -423,18 +430,18 @@ fn test_adv_explore_knr_lowering_and_raw_file_info() {
     let file_path = temp.path().join("app.knr");
 
     let code = r#"
-        schema User {
-            0: id i64,
-            1: name str,
-        }
+        type User = {
+            id: i64,
+            name: string,
+        };
 
-        fn make_user() -> User {
-            let u = User { id: 1, name: "Alice" };
+        function make_user(): User {
+            const u: User = { id: 1, name: "Alice" };
             return u;
         }
 
-        fn main() -> i64 {
-            let u = make_user();
+        function main(): i64 {
+            const u = make_user();
             return u.id;
         }
     "#;

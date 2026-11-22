@@ -486,6 +486,33 @@ unsafe fn rt_struct_to_ui_node(ptr: *const RtStruct) -> crate::gui::UiNode {
             }
             style.z_index = si64(38);
             style.grow = sf64(39).max(0.0);
+            if sf.len() > 40 {
+                let ff = sstr(40);
+                if !ff.is_empty() {
+                    style.font_family = ff;
+                }
+            }
+            if sf.len() > 41 {
+                let ta = sstr(41);
+                if !ta.is_empty() {
+                    style.text_align = ta;
+                }
+            }
+            if sf.len() > 42 {
+                let lh = sf64(42);
+                if lh > 0.0 {
+                    style.line_height = lh;
+                }
+            }
+            if sf.len() > 43 {
+                let cs = si64(43);
+                if cs > 0 {
+                    style.col_span = cs;
+                }
+            }
+            if sf.len() > 44 {
+                style.letter_spacing = sf64(44);
+            }
         }
 
         let mut children = Vec::new();
@@ -658,6 +685,7 @@ pub extern "C" fn rt_gui_launch_native(
                         state_cell.set(update(st, c_payload));
                     }
                 }
+                UiEvent::KeyPress { .. } | UiEvent::Resize { .. } => {}
             }
         },
         |dt, elapsed| {

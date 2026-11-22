@@ -6,16 +6,16 @@ use std::path::Path;
 #[test]
 fn test_parse_struct_definition() {
     let src = r#"
-        schema Point {
-            0: x i64,
-            1: y i64,
-        }
-        struct Widget {
-            id: i64,
-            name: str,
+        type Point = {
+            x: i64,
+            y: i64,
+        };
+        interface Widget {
+            id: i64;
+            name: string;
         }
     "#;
-    let prog = parse_knr(src).expect("parse schema and struct");
+    let prog = parse_knr(src).expect("parse type and interface");
     assert_eq!(prog.declarations.len(), 2);
     if let Declaration::Struct(s) = &prog.declarations[0] {
         assert_eq!(s.name.name, "Point");
@@ -25,13 +25,20 @@ fn test_parse_struct_definition() {
     } else {
         panic!("Expected struct declaration");
     }
+    if let Declaration::Struct(w) = &prog.declarations[1] {
+        assert_eq!(w.name.name, "Widget");
+        assert_eq!(w.fields.len(), 2);
+        assert_eq!(w.fields[1].name.name, "name");
+    } else {
+        panic!("Expected interface struct declaration");
+    }
 }
 
 #[test]
 fn test_parse_struct_literal() {
     let src = r#"
-        fn make() -> Point {
-            let p = Point {
+        function make(): Point {
+            const p: Point = {
                 x: 10,
                 y: 20,
             };
@@ -45,7 +52,7 @@ fn test_parse_struct_literal() {
 #[test]
 fn test_parse_array_literal() {
     let src = r#"
-        fn nums() -> vec[i64] {
+        function nums(): i64[] {
             return [1, 2, 3, 4,];
         }
     "#;
@@ -64,9 +71,9 @@ fn test_parse_array_literal() {
 #[test]
 fn test_parse_expressions_precedence() {
     let src = r#"
-        fn calc(a: bool, b: bool, c: bool) -> i64 {
-            let x = 2 + 3 * 4;
-            let cond = a && b || c;
+        function calc(a: bool, b: bool, c: bool): i64 {
+            const x = 2 + 3 * 4;
+            const cond = a && b || c;
             return x;
         }
     "#;
@@ -85,10 +92,10 @@ fn test_parse_expressions_precedence() {
 #[test]
 fn test_parse_control_flow() {
     let src = r#"
-        fn flow(x: i64) -> i64 {
-            if x > 10 {
+        function flow(x: i64): i64 {
+            if (x > 10) {
                 return 1;
-            } else if x == 0 {
+            } else if (x === 0) {
                 return 0;
             } else {
                 return -1;
@@ -106,7 +113,7 @@ fn test_parse_reference_exec_graph() {
         .unwrap()
         .parent()
         .unwrap()
-        .join("site/components/exec_graph.knr");
+        .join("tests/fixtures/legacy_site/components/exec_graph.knr");
     assert!(component_path.exists());
     let src = fs::read_to_string(&component_path).expect("read exec_graph.knr");
     let prog = parse_knr(&src).expect("parse exec_graph.knr");
@@ -115,7 +122,7 @@ fn test_parse_reference_exec_graph() {
     assert_eq!(prog.declarations.len(), 1);
     if let Declaration::Function(f) = &prog.declarations[0] {
         assert_eq!(f.name.name, "build_exec_graph");
-        assert_eq!(f.body.stmts.len(), 9); // 8 cards let-stmts + 1 return
+        assert_eq!(f.body.stmts.len(), 9); // 8 cards const-stmts + 1 return
     } else {
         panic!("Expected function");
     }
@@ -123,11 +130,11 @@ fn test_parse_reference_exec_graph() {
 
 #[test]
 fn test_syntax_errors() {
-    let src_unclosed = "fn test() -> i64 { return 1;";
+    let src_unclosed = "function test(): i64 { return 1;";
     let err = parse_knr(src_unclosed);
     assert!(err.is_err());
 
-    let src_invalid_tok = "fn test() { let @ = 5; }";
+    let src_invalid_tok = "function test() { const @ = 5; }";
     let err2 = parse_knr(src_invalid_tok);
     assert!(err2.is_err());
 }

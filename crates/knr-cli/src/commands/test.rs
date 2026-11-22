@@ -30,7 +30,7 @@ pub fn execute(path: &Path, json: bool, gas: u64) -> Result<(), CliError> {
     let files = collect_source_files(path)?;
     if files.is_empty() {
         return Err(CliError::Other(format!(
-            "No .knr or .ssa files found under '{}'",
+            "No .tsk, .knr, or .ssa files found under '{}'",
             path.display()
         )));
     }
@@ -41,9 +41,9 @@ pub fn execute(path: &Path, json: bool, gas: u64) -> Result<(), CliError> {
 
     for file in &files {
         let file_label = file.display().to_string();
-        let module = if file.to_string_lossy().ends_with(".knr") {
+        let module = if knr_core::is_source_file(file) {
             let src = std::fs::read_to_string(file).map_err(CliError::Io)?;
-            knr_core::syntax::parse_knr(&src).map_err(|err| {
+            knr_core::syntax::parse_tsx(&src).map_err(|err| {
                 if !json {
                     eprintln!("{file_label}: {err}");
                 }
@@ -201,10 +201,8 @@ fn visit_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), CliError> {
             if !name.starts_with('.') && name != "target" {
                 visit_dir(&p, out)?;
             }
-        } else if let Some(s) = p.to_str() {
-            if s.ends_with(".knr") || s.ends_with(".ssa") {
-                out.push(p);
-            }
+        } else if knr_core::is_source_file(&p) || p.to_string_lossy().ends_with(".ssa") {
+            out.push(p);
         }
     }
     Ok(())

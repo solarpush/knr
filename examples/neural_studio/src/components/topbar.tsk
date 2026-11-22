@@ -1,0 +1,204 @@
+// ============================================================================
+// knr Neural Studio v0.4.0 -- Navigation TopBar (`src/components/topbar.tsk`)
+// ============================================================================
+
+import { Row, Card, Badge, Text, Button, Icon } from "std/ui";
+import {
+    Action,
+    State,
+    active_theme,
+    theme_label,
+    primary_btn_bg,
+    primary_btn_fg,
+    accent_text_color,
+    card_shadow_color,
+    can_go_back,
+    is_route_studio,
+    is_route_pipeline,
+    is_route_shaders,
+} from "../state.tsk";
+
+export function TopBar(s: readonly State): Widget {
+    const t = active_theme(s);
+    const { theme_idx } = s;
+    const accent_fg = accent_text_color(theme_idx);
+    const active_bg = primary_btn_bg(theme_idx);
+    const active_fg = primary_btn_fg(theme_idx);
+    const on_studio = is_route_studio(s);
+    const on_pipeline = is_route_pipeline(s);
+    const on_shaders = is_route_shaders(s);
+    const show_back = can_go_back(s);
+    const theme_icon = theme_idx === 1 ? "sun" : "moon";
+    const sh = card_shadow_color(theme_idx);
+    return (
+        <Card
+            key="ns_topbar"
+            w="full"
+            bg={t.surface}
+            border={t.border}
+            shadowColor={sh}
+            shadowBlur={16}
+            shadowY={6}
+            radius={t.radius_md}
+            px={14}
+            py={10}
+            z={10}
+        >
+            <Row
+                key="ns_topbar_row"
+                w="full"
+                justify="between"
+                align="center"
+                gap={10}
+            >
+                <Row key="tb_brand_row" align="center" gap={8}>
+                    <Icon key="tb_brand_icon" name="sparkles" size={18} color={accent_fg} />
+                    <Text
+                        key="tb_brand_title"
+                        size={16}
+                        weight="extrabold"
+                        font="display"
+                        color={t.text}
+                    >
+                        Neural Studio
+                    </Text>
+                    <Badge
+                        key="tb_ver_badge"
+                        bg={t.surface_alt}
+                        color={accent_fg}
+                        border={t.border}
+                    >
+                        v0.4.0
+                    </Badge>
+                </Row>
+                <Row key="tb_nav_row" align="center" gap={6}>
+                    {show_back && <Button
+                        key="btn_route_back"
+                        onClick={Action.RouteBack}
+                        bg={t.surface_alt}
+                        color={t.text}
+                        border={t.border}
+                        hoverBorder={t.accent}
+                        px={10}
+                        py={7}
+                        radius={8}
+                        gap={5}
+                        align="center"
+                    >
+                        <Icon key="tb_back_icon" name="arrow-left" size={13} color={t.text} />
+                        <Text key="tb_back_text" size={12} weight="semibold" color={t.text}>
+                            Back
+                        </Text>
+                    </Button>}
+                    <Button
+                        key="btn_nav_studio"
+                        onClick={Action.RouteStudio}
+                        bg={on_studio ? active_bg : t.surface_alt}
+                        color={on_studio ? active_fg : t.text}
+                        border={on_studio ? active_bg : t.border}
+                        hoverBorder={t.accent}
+                        px={11}
+                        py={7}
+                        radius={8}
+                        gap={5}
+                        align="center"
+                    >
+                        <Icon
+                            key="tb_studio_icon"
+                            name="chart"
+                            size={13}
+                            color={on_studio ? active_fg : accent_fg}
+                        />
+                        <Text
+                            key="tb_studio_text"
+                            size={12}
+                            weight="semibold"
+                            color={on_studio ? active_fg : t.text}
+                        >
+                            Studio
+                        </Text>
+                    </Button>
+                    <Button
+                        key="btn_nav_pipeline"
+                        onClick={Action.RoutePipeline}
+                        bg={on_pipeline ? active_bg : t.surface_alt}
+                        color={on_pipeline ? active_fg : t.text}
+                        border={on_pipeline ? active_bg : t.border}
+                        hoverBorder={t.accent}
+                        px={11}
+                        py={7}
+                        radius={8}
+                        gap={5}
+                        align="center"
+                    >
+                        <Icon
+                            key="tb_pipe_icon"
+                            name="git"
+                            size={13}
+                            color={on_pipeline ? active_fg : accent_fg}
+                        />
+                        <Text
+                            key="tb_pipe_text"
+                            size={12}
+                            weight="semibold"
+                            color={on_pipeline ? active_fg : t.text}
+                        >
+                            Pipeline
+                        </Text>
+                    </Button>
+                    <Button
+                        key="btn_nav_shaders"
+                        onClick={Action.RouteShaders}
+                        bg={on_shaders ? active_bg : t.surface_alt}
+                        color={on_shaders ? active_fg : t.text}
+                        border={on_shaders ? active_bg : t.border}
+                        hoverBorder={t.accent}
+                        px={11}
+                        py={7}
+                        radius={8}
+                        gap={5}
+                        align="center"
+                    >
+                        <Icon
+                            key="tb_shaders_icon"
+                            name="layers"
+                            size={13}
+                            color={on_shaders ? active_fg : accent_fg}
+                        />
+                        <Text
+                            key="tb_shaders_text"
+                            size={12}
+                            weight="semibold"
+                            color={on_shaders ? active_fg : t.text}
+                        >
+                            Shaders
+                        </Text>
+                    </Button>
+                    <Button
+                        key="btn_cycle_theme"
+                        onClick={Action.CycleTheme}
+                        bg={t.surface_alt}
+                        color={t.text}
+                        border={t.border}
+                        hoverBorder={t.accent}
+                        px={11}
+                        py={7}
+                        radius={8}
+                        gap={5}
+                        align="center"
+                    >
+                        <Icon
+                            key="tb_theme_icon"
+                            name={theme_icon}
+                            size={13}
+                            color={accent_fg}
+                        />
+                        <Text key="tb_theme_text" size={12} weight="semibold" color={t.text}>
+                            {theme_label(theme_idx)}
+                        </Text>
+                    </Button>
+                </Row>
+            </Row>
+        </Card>
+    );
+}

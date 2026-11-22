@@ -1,0 +1,122 @@
+// System, Filesystem & JSON Standard Library Demo (`examples/sys_demo.tsk`)
+//
+// Verify statically (SSA, Linear Ownership, Types, Effects):
+//   knr check examples/sys_demo.tsk
+// Run deterministic unit tests (zero disk/network I/O):
+//   knr test examples/sys_demo.tsk
+// Execute live filesystem + JSON workflow:
+//   knr run examples/sys_demo.tsk
+// Compile standalone native binary:
+//   knr build examples/sys_demo.tsk --target native -o ./sys_demo
+
+import {
+    FileWrite,
+    JsonQuery,
+    HttpPost,
+    fs_read,
+    fs_write,
+    fs_exists,
+    fs_remove,
+    json_is_valid,
+    json_pretty,
+    json_get,
+} from "std/sys";
+
+export function demo_file_path(): string {
+    return "/tmp/knr_sys_demo_profile.json";
+}
+
+export function build_profile_json(
+    name: string,
+    role: string,
+    primary_item: string,
+    secondary_item: string,
+): string {
+    return `{"user":{"name":"${name}","role":"${role}"},"items":["${primary_item}","${secondary_item}"],"active":true}`;
+}
+
+export function format_user_endpoint(host: string, port: i64, user_id: i64): string {
+    return `http://${host}:${port}/api/users/${user_id}`;
+}
+
+@effects("hw")
+export function main(): i64 {
+    const payload = build_profile_json("Ada Lovelace", "architect", "compiler", "runtime");
+
+    // 1. Write JSON document to disk
+    const wrote = fs_write(demo_file_path(), payload);
+
+    // 2. Verify file exists on disk
+    const exists_before = fs_exists(demo_file_path());
+
+    // 3. Read back, validate, and pretty-print JSON
+    const raw = fs_read(demo_file_path());
+    const valid = json_is_valid(raw);
+    const pretty = json_pretty(raw);
+    const has_pretty = pretty.length > 0;
+
+    // 4. Extract nested fields and array elements using dotted JSON paths
+    const user_name = json_get(raw, "user.name");
+    const user_role = json_get(raw, "user.role");
+    const first_item = json_get(raw, "items.0");
+    const second_item = json_get(raw, "items.1");
+    const is_active = json_get(raw, "active");
+
+    // 5. Remove temporary file and confirm cleanup
+    const removed = fs_remove(demo_file_path());
+    const exists_after = fs_exists(demo_file_path());
+
+    let passed: i64 = 0;
+    if (wrote) {
+        passed += 1;
+    }
+    if (exists_before) {
+        passed += 1;
+    }
+    if (valid && has_pretty) {
+        passed += 1;
+    }
+    if (user_name === "Ada Lovelace") {
+        passed += 1;
+    }
+    if (user_role === "architect") {
+        passed += 1;
+    }
+    if (first_item === "compiler" && second_item === "runtime") {
+        passed += 1;
+    }
+    if (is_active === "true") {
+        passed += 1;
+    }
+    if (removed && !exists_after) {
+        passed += 1;
+    }
+    return passed;
+}
+
+// ============================================================================
+// Deterministic Built-in Unit Tests (`knr test examples/sys_demo.tsk`)
+// ============================================================================
+
+export function test_build_profile_json(): bool {
+    const json = build_profile_json("Ada", "admin", "fs", "json");
+    const expected = "{\"user\":{\"name\":\"Ada\",\"role\":\"admin\"},\"items\":[\"fs\",\"json\"],\"active\":true}";
+    return json === expected && json.length > 40;
+}
+
+export function test_format_user_endpoint(): bool {
+    const url = format_user_endpoint("127.0.0.1", 8080, 42);
+    return url === "http://127.0.0.1:8080/api/users/42";
+}
+
+export function test_std_sys_schemas(): bool {
+    const fw: FileWrite = { path: "/tmp/a.txt", content: "hello" };
+    const jq: JsonQuery = { json: "{\"k\":\"v\"}", key: "k" };
+    const hp: HttpPost = { url: "http://127.0.0.1:8080/echo", body: "ping" };
+    return (
+        fw.path === "/tmp/a.txt"
+        && fw.content === "hello"
+        && jq.key === "k"
+        && hp.body === "ping"
+    );
+}

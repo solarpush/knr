@@ -1,6 +1,6 @@
 // Error: UndeclaredEffect
-fn send_packet(data: str) -> void {
-    // Missing effects(Net)
-    syscall Net "net.send" data;
+function send_packet(data: string): void {
+    // Missing @effects("net")
+    syscall("net", "net.send", data);
     return;
 }

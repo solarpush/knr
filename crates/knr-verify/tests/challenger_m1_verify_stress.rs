@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 // ============================================================================
-// 1. REFERENCE APPLICATION COMPONENT (site/components/exec_graph.knr)
+// 1. REFERENCE APPLICATION COMPONENT (tests/fixtures/legacy_site/components/exec_graph.knr)
 // ============================================================================
 
 #[test]
@@ -16,8 +16,8 @@ fn test_reference_exec_graph_component_comprehensive() {
         .unwrap()
         .parent()
         .unwrap();
-    let component_path = root.join("site/components/exec_graph.knr");
-    assert!(component_path.exists(), "site/components/exec_graph.knr must exist");
+    let component_path = root.join("tests/fixtures/legacy_site/components/exec_graph.knr");
+    assert!(component_path.exists(), "legacy exec_graph.knr fixture must exist");
 
     // 1. Test lowering from file with automatic import resolution
     let module = lower_program_from_file(&component_path)
@@ -82,13 +82,13 @@ fn test_reference_exec_graph_component_comprehensive() {
 fn test_autodrop_synthesis_prevents_leaks_on_valid_code() {
     // A: Local struct allocated and not returned -> should auto-drop, 0 diagnostics
     let code_struct = r#"
-schema Item {
-    0: id i64,
-    1: title str,
-}
+type Item = {
+    id: i64,
+    title: string,
+};
 
-fn process() -> i64 {
-    let it = Item { id: 10, title: "test" };
+function process(): i64 {
+    const it: Item = { id: 10, title: "test" };
     return it.id;
 }
 "#;
@@ -102,8 +102,8 @@ fn process() -> i64 {
 
     // B: Local vector of primitives allocated and not returned -> auto-dropped, 0 diagnostics
     let code_vec = r#"
-fn sum_len() -> i64 {
-    let v = [1, 2, 3, 4, 5];
+function sum_len(): i64 {
+    const v = [1, 2, 3, 4, 5];
     return vec_len(v);
 }
 "#;
@@ -117,12 +117,12 @@ fn sum_len() -> i64 {
 
     // C: Nested linear composition: child moved into parent, parent auto-dropped
     let code_nested = r#"
-schema Child { 0: name str }
-schema Parent { 0: child struct[Child] }
+type Child = { name: string };
+type Parent = { child: Child };
 
-fn make_nested() -> i64 {
-    let c = Child { name: "kid" };
-    let p = Parent { child: c };
+function make_nested(): i64 {
+    const c: Child = { name: "kid" };
+    const p: Parent = { child: c };
     return 42;
 }
 "#;
@@ -136,9 +136,9 @@ fn make_nested() -> i64 {
 
     // D: Returned struct is NOT dropped (no double-free)
     let code_ret = r#"
-schema Leaf { 0: name str }
-fn make_leaf() -> Leaf {
-    let l = Leaf { name: "my_leaf" };
+type Leaf = { name: string };
+function make_leaf(): Leaf {
+    const l: Leaf = { name: "my_leaf" };
     return l;
 }
 "#;
@@ -155,8 +155,8 @@ fn make_leaf() -> Leaf {
 fn test_genuine_linear_leaks_are_strictly_caught() {
     // 1. Direct buf_alloc not freed
     let code_buf = r#"
-fn leak_buf() -> i64 {
-    let b = buf_alloc(128);
+function leak_buf(): i64 {
+    const b = buf_alloc(128);
     return 0;
 }
 "#;
@@ -168,11 +168,11 @@ fn leak_buf() -> i64 {
 
     // 2. Struct containing unmanaged buf not freed
     let code_struct_buf = r#"
-schema BufWrapper {
-    0: raw buf,
-}
-fn leak_wrapper() -> i64 {
-    let w = BufWrapper { raw: buf_alloc(64) };
+type BufWrapper = {
+    raw: Buffer,
+};
+function leak_wrapper(): i64 {
+    const w: BufWrapper = { raw: buf_alloc(64) };
     return 0;
 }
 "#;
@@ -184,8 +184,8 @@ fn leak_wrapper() -> i64 {
 
     // 3. Vector containing unmanaged buf not freed
     let code_vec_buf = r#"
-fn leak_vec_buf() -> i64 {
-    let v = [buf_alloc(32)];
+function leak_vec_buf(): i64 {
+    const v = [buf_alloc(32)];
     return 0;
 }
 "#;
@@ -197,12 +197,12 @@ fn leak_vec_buf() -> i64 {
 
     // 4. Nested struct containing struct containing buf not freed
     let code_deep_buf = r#"
-schema Inner { 0: raw buf }
-schema Outer { 0: child struct[Inner] }
+type Inner = { raw: Buffer };
+type Outer = { child: Inner };
 
-fn leak_deep() -> i64 {
-    let inn = Inner { raw: buf_alloc(16) };
-    let out = Outer { child: inn };
+function leak_deep(): i64 {
+    const inn: Inner = { raw: buf_alloc(16) };
+    const out: Outer = { child: inn };
     return 0;
 }
 "#;
@@ -214,11 +214,11 @@ fn leak_deep() -> i64 {
 
     // 5. Linear return value discarded by caller (call to linear function without binding or returning)
     let code_discard_ret = r#"
-schema HeavyBox { 0: raw buf }
-fn make_box() -> HeavyBox {
-    return HeavyBox { raw: buf_alloc(32) };
+type HeavyBox = { raw: Buffer };
+function make_box(): HeavyBox {
+    return { raw: buf_alloc(32) };
 }
-fn caller() -> i64 {
+function caller(): i64 {
     make_box();
     return 0;
 }
@@ -238,10 +238,10 @@ fn caller() -> i64 {
 fn test_use_after_move_adversarial_patterns() {
     // 1. Double call passing linear argument
     let code_double_call = r#"
-schema Box { 0: v i64 }
-fn consume(b: Box) -> void { return; }
-fn test() -> void {
-    let b = Box { v: 1 };
+type Box = { v: i64 };
+function consume(b: Box): void { return; }
+function test(): void {
+    const b: Box = { v: 1 };
     consume(b);
     consume(b);
     return;
@@ -253,10 +253,10 @@ fn test() -> void {
 
     // 2. Field access after move
     let code_field_after_move = r#"
-schema Box { 0: v i64 }
-fn consume(b: Box) -> void { return; }
-fn test() -> i64 {
-    let b = Box { v: 42 };
+type Box = { v: i64 };
+function consume(b: Box): void { return; }
+function test(): i64 {
+    const b: Box = { v: 42 };
     consume(b);
     return b.v;
 }
@@ -267,10 +267,10 @@ fn test() -> i64 {
 
     // 3. Vector literal with duplicated linear element
     let code_vec_dup = r#"
-schema Leaf { 0: s str }
-fn test() -> void {
-    let l = Leaf { s: "hello" };
-    let v = [l, l];
+type Leaf = { s: string };
+function test(): void {
+    const l: Leaf = { s: "hello" };
+    const v = [l, l];
     return;
 }
 "#;
@@ -280,11 +280,11 @@ fn test() -> void {
 
     // 4. Struct literal with duplicated linear field
     let code_struct_dup = r#"
-schema Leaf { 0: s str }
-schema Node { 0: left struct[Leaf], 1: right struct[Leaf] }
-fn test() -> void {
-    let l = Leaf { s: "dup" };
-    let n = Node { left: l, right: l };
+type Leaf = { s: string };
+type Node = { left: Leaf, right: Leaf };
+function test(): void {
+    const l: Leaf = { s: "dup" };
+    const n: Node = { left: l, right: l };
     return;
 }
 "#;
@@ -294,12 +294,12 @@ fn test() -> void {
 
     // 5. Moved into struct, then passed to function
     let code_moved_then_call = r#"
-schema Leaf { 0: s str }
-schema Node { 0: left struct[Leaf] }
-fn consume(l: Leaf) -> void { return; }
-fn test() -> void {
-    let l = Leaf { s: "dup" };
-    let n = Node { left: l };
+type Leaf = { s: string };
+type Node = { left: Leaf };
+function consume(l: Leaf): void { return; }
+function test(): void {
+    const l: Leaf = { s: "dup" };
+    const n: Node = { left: l };
     consume(l);
     return;
 }
@@ -310,10 +310,10 @@ fn test() -> void {
 
     // 6. Return after move
     let code_ret_after_move = r#"
-schema Leaf { 0: s str }
-fn consume(l: Leaf) -> void { return; }
-fn test() -> Leaf {
-    let l = Leaf { s: "ret" };
+type Leaf = { s: string };
+function consume(l: Leaf): void { return; }
+function test(): Leaf {
+    const l: Leaf = { s: "ret" };
     consume(l);
     return l;
 }
@@ -335,7 +335,7 @@ fn test_monotonicity_deep_expression_tree() {
         for i in 2..=depth {
             expr = format!("({expr} + {i})");
         }
-        let code = format!("fn deep_expr_{depth}() -> i64 {{ return {expr}; }}");
+        let code = format!("function deep_expr_{depth}(): i64 {{ return {expr}; }}");
 
         let prog = parse_knr(&code).expect("parse deep expression");
         let res = verify_program(&prog);
@@ -352,7 +352,7 @@ fn test_monotonicity_deep_expression_tree() {
 fn test_scale_flat_expression() {
     let terms: Vec<String> = (1..=100).map(|i| i.to_string()).collect();
     let flat_expr = terms.join(" + ");
-    let code_flat = format!("fn flat_sum() -> i64 {{ return {flat_expr}; }}");
+    let code_flat = format!("function flat_sum(): i64 {{ return {flat_expr}; }}");
     let prog_flat = parse_knr(&code_flat).expect("parse flat expression");
     let res_flat = verify_program(&prog_flat);
     assert!(res_flat.is_ok(), "Flat 100-term expression must verify cleanly: {:?}", res_flat.err());
@@ -362,7 +362,7 @@ fn test_scale_flat_expression() {
 fn test_scale_large_vector() {
     let elems: Vec<String> = (1..=200).map(|i| i.to_string()).collect();
     let vec_lit = format!("[{}]", elems.join(", "));
-    let code_vec = format!("fn big_vec() -> i64 {{ let v = {vec_lit}; return vec_len(v); }}");
+    let code_vec = format!("function big_vec(): i64 {{ const v = {vec_lit}; return vec_len(v); }}");
     let prog_vec = parse_knr(&code_vec).expect("parse large vector");
     let res_vec = verify_program(&prog_vec);
     assert!(res_vec.is_ok(), "Large 200-element vector must verify cleanly: {:?}", res_vec.err());
@@ -374,7 +374,7 @@ fn test_scale_nested_blocks() {
     for _ in 0..40 {
         nested_block = format!("{{ {nested_block} }}");
     }
-    let code_block = format!("fn nested_blocks() -> i64 {{ {nested_block} }}");
+    let code_block = format!("function nested_blocks(): i64 {{ {nested_block} }}");
     let prog_block = parse_knr(&code_block).expect("parse nested blocks");
     let res_block = verify_program(&prog_block);
     assert!(res_block.is_ok(), "Deeply nested blocks must verify cleanly: {:?}", res_block.err());
@@ -385,11 +385,11 @@ fn test_scale_wide_struct() {
     let mut fields_def = String::new();
     let mut fields_init = String::new();
     for i in 0..30 {
-        fields_def.push_str(&format!("    {i}: f{i} i64,\n"));
+        fields_def.push_str(&format!("    f{i}: i64,\n"));
         fields_init.push_str(&format!("f{i}: {i}, "));
     }
     let code_struct = format!(
-        "schema WideStruct {{\n{fields_def}}}\nfn make_wide() -> i64 {{\n    let w = WideStruct {{ {fields_init} }};\n    return w.f0;\n}}"
+        "type WideStruct = {{\n{fields_def}}};\nfunction make_wide(): i64 {{\n    const w: WideStruct = {{ {fields_init} }};\n    return w.f0;\n}}"
     );
     let prog_struct = parse_knr(&code_struct).expect("parse wide struct");
     let res_struct = verify_program(&prog_struct);
@@ -400,11 +400,11 @@ fn test_scale_wide_struct() {
 fn test_loop_and_branch_monotonicity() {
     // While loop with internal expressions and branch
     let code = r#"
-fn loop_with_branch(n: i64) -> i64 {
-    let mut sum = 0;
-    let mut i = 0;
-    while i < n {
-        if i > 5 {
+function loop_with_branch(n: i64): i64 {
+    let sum = 0;
+    let i = 0;
+    while (i < n) {
+        if (i > 5) {
             sum = sum + 2;
         } else {
             sum = sum + 1;
@@ -435,43 +435,43 @@ fn test_adversarial_malformed_programs_never_panic() {
         // Only comments
         "// Just a comment\n/* Multi-line comment */",
         // Unclosed struct
-        "schema Incomplete { 0: a i64",
+        "type Incomplete = { a: i64",
         // Recursive schema
-        "schema SelfRef { 0: next struct[SelfRef] }",
+        "type SelfRef = { next: SelfRef };",
         // Mutual recursion schemas
-        "schema A { 0: b struct[B] }\nschema B { 0: a struct[A] }",
+        "type A = { b: B };\ntype B = { a: A };",
         // Function returning undefined struct
-        "fn get_ghost() -> Ghost { return 0; }",
+        "function get_ghost(): Ghost { return 0; }",
         // Call with wrong argument count
-        "fn add2(a: i64, b: i64) -> i64 { return a + b; }\nfn test() -> i64 { return add2(1); }",
+        "function add2(a: i64, b: i64): i64 { return a + b; }\nfunction test(): i64 { return add2(1); }",
         // Call with wrong types
-        "fn add2(a: i64, b: i64) -> i64 { return a + b; }\nfn test() -> i64 { return add2(1, \"str\"); }",
+        "function add2(a: i64, b: i64): i64 { return a + b; }\nfunction test(): i64 { return add2(1, \"str\"); }",
         // Undeclared effect
-        "fn need_net() -> void { syscall Net \"net.listen\" 8080; return; }",
+        "function need_net(): void { syscall(\"net\", \"net.listen\", 8080); return; }",
         // Syscall with wrong effect name
-        "fn bad_eff() -> void effects(Ui) { syscall FakeEff \"op\" 0; return; }",
+        "@effects(\"ui\")\nfunction bad_eff(): void { syscall(\"FakeEff\", \"op\", 0); return; }",
         // Array of mismatched types
-        "fn bad_vec() -> void { let v = [1, \"mismatch\"]; return; }",
+        "function bad_vec(): void { const v = [1, \"mismatch\"]; return; }",
         // Empty array literal without type
-        "fn empty_vec() -> void { let v = []; return; }",
+        "function empty_vec(): void { const v = []; return; }",
         // Field access on non-struct
-        "fn non_struct_field(x: i64) -> i64 { return x.foo; }",
+        "function non_struct_field(x: i64): i64 { return x.foo; }",
         // Index on non-collection
-        "fn non_vec_index(x: i64) -> i64 { return x[0]; }",
+        "function non_vec_index(x: i64): i64 { return x[0]; }",
         // Assignment to non-variable
-        "fn assign_lit() -> void { 1 = 2; return; }",
+        "function assign_lit(): void { 1 = 2; return; }",
         // Reassignment with type mismatch
-        "fn bad_assign() -> void { let mut x = 10; x = \"string\"; return; }",
+        "function bad_assign(): void { let x = 10; x = \"string\"; return; }",
         // Struct literal with missing field
-        "schema Pair { 0: a i64, 1: b i64 }\nfn bad_lit() -> Pair { return Pair { a: 1 }; }",
+        "type Pair = { a: i64, b: i64 };\nfunction bad_lit(): Pair { return { a: 1 }; }",
         // Struct literal with unknown field
-        "schema Pair { 0: a i64, 1: b i64 }\nfn bad_lit() -> Pair { return Pair { a: 1, b: 2, c: 3 }; }",
+        "type Pair = { a: i64, b: i64 };\nfunction bad_lit(): Pair { return { a: 1, b: 2, c: 3 }; }",
         // Struct literal with field type mismatch
-        "schema Pair { 0: a i64, 1: b i64 }\nfn bad_lit() -> Pair { return Pair { a: 1, b: \"str\" }; }",
+        "type Pair = { a: i64, b: i64 };\nfunction bad_lit(): Pair { return { a: 1, b: \"str\" }; }",
         // Negation on non-number
-        "fn neg_bool() -> bool { return -true; }",
+        "function neg_bool(): bool { return -true; }",
         // Logical NOT on non-bool
-        "fn not_int() -> i64 { return !42; }",
+        "function not_int(): i64 { return !42; }",
     ];
 
     for (idx, p_str) in adversarial_programs.iter().enumerate() {

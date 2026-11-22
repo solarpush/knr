@@ -78,14 +78,14 @@ fn test_gui_flag_help_documentation() {
 
 #[test]
 fn test_gui_launch_knr_file_headless() {
-    let temp = TempFile::new("simple.knr");
+    let temp = TempFile::new("simple.tsk");
     fs::write(
         temp.path(),
         r#"
-fn main() -> i64 {
-    let x = 10;
-    let y = 20;
-    if x < y {
+export function main(): i64 {
+    const x: i64 = 10;
+    const y: i64 = 20;
+    if (x < y) {
         return x + y;
     } else {
         return x - y;
@@ -93,7 +93,7 @@ fn main() -> i64 {
 }
 "#,
     )
-    .expect("write temp.knr");
+    .expect("write simple.tsk");
 
     let out = knr_cmd()
         .args(["run", temp.path().to_str().unwrap(), "--gui"])
@@ -140,7 +140,7 @@ fn test_gui_launch_ssa_file_headless() {
 
 #[test]
 fn test_gui_launch_reference_exec_graph_component() {
-    let exec_graph_path = repo_root().join("site/components/exec_graph.knr");
+    let exec_graph_path = repo_root().join("tests/fixtures/legacy_site/components/exec_graph.knr");
     assert!(exec_graph_path.exists(), "exec_graph.knr must exist");
 
     let out = knr_cmd()
@@ -164,7 +164,7 @@ fn test_gui_launch_reference_exec_graph_component() {
 
 #[test]
 fn test_gui_launch_short_flag() {
-    let exec_graph_path = repo_root().join("site/components/exec_graph.knr");
+    let exec_graph_path = repo_root().join("tests/fixtures/legacy_site/components/exec_graph.knr");
     let out = knr_cmd()
         .args(["run", exec_graph_path.to_str().unwrap(), "-g"])
         .output()
@@ -177,7 +177,7 @@ fn test_gui_launch_short_flag() {
 
 #[test]
 fn test_gui_launch_with_trace_and_gas_limit() {
-    let exec_graph_path = repo_root().join("site/components/exec_graph.knr");
+    let exec_graph_path = repo_root().join("tests/fixtures/legacy_site/components/exec_graph.knr");
 
     let out = knr_cmd()
         .args([
@@ -233,7 +233,7 @@ fn test_gui_launch_unlimited_gas() {
 
 #[test]
 fn test_knr_check_subcommand() {
-    let exec_graph_path = repo_root().join("site/components/exec_graph.knr");
+    let exec_graph_path = repo_root().join("tests/fixtures/legacy_site/components/exec_graph.knr");
 
     // 1. Textual check
     let out = knr_cmd()
@@ -254,17 +254,17 @@ fn test_knr_check_subcommand() {
 
 #[test]
 fn test_knr_build_subcommand() {
-    let temp_knr = TempFile::new("calc.knr");
+    let temp_knr = TempFile::new("calc.tsk");
     fs::write(
         temp_knr.path(),
         r#"
-fn calculate(a: i64, b: i64) -> i64 {
-    let sum = a + b;
+export function calculate(a: i64, b: i64): i64 {
+    const sum: i64 = a + b;
     return sum * 2;
 }
 "#,
     )
-    .expect("write calc.knr");
+    .expect("write calc.tsk");
 
     // Build WASM
     let wasm_out = TempFile::new("calc.wasm");
@@ -313,7 +313,7 @@ fn calculate(a: i64, b: i64) -> i64 {
 
 #[test]
 fn test_knr_asm_and_disasm_subcommands() {
-    let exec_graph_path = repo_root().join("site/components/exec_graph.knr");
+    let exec_graph_path = repo_root().join("tests/fixtures/legacy_site/components/exec_graph.knr");
     let knrbin_out = TempFile::new("exec_graph.knrbin");
 
     // 1. knr asm <file.knr> -o <out.knrbin>

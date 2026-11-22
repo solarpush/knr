@@ -6,7 +6,7 @@ use knr_verify::Diagnostic;
 use crate::error::CliError;
 
 pub fn execute(file: &Path, json: bool, graph: bool) -> Result<(), CliError> {
-    if file.to_string_lossy().ends_with(".knr") {
+    if knr_core::is_source_file(file) {
         let src = match std::fs::read_to_string(file) {
             Ok(s) => s,
             Err(e) => {
@@ -27,7 +27,7 @@ pub fn execute(file: &Path, json: bool, graph: bool) -> Result<(), CliError> {
                 return Err(CliError::Parse(err));
             }
         };
-        let _prog = match knr_core::syntax::parse_knr(&src) {
+        let _prog = match knr_core::syntax::parse_tsx(&src) {
             Ok(p) => p,
             Err(err) => {
                 let (error_kind, line, fix_hint) = parse_error_details(&err);
@@ -48,10 +48,10 @@ pub fn execute(file: &Path, json: bool, graph: bool) -> Result<(), CliError> {
         };
         return match knr_verify::verify_program_from_file(file) {
             Ok(module) => {
-                // Validate every `shader fn` compiles to valid naga-verified WGSL + WebGL2 GLSL
+                // Validate every `@shader` function compiles to valid naga-verified WGSL + WebGL2 GLSL
                 if let Err(err) = knr_codegen::WgslBackend::new().compile_all_shaders(&module) {
                     let diag = Diagnostic::new("ShaderCompileError", "<shader>", 1, err.to_string())
-                        .with_fix_hint("Ensure shader fn uses pure GPU arithmetic/structs and returns Color/Vec4/Vec3 or f64");
+                        .with_fix_hint("Ensure @shader function uses pure GPU arithmetic/structs and returns Color/Vec4/Vec3 or f64");
                     if json {
                         let json_output = serde_json::to_string_pretty(&vec![diag])
                             .map_err(|e| CliError::Other(e.to_string()))?;

@@ -1,0 +1,138 @@
+// ============================================================================
+// knr Official Showcase -- Minimal Floating Topbar (`site/components/navbar.tsk`)
+// ============================================================================
+
+import { Row, Button, Badge, Text, Icon } from "std/ui";
+import { State } from "../state.tsk";
+
+export function Navbar(s: readonly State): Widget {
+    const activeBg = "#141d33";
+    const activeBorder = "#38bdf855";
+    const idleBg = "#00000000";
+    const idleBorder = "#00000000";
+
+    return (
+        <Row
+            key="top_navbar"
+            w="full"
+            align="center"
+            justify="between"
+            bg="#0b0f1ce6"
+            border="#ffffff14"
+            borderW={1}
+            radius={14}
+            px={16}
+            py={10}
+            gap={14}
+            blur={18}
+        >
+            <Row align="center" gap={10}>
+                <Button
+                    key="nav_brand"
+                    onClick="tab_overview"
+                    bg="#0e1424"
+                    border="#ffffff18"
+                    hoverBorder="#38bdf866"
+                    px={12}
+                    py={7}
+                    radius={10}
+                    gap={8}
+                    align="center"
+                >
+                    <Icon name="diamond" size={15} color="#38bdf8" />
+                    <Text size={15} weight="bold" font="display" color="#f8fafc">
+                        knr
+                    </Text>
+                </Button>
+                <Badge bg="#0e1424" color="#94a3b8" border="#ffffff14">
+                    v0.3.0
+                </Badge>
+            </Row>
+
+            <Row align="center" gap={6}>
+                <Button
+                    key="nav_overview"
+                    onClick="tab_overview"
+                    bg={s.active_tab === 0 ? activeBg : idleBg}
+                    color={s.active_tab === 0 ? "#f8fafc" : "#94a3b8"}
+                    border={s.active_tab === 0 ? activeBorder : idleBorder}
+                    hoverBg="#ffffff0a"
+                    hoverBorder="#ffffff18"
+                    px={13}
+                    py={7}
+                    radius={9}
+                >
+                    Overview
+                </Button>
+                <Button
+                    key="nav_shaders"
+                    onClick="tab_shaders"
+                    bg={s.active_tab === 1 ? activeBg : idleBg}
+                    color={s.active_tab === 1 ? "#f8fafc" : "#94a3b8"}
+                    border={s.active_tab === 1 ? activeBorder : idleBorder}
+                    hoverBg="#ffffff0a"
+                    hoverBorder="#ffffff18"
+                    px={13}
+                    py={7}
+                    radius={9}
+                >
+                    GPU Studio
+                </Button>
+                <Button
+                    key="nav_safety"
+                    onClick="tab_safety"
+                    bg={s.active_tab === 2 ? activeBg : idleBg}
+                    color={s.active_tab === 2 ? "#f8fafc" : "#94a3b8"}
+                    border={s.active_tab === 2 ? activeBorder : idleBorder}
+                    hoverBg="#ffffff0a"
+                    hoverBorder="#ffffff18"
+                    px={13}
+                    py={7}
+                    radius={9}
+                >
+                    Safety
+                </Button>
+                <Button
+                    key="nav_toolchain"
+                    onClick="tab_toolchain"
+                    bg={s.active_tab === 3 ? activeBg : idleBg}
+                    color={s.active_tab === 3 ? "#f8fafc" : "#94a3b8"}
+                    border={s.active_tab === 3 ? activeBorder : idleBorder}
+                    hoverBg="#ffffff0a"
+                    hoverBorder="#ffffff18"
+                    px={13}
+                    py={7}
+                    radius={9}
+                >
+                    Toolchain
+                </Button>
+            </Row>
+
+            <Button
+                key="nav_clock_toggle"
+                onClick="toggle_pause"
+                bg="#0e1424"
+                border={s.paused ? "#ffffff18" : "#38bdf844"}
+                hoverBorder="#38bdf866"
+                px={12}
+                py={7}
+                radius={999}
+                gap={7}
+                align="center"
+            >
+                <Icon
+                    name="activity"
+                    size={14}
+                    color={s.paused ? "#64748b" : "#38bdf8"}
+                />
+                <Text
+                    size={12}
+                    weight="semibold"
+                    color={s.paused ? "#94a3b8" : "#e2e8f0"}
+                >
+                    {s.paused ? "Paused" : "Live GPU"}
+                </Text>
+            </Button>
+        </Row>
+    );
+}

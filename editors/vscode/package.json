@@ -1,8 +1,8 @@
 {
   "name": "knr-lang",
-  "displayName": "knr Language Support",
-  "description": "Syntax highlighting and built-in LSP support (live diagnostics, hover docs, autocomplete, and document symbols) for the knr linear programming language and SSA IR.",
-  "version": "0.1.0",
+  "displayName": "knr Language Support (.tsk)",
+  "description": "First-class Strict TypeScript/TSX (.tsk), .knr, and SSA IR language support powered exclusively by `knr lsp` — zero conflict with tsserver.",
+  "version": "0.4.0",
   "publisher": "knr-lang",
   "license": "MIT",
   "engines": {
@@ -14,6 +14,9 @@
   ],
   "keywords": [
     "knr",
+    "tsk",
+    "tsx",
+    "typescript",
     "ssa",
     "linear",
     "shader",
@@ -22,17 +25,21 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:knr"
+    "onLanguage:knr",
+    "onLanguage:knr-ssa"
   ],
   "contributes": {
     "languages": [
       {
         "id": "knr",
         "aliases": [
+          "knr (.tsk)",
+          "tsk",
           "knr",
           "KNR"
         ],
         "extensions": [
+          ".tsk",
           ".knr"
         ],
         "configuration": "./language-configuration.json"
@@ -53,12 +60,12 @@
     "grammars": [
       {
         "language": "knr",
-        "scopeName": "source.knr",
+        "scopeName": "source.tsk",
         "path": "./syntaxes/knr.tmLanguage.json"
       },
       {
         "language": "knr-ssa",
-        "scopeName": "source.knr",
+        "scopeName": "source.tsk",
         "path": "./syntaxes/knr.tmLanguage.json"
       }
     ],

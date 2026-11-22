@@ -46,12 +46,12 @@ fn test_init_in_empty_dir() {
     assert!(output.status.success(), "knr init should exit 0");
 
     let manifest_path = temp.path().join("knr.toml");
-    let entry_path = temp.path().join("src/main.knr");
+    let entry_path = temp.path().join("src/main.tsk");
     let gitignore_path = temp.path().join(".gitignore");
     let readme_path = temp.path().join("README.md");
 
     assert!(manifest_path.is_file(), "knr.toml must be created");
-    assert!(entry_path.is_file(), "src/main.knr must be created");
+    assert!(entry_path.is_file(), "src/main.tsk must be created");
     assert!(gitignore_path.is_file(), ".gitignore must be created");
     assert!(readme_path.is_file(), "README.md must be created");
 
@@ -119,7 +119,7 @@ fn test_new_creates_directory_structure() {
     assert!(output.status.success(), "knr new should succeed");
     assert!(app_dir.is_dir());
     assert!(app_dir.join("knr.toml").is_file());
-    assert!(app_dir.join("src/main.knr").is_file());
+    assert!(app_dir.join("src/main.tsk").is_file());
 }
 
 #[test]
@@ -136,8 +136,9 @@ fn test_new_all_templates_and_immediate_verification() {
             .expect("knr new with template");
         assert!(new_output.status.success(), "knr new --template {tmpl} must succeed");
 
-        let entry = app_dir.join("src/main.knr");
-        assert!(entry.is_file(), "src/main.knr must exist for template {tmpl}");
+        let entry_rel = if *tmpl == "ui" { "src/app.tsk" } else { "src/main.tsk" };
+        let entry = app_dir.join(entry_rel);
+        assert!(entry.is_file(), "{entry_rel} must exist for template {tmpl}");
 
         // Statically check using knr check
         let check_output = knr_cmd()
@@ -169,11 +170,11 @@ fn test_workspace_initialization() {
 
     let ws_manifest_path = temp.path().join("knr.toml");
     let demo_manifest_path = temp.path().join("apps/demo/knr.toml");
-    let demo_entry_path = temp.path().join("apps/demo/src/main.knr");
+    let demo_entry_path = temp.path().join("apps/demo/src/main.tsk");
 
     assert!(ws_manifest_path.is_file(), "Workspace knr.toml must exist");
     assert!(demo_manifest_path.is_file(), "apps/demo/knr.toml must exist");
-    assert!(demo_entry_path.is_file(), "apps/demo/src/main.knr must exist");
+    assert!(demo_entry_path.is_file(), "apps/demo/src/main.tsk must exist");
 
     let ws_content = fs::read_to_string(ws_manifest_path).unwrap();
     assert!(ws_content.contains("[workspace]"));
@@ -206,5 +207,5 @@ fn test_new_workspace_command() {
     assert!(output.status.success());
     assert!(ws_dir.join("knr.toml").is_file());
     assert!(ws_dir.join("apps/demo/knr.toml").is_file());
-    assert!(ws_dir.join("apps/demo/src/main.knr").is_file());
+    assert!(ws_dir.join("apps/demo/src/main.tsk").is_file());
 }

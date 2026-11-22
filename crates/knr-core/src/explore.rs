@@ -254,11 +254,11 @@ pub fn explore_path(path: &Path) -> Result<ProjectGraph, ParseError> {
 
 fn explore_file(canonical: &Path, root_hint: &Path) -> Result<ProjectGraph, ParseError> {
     let file_str = canonical.to_string_lossy();
-    if !(file_str.ends_with(".ssa.schema") || file_str.ends_with(".ssa") || file_str.ends_with(".knr")) {
+    if !(file_str.ends_with(".ssa.schema") || file_str.ends_with(".ssa") || crate::is_source_file(canonical)) {
         return Err(ParseError::InvalidSyntax {
             line: 1,
             msg: format!(
-                "File '{}' has invalid extension; expected '.ssa', '.ssa.schema', or '.knr'",
+                "File '{}' has invalid extension; expected '.tsk', '.knr', '.ssa', or '.ssa.schema'",
                 root_hint.display()
             ),
         });
@@ -315,7 +315,7 @@ impl<'a> FileExplorerState<'a> {
         }
 
         let file_str = canonical.to_string_lossy();
-        let is_knr = file_str.ends_with(".knr");
+        let is_knr = crate::is_source_file(canonical);
         let role = if file_str.ends_with(".ssa.schema") {
             FileRole::Schema
         } else if file_str.ends_with(".ssa") || is_knr {
@@ -324,7 +324,7 @@ impl<'a> FileExplorerState<'a> {
             return Err(ParseError::InvalidSyntax {
                 line: import_line,
                 msg: format!(
-                    "File '{}' has invalid extension; expected '.ssa', '.ssa.schema', or '.knr'",
+                    "File '{}' has invalid extension; expected '.tsk', '.knr', '.ssa', or '.ssa.schema'",
                     canonical.display()
                 ),
             });
@@ -371,6 +371,10 @@ impl<'a> FileExplorerState<'a> {
 
         // Recursively visit dependencies first
         for (rel_path, line) in &file_imports {
+            if is_knr && crate::syntax::stdlib::resolve_builtin_std(rel_path).is_some() {
+                resolved_import_paths.push(rel_path.clone());
+                continue;
+            }
             if role == FileRole::Schema && !rel_path.ends_with(".ssa.schema") {
                 return Err(ParseError::InvalidConstructInSchemaFile {
                     line: *line,
@@ -379,7 +383,7 @@ impl<'a> FileExplorerState<'a> {
                     ),
                 });
             }
-            let target_path = base_dir.join(rel_path);
+            let target_path = resolve_explore_import_path(base_dir, rel_path);
             let target_canonical = match fs::canonicalize(&target_path) {
                 Ok(c) => c,
                 Err(e) => {
@@ -444,6 +448,7 @@ impl<'a> FileExplorerState<'a> {
                         fn_lines.insert(f.name.name.clone(), f.name.span.line);
                         declared_fn_names.insert(f.name.name.clone());
                     }
+                    crate::syntax::ast::Declaration::Const(_) => {}
                 }
             }
 
@@ -503,6 +508,17 @@ impl<'a> FileExplorerState<'a> {
 fn explore_directory(canonical_dir: &Path, root_hint: &Path) -> Result<ProjectGraph, ParseError> {
     let mut discovered = Vec::new();
     find_ssa_files_recursive(canonical_dir, &mut discovered)?;
+
+    if discovered.is_empty() {
+        let mut knr_files = Vec::new();
+        find_knr_files_recursive(canonical_dir, &mut knr_files)?;
+        knr_files.sort();
+        let mut state = FileExplorerState::new(root_hint);
+        for path in &knr_files {
+            state.visit_file(path, 1)?;
+        }
+        return state.into_graph();
+    }
 
     // Separate schema and code files
     let mut schema_files = Vec::new();
@@ -634,6 +650,68 @@ fn find_ssa_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Pa
     }
 
     Ok(())
+}
+
+fn find_knr_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ParseError> {
+    let entries = fs::read_dir(dir).map_err(|e| ParseError::IoError {
+        path: dir.display().to_string(),
+        msg: e.to_string(),
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| ParseError::IoError {
+            path: dir.display().to_string(),
+            msg: e.to_string(),
+        })?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let name_str = file_name.to_string_lossy();
+
+        if name_str.starts_with('.') || name_str == "target" {
+            continue;
+        }
+
+        if path.is_dir() {
+            find_knr_files_recursive(&path, out)?;
+        } else if path.is_file() && crate::is_source_file(&path) {
+            if let Ok(c) = fs::canonicalize(&path) {
+                out.push(c);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_explore_import_path(base_dir: &Path, rel_path: &str) -> PathBuf {
+    let direct = base_dir.join(rel_path);
+    if direct.is_file() {
+        return direct;
+    }
+    if !rel_path.ends_with(".tsk")
+        && !rel_path.ends_with(".knr")
+        && !rel_path.ends_with(".ssa")
+        && !rel_path.ends_with(".ssa.schema")
+    {
+        let trimmed = rel_path.trim_end_matches('/');
+        for suffix in [".tsk", ".knr", "/index.tsk", "/index.knr"] {
+            let cand = base_dir.join(format!("{trimmed}{suffix}"));
+            if cand.is_file() {
+                return cand;
+            }
+        }
+    }
+    if !rel_path.starts_with("std/")
+        && !rel_path.starts_with("./")
+        && !rel_path.starts_with("../")
+    {
+        if let Some(pkg_path) = crate::manifest::resolve_package_import(rel_path, base_dir) {
+            return pkg_path;
+        }
+    }
+    direct
 }
 
 fn resolve_file_imports(content: &str, file_path: &Path, root_hint: &Path) -> Vec<String> {

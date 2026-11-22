@@ -777,11 +777,11 @@ fn test_update_check_and_self_replacement_with_install_sh() {
     let _ = fs::remove_dir_all(&work_dir);
     fs::create_dir_all(&work_dir).expect("create work_dir");
 
-    // 1. Test `knr update --check` when already up to date (v0.1.0)
+    // 1. Test `knr update --check` when already up to date (v0.3.0)
     let json_same = work_dir.join("release_same.json");
     fs::write(
         &json_same,
-        r#"{"tag_name": "v0.1.0", "html_url": "https://github.com/solarpush/knr/releases/tag/v0.1.0", "assets": []}"#,
+        r#"{"tag_name": "v0.3.0", "html_url": "https://github.com/solarpush/knr/releases/tag/v0.3.0", "assets": []}"#,
     )
     .unwrap();
 

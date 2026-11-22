@@ -8,18 +8,18 @@ use knr_verify::verify_program;
 #[test]
 fn test_adv_verify_source_map_lowering_diagnostic_enrichment() {
     let src = r#"
-schema Item {
-    0: id i64,
-}
+type Item = {
+    id: i64,
+};
 
-fn consume(it: Item) -> i64 {
+function consume(it: Item): i64 {
     return it.id;
 }
 
-fn trigger_uam() -> i64 {
-    let my_item = Item { id: 42 };
-    let a = consume(my_item);
-    let b = consume(my_item);
+function trigger_uam(): i64 {
+    const my_item: Item = { id: 42 };
+    const a = consume(my_item);
+    const b = consume(my_item);
     return a + b;
 }
 "#;
@@ -46,17 +46,17 @@ fn trigger_uam() -> i64 {
 #[test]
 fn test_adv_verify_source_map_verification_pass_enrichment() {
     // Construct a program where lowering succeeds, but knr-verify detects an unmanaged linear leak.
-    // Container holds an unmanaged `buf`, so knr-core::lower does not auto-drop it.
+    // Container holds an unmanaged `Buffer`, so knr-core::lower does not auto-drop it.
     // knr-verify detects the LinearLeak and verify_program enriches the diagnostic
     // with source_variable, column, and span from the SourceMap!
     let src = r#"
-schema Container {
-    0: b buf,
-    1: id i64,
-}
+type Container = {
+    b: Buffer,
+    id: i64,
+};
 
-fn leak_container(raw_buf: buf) -> i64 {
-    let leaked_box = Container { b: raw_buf, id: 42 };
+function leak_container(raw_buf: Buffer): i64 {
+    const leaked_box: Container = { b: raw_buf, id: 42 };
     return 0;
 }
 "#;
@@ -81,15 +81,15 @@ fn leak_container(raw_buf: buf) -> i64 {
 #[test]
 fn test_adv_verify_schema_recursive_dependency_rejected() {
     let src = r#"
-schema Alpha {
-    0: b struct[Beta],
-}
+type Alpha = {
+    b: Beta,
+};
 
-schema Beta {
-    0: a struct[Alpha],
-}
+type Beta = {
+    a: Alpha,
+};
 
-fn dummy() -> void {}
+function dummy(): void {}
 "#;
     let prog = parse_knr(src).expect("parse cyclic schemas");
     let res = verify_program(&prog);
@@ -106,15 +106,15 @@ fn dummy() -> void {}
 #[test]
 fn test_adv_verify_schema_duplicate_name_rejected() {
     let src = r#"
-schema DupName {
-    0: x i64,
-}
+type DupName = {
+    x: i64,
+};
 
-schema DupName {
-    0: y i64,
-}
+type DupName = {
+    y: i64,
+};
 
-fn dummy() -> void {}
+function dummy(): void {}
 "#;
     let prog = parse_knr(src).expect("parse duplicate schemas");
     let res = verify_program(&prog);
@@ -131,16 +131,16 @@ fn dummy() -> void {}
 #[test]
 fn test_adv_verify_schema_duplicate_field_index_rejected() {
     let src = r#"
-schema ConflictFields {
-    0: first i64,
-    0: second i64,
-}
+type ConflictFields = {
+    first: i64,
+    first: i64,
+};
 
-fn dummy() -> void {}
+function dummy(): void {}
 "#;
     let prog = parse_knr(src).expect("parse conflict fields");
     let res = verify_program(&prog);
-    assert!(res.is_err(), "Duplicate field indices must be rejected");
+    assert!(res.is_err(), "Duplicate fields must be rejected");
 
     let diags = res.unwrap_err();
     assert!(
@@ -153,17 +153,17 @@ fn dummy() -> void {}
 #[test]
 fn test_adv_verify_complex_diamond_linear_join_clean() {
     let src = r#"
-schema Card {
-    0: id i64,
-    1: tag str,
-}
+type Card = {
+    id: i64,
+    tag: string,
+};
 
-fn modify_card(c: Card, flag: bool) -> Card {
-    if flag {
-        let updated = Card { id: c.id + 1, tag: "then" };
+function modify_card(c: Card, flag: bool): Card {
+    if (flag) {
+        const updated: Card = { id: c.id + 1, tag: "then" };
         return updated;
     } else {
-        let updated = Card { id: c.id + 2, tag: "else" };
+        const updated: Card = { id: c.id + 2, tag: "else" };
         return updated;
     }
 }
@@ -180,14 +180,14 @@ fn modify_card(c: Card, flag: bool) -> Card {
 #[test]
 fn test_adv_verify_struct_borrow_does_not_consume_linear() {
     let src = r#"
-schema Node {
-    0: key str,
-    1: val i64,
-}
+type Node = {
+    key: string,
+    val: i64,
+};
 
-fn read_node(n: Node) -> i64 {
-    let k = n.key;
-    let v = n.val;
+function read_node(n: Node): i64 {
+    const k = n.key;
+    const v = n.val;
     return v;
 }
 "#;
@@ -203,12 +203,12 @@ fn read_node(n: Node) -> i64 {
 #[test]
 fn test_adv_verify_dominance_across_nested_branches() {
     let src = r#"
-schema Item { 0: v i64, }
+type Item = { v: i64 };
 
-fn complex_control(a: i64, b: i64) -> i64 {
-    let it = Item { v: 10 };
-    if a > 0 {
-        if b > 0 {
+function complex_control(a: i64, b: i64): i64 {
+    const it: Item = { v: 10 };
+    if (a > 0) {
+        if (b > 0) {
             return it.v + 1;
         } else {
             return it.v + 2;

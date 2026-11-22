@@ -100,7 +100,7 @@ fn test_run_watch_flag() {
         .expect("init app");
     assert!(init_out.status.success());
 
-    let entry = temp.path().join("src/main.knr");
+    let entry = temp.path().join("src/main.tsk");
     let run_out = knr_cmd()
         .args(["run", entry.to_str().unwrap(), "--watch", "--once"])
         .output()
@@ -143,14 +143,14 @@ fn test_dev_detects_file_modification() {
     std::thread::sleep(Duration::from_millis(300));
 
     // Modify file
-    let entry = temp.path().join("src/main.knr");
+    let entry = temp.path().join("src/main.tsk");
     let new_src = r#"// Modified application
-fn main() -> i64 {
-    let code = 42;
+export function main(): i64 {
+    const code: i64 = 42;
     return code;
 }
 "#;
-    fs::write(&entry, new_src).expect("write modified knr");
+    fs::write(&entry, new_src).expect("write modified ts");
 
     // Wait 500ms for change detection and re-run
     std::thread::sleep(Duration::from_millis(500));
@@ -197,10 +197,10 @@ fn test_dev_debounce_batching() {
 
     std::thread::sleep(Duration::from_millis(300));
 
-    let entry = temp.path().join("src/main.knr");
+    let entry = temp.path().join("src/main.tsk");
     // Perform 5 rapid writes within 30ms
     for i in 1..=5 {
-        let src = format!("fn main() -> i64 {{\n    return {i};\n}}\n");
+        let src = format!("export function main(): i64 {{\n    return {i};\n}}\n");
         let _ = fs::write(&entry, src);
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -248,7 +248,7 @@ fn test_dev_resilience_to_syntax_error() {
 
     std::thread::sleep(Duration::from_millis(300));
 
-    let entry = temp.path().join("src/main.knr");
+    let entry = temp.path().join("src/main.tsk");
 
     // Introduce syntax error
     fs::write(&entry, "INVALID SYNTAX // !!!").expect("write invalid syntax");
@@ -263,7 +263,7 @@ fn test_dev_resilience_to_syntax_error() {
 
     // Fix syntax
     let fixed_src = r#"// Fixed
-fn main() -> i64 {
+export function main(): i64 {
     return 777;
 }
 "#;

@@ -1,5 +1,5 @@
 // Error: UndeclaredVariable
-fn test_var() -> i64 {
-    let a = 10;
+function test_var(): i64 {
+    const a = 10;
     return a + undeclared_identifier;
 }

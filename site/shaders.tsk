@@ -1,0 +1,351 @@
+// ============================================================================
+// knr Official Showcase -- Pure GPU Shader Kernels (`site/shaders.tsk`)
+// ============================================================================
+// Three statically verified GPU-pure `@shader` kernels compiled via `naga` to:
+//   - WGSL (Desktop `wgpu` + Browser WebGPU)
+//   - GLSL ES 3.00 (Universal Browser WebGL2 fallback)
+//
+// Zero `atan2` branch-cut seams, zero high-frequency dot/scanline moire,
+// refined obsidian-indigo palette with smooth interactive mouse lighting.
+
+import { Vec2, Color } from "std/ui";
+import { Vec3, smin, vec3_norm, vec3_dot, vec3_add, pi, tau } from "std/math";
+
+export function spectral_cos(t: f64, phase: f64): f64 {
+    return 0.5 + 0.5 * cos(6.283185307179586 * (t + phase));
+}
+
+// ----------------------------------------------------------------------------
+// SHADER 1: `knr_hero_nebula` -- Continuous Domain-Warped Aurora Silk
+// ----------------------------------------------------------------------------
+
+@shader
+export function knr_hero_nebula(
+    uv: Vec2,
+    time: f64,
+    mouse: Vec2,
+    energy: f64,
+    hue: f64,
+    depth: f64,
+): Color {
+    const e = clamp(energy, 0.0, 1.0);
+    const h = clamp(hue, 0.0, 1.0);
+    const d = clamp(depth, 0.0, 1.0);
+    const t = time * (0.20 + e * 0.65);
+
+    // Aspect-balanced continuous Cartesian coordinates (zero polar discontinuities)
+    const scale_x = 1.95 + d * 0.85;
+    const scale_y = 1.15 + d * 0.45;
+    const px = (uv.x - 0.5) * scale_x;
+    const py = (uv.y - 0.5) * scale_y;
+
+    // Two-pass smooth fBm-style trigonometric domain warp for organic silk curtains
+    const w1x = px + (0.32 + d * 0.18) * sin(py * 2.2 + t * 0.55) + 0.14 * cos(px * 1.5 - t * 0.35);
+    const w1y = py + (0.26 + d * 0.16) * cos(px * 2.0 - t * 0.48) + 0.12 * sin(py * 1.7 + t * 0.40);
+
+    const wx = w1x + 0.22 * sin(w1y * 2.5 + cos(w1x * 1.8 - t * 0.42));
+    const wy = w1y + 0.20 * cos(w1x * 2.3 - sin(w1y * 1.9 + t * 0.38));
+
+    // Three harmonic silk layers (strictly smooth & low-frequency, zero dot artifacts)
+    const fold_a = sin(wx * 2.4 + cos(wy * 1.9 - t * 0.46));
+    const fold_b = cos(wy * 2.8 - wx * 1.6 + t * 0.52);
+    const fold_c = sin((wx * 0.85 + wy * 1.15) * 2.1 - t * 0.34);
+
+    const field = 0.5 + 0.5 * (fold_a * 0.48 + fold_b * 0.32 + fold_c * 0.20);
+    const ribbon = smoothstep(0.20, 0.92, field);
+    const crest = smoothstep(0.62, 0.98, field);
+    const veil = smoothstep(0.12, 0.88, 0.5 + 0.5 * sin(wx * 1.35 - wy * 1.75 + t * 0.26));
+
+    // Soft continuous mouse-tracking atmospheric light bloom
+    const mdx = (uv.x - mouse.x) * 1.85;
+    const mdy = (uv.y - mouse.y) * 1.08;
+    const mdist2 = mdx * mdx + mdy * mdy;
+    const mouse_bloom = (0.28 + e * 0.26) / (1.0 + mdist2 * 5.2);
+    const mouse_core = (0.14 + e * 0.12) / (1.0 + mdist2 * 22.0);
+
+    // Refined obsidian-indigo / cobalt / violet / ice-cyan silk palette
+    const pal_t = ribbon * 0.28 + veil * 0.16 + h + t * 0.022;
+    const pr = 0.16 + 0.54 * spectral_cos(pal_t, 0.64);
+    const pg = 0.30 + 0.58 * spectral_cos(pal_t, 0.14);
+    const pb = 0.58 + 0.42 * spectral_cos(pal_t, 0.92);
+
+    const silk_amp = (0.26 + e * 0.58) * ribbon + 0.18 * veil + 0.34 * crest;
+
+    // Calm deep midnight obsidian base matching `#06080f`
+    const grad_y = clamp(1.0 - uv.y, 0.0, 1.0);
+    const base_r = 0.022 + grad_y * 0.014;
+    const base_g = 0.030 + grad_y * 0.022;
+    const base_b = 0.062 + grad_y * 0.044;
+
+    // Gentle edge vignette so the canvas melts cleanly into the editorial frame
+    const vdx = (uv.x - 0.5) * 1.55;
+    const vdy = (uv.y - 0.5) * 1.25;
+    const vig = clamp(1.06 - (vdx * vdx + vdy * vdy) * 0.58, 0.36, 1.0);
+
+    const col_r = base_r + silk_amp * pr * 0.62 + mouse_bloom * (0.24 + 0.42 * pr) + mouse_core * 0.52;
+    const col_g = base_g + silk_amp * pg * 0.78 + mouse_bloom * (0.48 + 0.32 * pg) + mouse_core * 0.78;
+    const col_b = base_b + silk_amp * pb * 1.02 + mouse_bloom * (0.84 + 0.16 * pb) + mouse_core * 0.96;
+
+    const r = clamp(lerp(0.024, col_r, vig), 0.0, 1.0);
+    const g = clamp(lerp(0.031, col_g, vig), 0.0, 1.0);
+    const b = clamp(lerp(0.059, col_b, vig), 0.0, 1.0);
+    return { r, g, b, a: 1.0 };
+}
+
+// ----------------------------------------------------------------------------
+// SHADER 2: `knr_sdf_crystal` -- 48-Step 3D SDF Raymarched Refractive Crystal
+// ----------------------------------------------------------------------------
+
+export function crystal_torus(px: f64, py: f64, pz: f64, major: f64, minor: f64): f64 {
+    const qx = sqrt(px * px + pz * pz) - major;
+    return sqrt(qx * qx + py * py) - minor;
+}
+
+export function crystal_sphere(px: f64, py: f64, pz: f64, radius: f64): f64 {
+    return sqrt(px * px + py * py + pz * pz) - radius;
+}
+
+export function crystal_scene_sdf(px: f64, py: f64, pz: f64, time: f64, twist: f64): f64 {
+    const ta = py * (0.35 + twist * 1.85);
+    const ct = cos(ta);
+    const st = sin(ta);
+    const tx = px * ct - pz * st;
+    const tz = px * st + pz * ct;
+
+    const ax = time * 0.56;
+    const ay = time * 0.40;
+    const cx = cos(ax);
+    const sx = sin(ax);
+    const cy = cos(ay);
+    const sy = sin(ay);
+
+    const ry1 = py * cx - tz * sx;
+    const rz1 = py * sx + tz * cx;
+    const rx2 = tx * cy + rz1 * sy;
+    const rz2 = rz1 * cy - tx * sy;
+    const d_torus = crystal_torus(rx2, ry1, rz2, 0.90, 0.24);
+
+    const ox1 = cos(time * 0.98) * 0.94;
+    const oy1 = sin(time * 1.30) * 0.40;
+    const oz1 = sin(time * 0.98) * 0.94;
+    const d_orb1 = crystal_sphere(px - ox1, py - oy1, pz - oz1, 0.32);
+
+    const ox2 = cos(time * 0.74 + pi()) * 0.80;
+    const oy2 = cos(time * 1.12) * 0.42;
+    const oz2 = sin(time * 0.74 + pi()) * 0.80;
+    const d_orb2 = crystal_sphere(px - ox2, py - oy2, pz - oz2, 0.26);
+
+    const d_core = crystal_sphere(px, py, pz, 0.34 + 0.04 * sin(time * 1.8));
+
+    const b1 = smin(d_torus, d_orb1, 0.40);
+    const b2 = smin(b1, d_orb2, 0.36);
+    return smin(b2, d_core, 0.34);
+}
+
+@shader
+export function knr_sdf_crystal(
+    uv: Vec2,
+    time: f64,
+    mouse: Vec2,
+    energy: f64,
+    hue: f64,
+    depth: f64,
+): Color {
+    const twist = clamp(energy, 0.0, 1.0);
+    const h = clamp(hue, 0.0, 1.0);
+    const zoom = clamp(depth, 0.0, 1.0);
+
+    const sx = (uv.x - 0.5) * 2.25;
+    const sy = (0.5 - uv.y) * 1.22;
+
+    const yaw = (mouse.x - 0.5) * tau() * 0.70 + time * 0.18;
+    const pitch = clamp((mouse.y - 0.5) * 1.20, -0.88, 0.88);
+    const cam_dist = 3.90 - zoom * 1.40;
+
+    const cp = cos(pitch);
+    const sp = sin(pitch);
+    const cy = cos(yaw);
+    const sy_a = sin(yaw);
+
+    const ro: Vec3 = {
+        x: cam_dist * cp * sy_a,
+        y: cam_dist * sp,
+        z: cam_dist * cp * cy,
+    };
+    const neg_ro: Vec3 = { x: 0.0 - ro.x, y: 0.0 - ro.y, z: 0.0 - ro.z };
+    const fwd = vec3_norm(neg_ro);
+    const right_raw: Vec3 = { x: 0.0 - fwd.z, y: 0.0, z: fwd.x };
+    const right = vec3_norm(right_raw);
+    const up: Vec3 = {
+        x: right.y * fwd.z - right.z * fwd.y,
+        y: right.z * fwd.x - right.x * fwd.z,
+        z: right.x * fwd.y - right.y * fwd.x,
+    };
+
+    const focal = 1.52;
+    const rd_raw: Vec3 = {
+        x: fwd.x * focal + right.x * sx + up.x * sy,
+        y: fwd.y * focal + right.y * sx + up.y * sy,
+        z: fwd.z * focal + right.z * sx + up.z * sy,
+    };
+    const rd = vec3_norm(rd_raw);
+
+    const ro_x = ro.x;
+    const ro_y = ro.y;
+    const ro_z = ro.z;
+    const rd_x = rd.x;
+    const rd_y = rd.y;
+    const rd_z = rd.z;
+
+    let t = 0.0;
+    let glow_acc = 0.0;
+    let hit = 0.0;
+
+    for (let step = 0; step < 48; step += 1) {
+        const px = ro_x + rd_x * t;
+        const py = ro_y + rd_y * t;
+        const pz = ro_z + rd_z * t;
+        const d = crystal_scene_sdf(px, py, pz, time, twist);
+        glow_acc = glow_acc + 0.012 / (abs(d) + 0.056);
+        if (d < 0.0026) {
+            hit = 1.0;
+            break;
+        }
+        t = t + d * 0.85;
+        if (t > 9.4) {
+            break;
+        }
+    }
+
+    const hx = ro_x + rd_x * t;
+    const hy = ro_y + rd_y * t;
+    const hz = ro_z + rd_z * t;
+    const eps = 0.0022;
+    const nx =
+        crystal_scene_sdf(hx + eps, hy, hz, time, twist)
+        - crystal_scene_sdf(hx - eps, hy, hz, time, twist);
+    const ny =
+        crystal_scene_sdf(hx, hy + eps, hz, time, twist)
+        - crystal_scene_sdf(hx, hy - eps, hz, time, twist);
+    const nz =
+        crystal_scene_sdf(hx, hy, hz + eps, time, twist)
+        - crystal_scene_sdf(hx, hy, hz - eps, time, twist);
+    const n_raw: Vec3 = { x: nx, y: ny, z: nz };
+    const n = vec3_norm(n_raw);
+
+    const l1_raw: Vec3 = { x: 0.62, y: 0.86, z: 0.50 };
+    const l1 = vec3_norm(l1_raw);
+    const l2_raw: Vec3 = { x: -0.76, y: 0.24, z: -0.58 };
+    const l2 = vec3_norm(l2_raw);
+    const view_dir: Vec3 = { x: 0.0 - rd_x, y: 0.0 - rd_y, z: 0.0 - rd_z };
+
+    const diff1 = max(vec3_dot(n, l1), 0.0);
+    const diff2 = max(vec3_dot(n, l2), 0.0);
+    const h_sum = vec3_add(l1, view_dir);
+    const half_v = vec3_norm(h_sum);
+    const nh = max(vec3_dot(n, half_v), 0.0);
+    const s2 = nh * nh;
+    const s4 = s2 * s2;
+    const s8 = s4 * s4;
+    const s16 = s8 * s8;
+    const spec = s16 * s16;
+
+    const nv = clamp(vec3_dot(n, view_dir), 0.0, 1.0);
+    const f1 = 1.0 - nv;
+    const fres = f1 * f1 * f1;
+
+    // Refined studio crystal palette: cool silver, indigo, ice-cyan
+    const phase = n.y * 0.32 + n.x * 0.22 + h + time * 0.07;
+    const pr = 0.42 + 0.36 * spectral_cos(phase, 0.62);
+    const pg = 0.56 + 0.34 * spectral_cos(phase, 0.16);
+    const pb = 0.74 + 0.24 * spectral_cos(phase, 0.88);
+
+    const surf_r = pr * (0.16 + diff1 * 0.68) + diff2 * 0.20 + spec * 0.92 + fres * 0.36;
+    const surf_g = pg * (0.18 + diff1 * 0.74) + diff2 * 0.22 + spec * 0.95 + fres * 0.66;
+    const surf_b = pb * (0.24 + diff1 * 0.82) + diff2 * 0.38 + spec * 1.00 + fres * 0.94;
+
+    const bg_grad = clamp(1.0 - uv.y, 0.0, 1.0);
+    const bg_r = 0.022 + bg_grad * 0.018;
+    const bg_g = 0.029 + bg_grad * 0.030;
+    const bg_b = 0.056 + bg_grad * 0.058;
+
+    const gp = glow_acc * (0.10 + twist * 0.30);
+    const glow_r = gp * (0.20 + 0.30 * pr);
+    const glow_g = gp * (0.52 + 0.28 * pg);
+    const glow_b = gp * 0.92;
+
+    const vdx = uv.x - 0.5;
+    const vdy = uv.y - 0.5;
+    const vig = clamp(1.02 - (vdx * vdx + vdy * vdy) * 0.72, 0.42, 1.0);
+
+    const r = clamp((lerp(bg_r, surf_r, hit) + glow_r) * vig, 0.0, 1.0);
+    const g = clamp((lerp(bg_g, surf_g, hit) + glow_g) * vig, 0.0, 1.0);
+    const b = clamp((lerp(bg_b, surf_b, hit) + glow_b) * vig, 0.0, 1.0);
+    return { r, g, b, a: 1.0 };
+}
+
+// ----------------------------------------------------------------------------
+// SHADER 3: `knr_quantum_grid` -- Minimalist Architectural Perspective Grid
+// ----------------------------------------------------------------------------
+
+@shader
+export function knr_quantum_grid(
+    uv: Vec2,
+    time: f64,
+    mouse: Vec2,
+    energy: f64,
+    hue: f64,
+    depth: f64,
+): Color {
+    const e = clamp(energy, 0.0, 1.0);
+    const h = clamp(hue, 0.0, 1.0);
+    const d = clamp(depth, 0.0, 1.0);
+    const t = time * (0.22 + e * 0.85);
+
+    const horizon = 0.44 + (mouse.y - 0.5) * 0.10;
+    const sx = (uv.x - 0.5) * 2.3;
+    const sy = uv.y - horizon;
+
+    // Clean architectural horizon glow + subtle zenith mist
+    const h_band = (0.010 + e * 0.010) / (abs(sy) + 0.015);
+    const mx = (uv.x - (0.5 + (mouse.x - 0.5) * 0.28)) * 1.8;
+    const my = (uv.y - (horizon - 0.04)) * 1.4;
+    const zenith = (0.14 + e * 0.12) / (1.0 + (mx * mx + my * my) * 6.5);
+
+    // Distance-attenuated perspective grid below horizon (zero moire at far z)
+    const is_floor = smoothstep(-0.004, 0.018, sy);
+    const z = (0.34 + d * 0.44) / max(abs(sy), 0.028);
+    const gx = sx * z + (mouse.x - 0.5) * 1.6;
+    const gz = z + t * 1.8;
+
+    const aa = clamp(0.016 + z * 0.008, 0.016, 0.12);
+    const cell_x = abs(fract(gx * 0.72) - 0.5);
+    const cell_z = abs(fract(gz * 0.58) - 0.5);
+    const line_x = smoothstep(aa + 0.018, 0.005, cell_x);
+    const line_z = smoothstep(aa + 0.018, 0.005, cell_z);
+    const fade = clamp(1.35 / (1.0 + z * z * 0.065), 0.0, 1.0);
+    const grid_val = max(line_x, line_z) * is_floor * fade;
+
+    // Subtle atmospheric sky wash above horizon
+    const sky_mask = 1.0 - is_floor;
+    const sky_grad = clamp(1.0 - uv.y * 1.6, 0.0, 1.0);
+    const sky_sheen = sky_mask * (0.04 + sky_grad * 0.08);
+
+    const pal_t = h + uv.x * 0.14 + t * 0.02;
+    const pr = 0.20 + 0.34 * spectral_cos(pal_t, 0.64);
+    const pg = 0.52 + 0.32 * spectral_cos(pal_t, 0.14);
+    const pb = 0.84 + 0.16 * spectral_cos(pal_t, 0.92);
+
+    const base_r = 0.020 + sky_sheen * pr * 0.45;
+    const base_g = 0.028 + sky_sheen * pg * 0.58;
+    const base_b = 0.056 + sky_sheen * pb * 0.85;
+
+    const vdx = uv.x - 0.5;
+    const vdy = uv.y - 0.5;
+    const vig = clamp(1.04 - (vdx * vdx + vdy * vdy) * 0.65, 0.40, 1.0);
+
+    const r = clamp((base_r + grid_val * pr * 0.82 + h_band * (0.24 + pr * 0.45) + zenith * 0.22) * vig, 0.0, 1.0);
+    const g = clamp((base_g + grid_val * pg * 0.92 + h_band * (0.56 + pg * 0.32) + zenith * 0.54) * vig, 0.0, 1.0);
+    const b = clamp((base_b + grid_val * pb * 1.00 + h_band * 0.96 + zenith * 0.92) * vig, 0.0, 1.0);
+    return { r, g, b, a: 1.0 };
+}

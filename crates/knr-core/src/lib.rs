@@ -22,10 +22,14 @@ pub use lower::{
     lower_program_with_schemas, lower_program_with_source_map, LowerError, SourceMap,
 };
 pub use manifest::{
-    find_manifest_root, resolve_workspace_members, BuildConfig, DependencySpec, Manifest,
-    ManifestError, PackageManifest, UiConfig, WorkspaceManifest,
+    find_manifest_root, resolve_package_import, resolve_workspace_members, BuildConfig,
+    DependencySpec, Manifest, ManifestError, PackageManifest, UiConfig, WorkspaceManifest,
 };
 pub use parser::{parse_function, parse_module, parse_ssa, parse_ssa_with_role, FileRole};
-pub use syntax::{parse_knr, Declaration, Expr, Ident, Program, Span, Stmt, TypeExpr};
+pub use syntax::{
+    format_tsk, is_source_file, mangle_generic_name, mangle_type_name, parse_knr, parse_tsx,
+    ArrowBody, ConstDef, Declaration, DestructPattern, Expr, Ident, ImportKind, JsxChild, JsxProp,
+    Program, Span, Stmt, TemplatePart, TypeExpr,
+};
 
 

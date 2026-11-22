@@ -547,11 +547,17 @@ fn test_wasm_call_with_runtime_imports_offset() {
     let backend = WasmBackend::new();
     let mut module = Module::new();
 
-    // 1. Callee allocating a buffer (requires runtime imports "env" -> num_imports = 11)
+    // 1. Callee using a channel (requires host runtime imports "env" -> num_imports = 11,
+    // while Buf/Map/Vec/Struct all run self-contained inside WASM linear memory!)
     let mut f_callee = Function::new("callee_buf", Type::I64);
     let mut b_callee = BasicBlock::new(0, Terminator::Ret(Some(1)));
     b_callee.push(Instruction::new(Some(0), Type::I64, Op::ConstI64(64), 1));
-    b_callee.push(Instruction::new(Some(1), Type::Buf, Op::BufAlloc(0), 2));
+    b_callee.push(Instruction::new(
+        Some(1),
+        Type::Chan(Box::new(Type::I64)),
+        Op::ChanNew(Type::I64, 0),
+        2,
+    ));
     f_callee.add_block(b_callee);
     module.add_function(f_callee);
 

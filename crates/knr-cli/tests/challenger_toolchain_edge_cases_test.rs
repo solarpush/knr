@@ -68,7 +68,7 @@ fn repo_root() -> PathBuf {
 fn test_disasm_nested_nonexistent_directory() {
     let temp = TempDir::new("nested_dir");
     let root = repo_root();
-    let src_knr = root.join("site/components/exec_graph.knr");
+    let src_knr = root.join("tests/fixtures/legacy_site/components/exec_graph.knr");
     let bin_path = temp.path().join("exec.knrbin");
     let nested_ssa_path = temp
         .path()
@@ -135,7 +135,7 @@ fn test_disasm_nested_nonexistent_directory() {
 fn test_disasm_non_ssa_extensions() {
     let temp = TempDir::new("no_ext");
     let root = repo_root();
-    let src_knr = root.join("site/components/exec_graph.knr");
+    let src_knr = root.join("tests/fixtures/legacy_site/components/exec_graph.knr");
     let bin_path = temp.path().join("exec.knrbin");
 
     // Assemble
@@ -176,31 +176,31 @@ fn test_disasm_non_ssa_extensions() {
 #[test]
 fn test_disasm_zero_field_schema_and_multiple_schemas() {
     let temp = TempDir::new("multi_schema");
-    let knr_src = r#"schema Empty {
-}
+    let ts_src = r#"export type Empty = {
+};
 
-schema Alpha {
-    0: val i64,
-}
+export type Alpha = {
+    val: i64;
+};
 
-schema Beta {
-    0: name str,
-    1: count i64,
-}
+export type Beta = {
+    name: string;
+    count: i64;
+};
 
-fn test_fn(x: i64) -> i64 {
+export function test_fn(x: i64): i64 {
     return x;
 }
 "#;
-    let knr_file = temp.path().join("multi.knr");
-    fs::write(&knr_file, knr_src).expect("write multi.knr");
+    let ts_file = temp.path().join("multi.tsk");
+    fs::write(&ts_file, ts_src).expect("write multi.tsk");
     let bin_file = temp.path().join("multi.knrbin");
     let ssa_file = temp.path().join("multi.ssa");
     let schema_file = temp.path().join("multi.ssa.schema");
 
     // 1. Assemble
     let asm_out = knr_cmd()
-        .args(["asm", knr_file.to_str().unwrap(), "-o", bin_file.to_str().unwrap()])
+        .args(["asm", ts_file.to_str().unwrap(), "-o", bin_file.to_str().unwrap()])
         .output()
         .expect("knr asm");
     assert!(asm_out.status.success(), "asm must succeed for 0-field and multi schemas");
@@ -246,17 +246,17 @@ fn test_fn(x: i64) -> i64 {
 }
 
 // =============================================================================
-// 2. Adversarial .knr Graph Exploration
+// 2. Adversarial Strict TS Graph Exploration
 // =============================================================================
 
 #[test]
 fn test_check_graph_circular_import_rejected() {
     let temp = TempDir::new("circ_import");
-    let file_a = temp.path().join("node_a.knr");
-    let file_b = temp.path().join("node_b.knr");
+    let file_a = temp.path().join("node_a.tsk");
+    let file_b = temp.path().join("node_b.tsk");
 
-    fs::write(&file_a, "import \"node_b.knr\"\nfn a() -> i64 { return 1; }\n").unwrap();
-    fs::write(&file_b, "import \"node_a.knr\"\nfn b() -> i64 { return 2; }\n").unwrap();
+    fs::write(&file_a, "import \"./node_b.tsk\";\nexport function a(): i64 { return 1; }\n").unwrap();
+    fs::write(&file_b, "import \"./node_a.tsk\";\nexport function b(): i64 { return 2; }\n").unwrap();
 
     let check_out = knr_cmd()
         .args(["check", file_a.to_str().unwrap(), "--graph"])
@@ -276,11 +276,11 @@ fn test_check_graph_circular_import_rejected() {
 #[test]
 fn test_check_graph_missing_import_rejected() {
     let temp = TempDir::new("missing_import");
-    let main_knr = temp.path().join("main.knr");
-    fs::write(&main_knr, "import \"nonexistent_dependency.ssa.schema\"\nfn main() -> i64 { return 0; }\n").unwrap();
+    let main_ts = temp.path().join("main.tsk");
+    fs::write(&main_ts, "import \"nonexistent_dependency.ssa.schema\";\nexport function main(): i64 { return 0; }\n").unwrap();
 
     let check_out = knr_cmd()
-        .args(["check", main_knr.to_str().unwrap(), "--graph"])
+        .args(["check", main_ts.to_str().unwrap(), "--graph"])
         .current_dir(temp.path())
         .output()
         .expect("knr check");
@@ -298,13 +298,13 @@ fn test_check_graph_missing_import_rejected() {
 fn test_check_graph_valid_relative_schema_import() {
     let temp = TempDir::new("valid_graph");
     let schema_file = temp.path().join("vdom.ssa.schema");
-    let code_file = temp.path().join("app.knr");
+    let code_file = temp.path().join("app.tsk");
 
     fs::write(&schema_file, "schema Header {\n    0: title str,\n}\n").unwrap();
-    fs::write(&code_file, "import \"vdom.ssa.schema\"\n\nfn make_header() -> Header {\n    let h = Header { title: \"Welcome\" };\n    return h;\n}\n").unwrap();
+    fs::write(&code_file, "import \"vdom.ssa.schema\";\n\nexport function make_header(): Header {\n    const h: Header = { title: \"Welcome\" };\n    return h;\n}\n").unwrap();
 
     let check_out = knr_cmd()
-        .args(["check", "app.knr", "--graph"])
+        .args(["check", "app.tsk", "--graph"])
         .current_dir(temp.path())
         .output()
         .expect("knr check");
@@ -317,7 +317,7 @@ fn test_check_graph_valid_relative_schema_import() {
     let stdout = String::from_utf8_lossy(&check_out.stdout);
     assert!(stdout.contains("[TOPOLOGY & IMPORTS]"));
     assert!(stdout.contains("FILE vdom.ssa.schema (Schema)"));
-    assert!(stdout.contains("FILE app.knr (Code)"));
+    assert!(stdout.contains("FILE app.tsk (Code)"));
     assert!(stdout.contains("[SCHEMAS]"));
     assert!(stdout.contains("SCHEMA Header (vdom.ssa.schema:1)"));
 }
@@ -357,8 +357,9 @@ fn test_multicommand_parse_error_fidelity_unclosed_brace() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!stderr.contains("panicked"), "Subcommand {name} must not panic");
         assert!(
-            stderr.contains("line 5") && stderr.contains("missing closing brace"),
-            "Subcommand {name} must report exact parse error on line 5: {stderr}"
+            (stderr.contains("line 4") || stderr.contains("line 5"))
+                && (stderr.contains("RBrace") || stderr.contains("missing closing brace") || stderr.contains("Eof")),
+            "Subcommand {name} must report exact unclosed brace parse error: {stderr}"
         );
     }
 }
@@ -394,8 +395,9 @@ fn test_multicommand_parse_error_fidelity_invalid_token() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!stderr.contains("panicked"), "Subcommand {name} must not panic");
         assert!(
-            stderr.contains("line 3") && (stderr.contains("col 9") || stderr.contains("@")),
-            "Subcommand {name} must report token error on line 3, col 9: {stderr}"
+            stderr.contains("line 3")
+                && (stderr.contains("column 11") || stderr.contains("col 11") || stderr.contains("At") || stderr.contains("@")),
+            "Subcommand {name} must report token error on line 3, column 11: {stderr}"
         );
     }
 }

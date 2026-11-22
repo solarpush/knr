@@ -1,0 +1,315 @@
+// ============================================================================
+// knr Official Showcase -- Overview & Asymmetric Bento (`site/components/overview.tsk`)
+// ============================================================================
+
+import {
+    Column,
+    Row,
+    Grid,
+    Card,
+    Badge,
+    Text,
+    Code,
+    Button,
+    Icon,
+    Divider,
+    Progress,
+} from "std/ui";
+import { State } from "../state.tsk";
+import { Hero } from "./hero.tsk";
+
+export function Overview(s: readonly State): Widget {
+    const pulse_ratio = 0.76 + s.pulse * 0.20;
+    const live_trace =
+        `// Executing live via readonly State borrow\n`
+        + `s = update(s, action); // linear move\n`
+        + `const ui = view(s);    // zero-copy borrow\n`
+        + `// { demo_count: ${s.demo_count}, demo_ops: ${s.demo_ops} }`;
+
+    return (
+        <Column key="tab_view_overview" w="full" gap={24}>
+            <Hero s={s} />
+
+            <Grid key="overview_bento" cols={3} gap={16}>
+                <Card
+                    key="bento_gpu_engine"
+                    span={2}
+                    bg="#0b0f1c"
+                    border="#ffffff14"
+                    hoverBorder="#38bdf866"
+                    radius={16}
+                    p={24}
+                    gap={16}
+                >
+                    <Row align="center" justify="between">
+                        <Row align="center" gap={8}>
+                            <Icon name="layers" size={16} color="#38bdf8" />
+                            <Text size={13} weight="semibold" color="#38bdf8">
+                                UNIFIED GPU ENGINE
+                            </Text>
+                        </Row>
+                        <Badge bg="#0e1424" color="#94a3b8" border="#ffffff14">
+                            Desktop wgpu | Web Canvas | Headless Audit
+                        </Badge>
+                    </Row>
+
+                    <Text
+                        size={24}
+                        weight="bold"
+                        font="display"
+                        letterSpacing={-0.5}
+                        color="#f8fafc"
+                    >
+                        Pixel-Identical Rendering & Agentic Self-Verification
+                    </Text>
+
+                    <Text size={14} color="#94a3b8" lineHeight={1.55}>
+                        One Flutter-style analytical SDF GPU engine renders your Strict TSX component tree identically on native Vulkan/Metal/DX12, browser WebGPU/WebGL2, and headless PNG frames with spring physics, 67 vector icons, and z-index layers. AI agents run knr mcp or knr render --flow --viewports --assert-audit to verify zero defects in milliseconds.
+                    </Text>
+
+                    <Divider />
+
+                    <Row align="center" justify="between" gap={16}>
+                        <Row align="center" gap={8}>
+                            <Icon name="cpu" size={14} color="#818cf8" />
+                            <Text size={13} color="#cbd5e1">
+                                Native wgpu 23 + CPU fallback
+                            </Text>
+                        </Row>
+                        <Row align="center" gap={8}>
+                            <Icon name="globe" size={14} color="#38bdf8" />
+                            <Text size={13} color="#cbd5e1">
+                                Zero-DOM WebGPU / WebGL2
+                            </Text>
+                        </Row>
+                        <Row align="center" gap={8}>
+                            <Icon name="eye" size={14} color="#818cf8" />
+                            <Text size={13} color="#cbd5e1">
+                                Automated Layout & Glyph Audit
+                            </Text>
+                        </Row>
+                    </Row>
+                </Card>
+
+                <Card
+                    key="bento_verifier_kpi"
+                    span={1}
+                    bg="#0e1322"
+                    border="#ffffff14"
+                    hoverBorder="#38bdf866"
+                    radius={16}
+                    p={24}
+                    gap={14}
+                    justify="between"
+                >
+                    <Row align="center" gap={8}>
+                        <Icon name="shield" size={16} color="#818cf8" />
+                        <Text size={13} weight="semibold" color="#818cf8">
+                            STATIC VERIFIER
+                        </Text>
+                    </Row>
+
+                    <Column gap={6}>
+                        <Text
+                            size={40}
+                            weight="extrabold"
+                            font="display"
+                            letterSpacing={-1.2}
+                            color="#38bdf8"
+                        >
+                            {"< 100 us"}
+                        </Text>
+                        <Text size={16} weight="semibold" color="#f8fafc">
+                            4-Pass Linear SSA Proof
+                        </Text>
+                    </Column>
+
+                    <Text size={13} color="#94a3b8" lineHeight={1.55}>
+                        Checks SSA dominance, single linear ownership, second-class readonly borrows, transitive @effects, and naga WGSL/GLSL shader purity before codegen. Zero GC pauses, zero lifetime annotations.
+                    </Text>
+
+                    <Text size={12} font="mono" color="#64748b">
+                        knr check site/app.tsk --json
+                    </Text>
+                </Card>
+
+                <Card
+                    key="bento_live_playground"
+                    span={1}
+                    bg="#0b0f1c"
+                    border="#ffffff14"
+                    hoverBorder="#38bdf866"
+                    radius={16}
+                    p={24}
+                    gap={14}
+                >
+                    <Row align="center" justify="between">
+                        <Row align="center" gap={8}>
+                            <Icon name="zap" size={15} color="#38bdf8" />
+                            <Text size={13} weight="semibold" color="#38bdf8">
+                                LIVE &STATE BORROW
+                            </Text>
+                        </Row>
+                        <Badge bg="#0e1424" color="#cbd5e1" border="#ffffff14">
+                            {`${s.demo_ops} moves | 0 GC`}
+                        </Badge>
+                    </Row>
+
+                    <Row align="center" justify="between">
+                        <Text
+                            size={38}
+                            weight="extrabold"
+                            font="display"
+                            letterSpacing={-1.0}
+                            color="#f8fafc"
+                        >
+                            {s.demo_count}
+                        </Text>
+                        <Row gap={6}>
+                            <Button
+                                key="demo_btn_dec"
+                                onClick="demo_dec"
+                                bg="#0e1322"
+                                border="#ffffff18"
+                                hoverBorder="#38bdf866"
+                                px={10}
+                                py={7}
+                                radius={8}
+                                gap={4}
+                                align="center"
+                            >
+                                <Icon name="minus" size={13} color="#cbd5e1" />
+                                <Text size={13} weight="semibold" color="#e2e8f0">
+                                    1
+                                </Text>
+                            </Button>
+                            <Button
+                                key="demo_btn_inc"
+                                onClick="demo_inc"
+                                bg="#141f38"
+                                border="#38bdf866"
+                                hoverBg="#1a294a"
+                                px={10}
+                                py={7}
+                                radius={8}
+                                gap={4}
+                                align="center"
+                            >
+                                <Icon name="plus" size={13} color="#38bdf8" />
+                                <Text size={13} weight="semibold" color="#f8fafc">
+                                    1
+                                </Text>
+                            </Button>
+                            <Button
+                                key="demo_btn_boost"
+                                onClick="demo_boost"
+                                bg="#0e1322"
+                                border="#ffffff18"
+                                hoverBorder="#38bdf866"
+                                px={10}
+                                py={7}
+                                radius={8}
+                            >
+                                +10
+                            </Button>
+                            <Button
+                                key="demo_btn_reset"
+                                onClick="demo_reset"
+                                bg="#0e1322"
+                                border="#ffffff14"
+                                hoverBorder="#ffffff2a"
+                                px={9}
+                                py={7}
+                                radius={8}
+                                align="center"
+                            >
+                                <Icon name="refresh" size={13} color="#94a3b8" />
+                            </Button>
+                        </Row>
+                    </Row>
+
+                    <Code lang="tsx">{live_trace}</Code>
+                </Card>
+
+                <Card
+                    key="bento_pipeline"
+                    span={2}
+                    bg="#0b0f1c"
+                    border="#ffffff14"
+                    hoverBorder="#38bdf866"
+                    radius={16}
+                    p={24}
+                    gap={14}
+                >
+                    <Row align="center" justify="between">
+                        <Row align="center" gap={8}>
+                            <Icon name="git-branch" size={15} color="#818cf8" />
+                            <Text size={13} weight="semibold" color="#818cf8">
+                                TRIPLE-PARITY PIPELINE & BENCHMARKS
+                            </Text>
+                        </Row>
+                        <Text size={12} font="mono" color="#64748b">
+                            VM == Native ELF == Zero-Import WASM
+                        </Text>
+                    </Row>
+
+                    <Column gap={10}>
+                        <Column gap={5}>
+                            <Row justify="between" align="center">
+                                <Text size={13} color="#cbd5e1">
+                                    Static 4-Pass Verifier (SSA + Linear + readonly + Effects)
+                                </Text>
+                                <Text size={12} font="mono" color="#38bdf8">
+                                    {"< 100 us"}
+                                </Text>
+                            </Row>
+                            <Progress value={0.98} color="linear(90, #38bdf8, #818cf8)" h={6} />
+                        </Column>
+
+                        <Column gap={5}>
+                            <Row justify="between" align="center">
+                                <Text size={13} color="#cbd5e1">
+                                    Zero-GC Deterministic Scope Auto-Drop
+                                </Text>
+                                <Text size={12} font="mono" color="#818cf8">
+                                    0 ms pauses
+                                </Text>
+                            </Row>
+                            <Progress value={1.0} color="linear(90, #818cf8, #38bdf8)" h={6} />
+                        </Column>
+
+                        <Column gap={5}>
+                            <Row justify="between" align="center">
+                                <Text size={13} color="#cbd5e1">
+                                    GPU Shader Purity & naga Validation (WGSL + GLSL ES 3.00)
+                                </Text>
+                                <Text size={12} font="mono" color="#38bdf8">
+                                    3 live kernels
+                                </Text>
+                            </Row>
+                            <Progress value={pulse_ratio} color="linear(90, #0ea5e9, #818cf8)" h={6} />
+                        </Column>
+
+                        <Column gap={5}>
+                            <Row justify="between" align="center">
+                                <Text size={13} color="#cbd5e1">
+                                    1:1 Bijective Binary IR Codec (.ssa to .knrbin)
+                                </Text>
+                                <Text size={12} font="mono" color="#94a3b8">
+                                    Lossless
+                                </Text>
+                            </Row>
+                            <Progress value={0.95} color="linear(90, #6366f1, #38bdf8)" h={6} />
+                        </Column>
+                    </Column>
+
+                    <Divider />
+
+                    <Text size={12} font="mono" color="#94a3b8">
+                        {"Strict TSX/TS  ->  Verified SSA (.knrbin)  ->  Cranelift ELF | Zero-Import WASM | WGSL + GLSL"}
+                    </Text>
+                </Card>
+            </Grid>
+        </Column>
+    );
+}

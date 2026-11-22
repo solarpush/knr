@@ -1,0 +1,11 @@
+[package]
+name = "neural_studio"
+version = "0.4.0"
+entry = "src/app.tsk"
+description = "knr v0.4.0 Flagship Multi-File Neural Studio Showcase"
+
+[ui]
+title = "knr Neural Studio v0.4.0"
+width = 1280
+height = 900
+theme = "obsidian"

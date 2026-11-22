@@ -1096,7 +1096,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "knr-cli"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "knr-codegen",
  "knr-core",
@@ -1106,11 +1106,12 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tiny-skia",
 ]
 
 [[package]]
 name = "knr-codegen"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "cranelift",
  "cranelift-jit",
@@ -1121,6 +1122,7 @@ dependencies = [
  "knr-interp",
  "knr-runtime",
  "knr-verify",
+ "libc",
  "naga",
  "proptest",
  "serde",
@@ -1131,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "knr-core"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "serde",
@@ -1142,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "knr-interp"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "knr-core",
  "knr-runtime",
@@ -1153,7 +1155,7 @@ dependencies = [
 
 [[package]]
 name = "knr-runtime"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "ab_glyph",
  "bytemuck",
@@ -1172,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "knr-verify"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "knr-core",
  "serde",

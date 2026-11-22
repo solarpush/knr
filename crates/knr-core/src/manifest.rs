@@ -444,6 +444,11 @@ impl Manifest {
         Self::from_toml(&content)
     }
 
+    /// Alias for `load_from_path`: loads and parses a `knr.toml` manifest from a file or directory.
+    pub fn from_file(path: &Path) -> Result<Self, ManifestError> {
+        Self::load_from_path(path)
+    }
+
     /// Returns `true` if this manifest is a single package.
     pub fn is_package(&self) -> bool {
         matches!(self, Manifest::Package(_))
@@ -789,4 +794,184 @@ fn scan_recursive_for_manifests(
         }
     }
     Ok(())
+}
+
+/// Resolves a non-relative package import specifier (e.g. `"my-ui"` or `"my-ui/cards"`)
+/// by walking upward from `base_dir` (up to 6 levels) looking for `knr.toml`, then matching
+/// `[dependencies]`, `[workspace.dependencies]`, or workspace member package names.
+pub fn resolve_package_import(specifier: &str, base_dir: &Path) -> Option<PathBuf> {
+    let empty = std::collections::HashMap::new();
+    resolve_package_import_with_overlays(specifier, base_dir, &empty)
+}
+
+/// Resolves a non-relative package import specifier using `knr.toml` manifests and optional
+/// in-memory file overlays (used by the compiler and LSP).
+pub fn resolve_package_import_with_overlays(
+    specifier: &str,
+    base_dir: &Path,
+    overlays: &std::collections::HashMap<PathBuf, String>,
+) -> Option<PathBuf> {
+    if specifier.is_empty()
+        || specifier.starts_with("std/")
+        || specifier.starts_with("./")
+        || specifier.starts_with("../")
+        || specifier.starts_with('/')
+    {
+        return None;
+    }
+
+    let (pkg_name, subpath) = match specifier.split_once('/') {
+        Some((pkg, rest)) => {
+            let trimmed = rest.trim_matches('/');
+            if trimmed.is_empty() {
+                (pkg, None)
+            } else {
+                (pkg, Some(trimmed))
+            }
+        }
+        None => (specifier, None),
+    };
+
+    let mut cur = if base_dir.is_file() {
+        base_dir.parent()?.to_path_buf()
+    } else {
+        base_dir.to_path_buf()
+    };
+
+    for _ in 0..=6 {
+        let manifest_path = cur.join("knr.toml");
+        if manifest_path.is_file() {
+            if let Ok(manifest) = Manifest::from_file(&manifest_path) {
+                match manifest {
+                    Manifest::Package(pkg) => {
+                        if let Some(dep) = pkg.dependencies.get(pkg_name) {
+                            if let Some(rel_dep) = dep.path() {
+                                let dep_dir = cur.join(rel_dep);
+                                if let Some(found) =
+                                    locate_package_entry(&dep_dir, subpath, overlays)
+                                {
+                                    return Some(found);
+                                }
+                            }
+                        }
+                        if pkg.name == pkg_name {
+                            if let Some(found) = locate_package_entry(&cur, subpath, overlays) {
+                                return Some(found);
+                            }
+                        }
+                    }
+                    Manifest::Workspace(ws) => {
+                        if let Some(dep) = ws.dependencies.get(pkg_name) {
+                            if let Some(rel_dep) = dep.path() {
+                                let dep_dir = cur.join(rel_dep);
+                                if let Some(found) =
+                                    locate_package_entry(&dep_dir, subpath, overlays)
+                                {
+                                    return Some(found);
+                                }
+                            }
+                        }
+                        if let Ok(members) = resolve_workspace_members(&cur, &ws.members) {
+                            for member_dir in members {
+                                let m_toml = member_dir.join("knr.toml");
+                                if let Ok(Manifest::Package(m_pkg)) = Manifest::from_file(&m_toml) {
+                                    if m_pkg.name == pkg_name {
+                                        if let Some(found) =
+                                            locate_package_entry(&member_dir, subpath, overlays)
+                                        {
+                                            return Some(found);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !cur.pop() {
+            break;
+        }
+    }
+
+    None
+}
+
+fn locate_package_entry(
+    pkg_dir: &Path,
+    subpath: Option<&str>,
+    overlays: &std::collections::HashMap<PathBuf, String>,
+) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(sub) = subpath {
+        if sub.ends_with(".tsk")
+            || sub.ends_with(".knr")
+            || sub.ends_with(".ssa")
+            || sub.ends_with(".ssa.schema")
+        {
+            candidates.push(pkg_dir.join("src").join(sub));
+            candidates.push(pkg_dir.join(sub));
+        } else {
+            candidates.push(pkg_dir.join("src").join(format!("{sub}.tsk")));
+            candidates.push(pkg_dir.join("src").join(format!("{sub}.knr")));
+            candidates.push(pkg_dir.join("src").join(sub).join("index.tsk"));
+            candidates.push(pkg_dir.join("src").join(sub).join("index.knr"));
+            candidates.push(pkg_dir.join(format!("{sub}.tsk")));
+            candidates.push(pkg_dir.join(format!("{sub}.knr")));
+            candidates.push(pkg_dir.join(sub).join("index.tsk"));
+            candidates.push(pkg_dir.join(sub).join("index.knr"));
+        }
+    } else {
+        if pkg_dir.is_file() {
+            candidates.push(pkg_dir.to_path_buf());
+        }
+        let dep_toml = pkg_dir.join("knr.toml");
+        if dep_toml.is_file() {
+            if let Ok(Manifest::Package(dep_pkg)) = Manifest::from_file(&dep_toml) {
+                candidates.push(pkg_dir.join(&dep_pkg.entry));
+            }
+        }
+        candidates.push(pkg_dir.join("src/lib.tsk"));
+        candidates.push(pkg_dir.join("src/lib.knr"));
+        candidates.push(pkg_dir.join("src/main.tsk"));
+        candidates.push(pkg_dir.join("src/main.knr"));
+        candidates.push(pkg_dir.join("src/index.tsk"));
+        candidates.push(pkg_dir.join("src/index.knr"));
+        candidates.push(pkg_dir.join("index.tsk"));
+        candidates.push(pkg_dir.join("index.knr"));
+        candidates.push(pkg_dir.join("lib.tsk"));
+        candidates.push(pkg_dir.join("lib.knr"));
+    }
+
+    for cand in candidates {
+        let norm = normalize_lexical_manifest_path(&cand);
+        if overlays.contains_key(&norm) || overlays.contains_key(&cand) {
+            return Some(norm);
+        }
+        if let Ok(canon) = cand.canonicalize() {
+            if canon.is_file() {
+                return Some(canon);
+            }
+        } else if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+fn normalize_lexical_manifest_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push(comp.as_os_str());
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }

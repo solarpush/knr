@@ -1,15 +1,15 @@
 // Error: UseAfterMove
-schema DataBox {
-    0: payload str,
-}
+type DataBox = {
+    payload: string,
+};
 
-fn consume(box: DataBox) -> void {
+function consume(box: DataBox): void {
     return;
 }
 
-fn test_use_after_move() -> void {
-    let b = DataBox { payload: "secret" };
+function test_use_after_move(): void {
+    const b: DataBox = { payload: "secret" };
     consume(b);
-    let leak = b.payload;
+    const leak = b.payload;
     return;
 }

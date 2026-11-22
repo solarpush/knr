@@ -1,0 +1,82 @@
+// Shared HTTP Request/Response Types & Route Enum (`examples/http_types.tsk`)
+
+export type HttpRequest = {
+    req_id: i64;
+    method: string;
+    path: string;
+};
+
+export type HttpResponse = {
+    req_id: i64;
+    status: i64;
+    body: string;
+};
+
+export enum Route {
+    Home,
+    ApiInc,
+    ApiDec,
+    ApiReset,
+    Count,
+    Health,
+    Shutdown,
+    NotFound,
+}
+
+export function classify_route(req: readonly HttpRequest): Route {
+    switch (req.path) {
+        case "/":
+            return Route.Home;
+        case "/api/inc":
+            return Route.ApiInc;
+        case "/api/dec":
+            return Route.ApiDec;
+        case "/api/reset":
+            return Route.ApiReset;
+        case "/count":
+            return Route.Count;
+        case "/health":
+            return Route.Health;
+        case "/shutdown":
+            return Route.Shutdown;
+        default:
+            return Route.NotFound;
+    }
+}
+
+export function test_classify_route(): bool {
+    const r1: HttpRequest = { req_id: 1, method: "GET", path: "/" };
+    const r2: HttpRequest = { req_id: 2, method: "POST", path: "/api/inc" };
+    const r3: HttpRequest = { req_id: 3, method: "GET", path: "/unknown" };
+    const c1 = classify_route(r1);
+    const c2 = classify_route(r2);
+    const c3 = classify_route(r3);
+    let ok1 = false;
+    let ok2 = false;
+    let ok3 = false;
+    switch (c1) {
+        case Route.Home:
+            ok1 = true;
+            break;
+        default:
+            ok1 = false;
+            break;
+    }
+    switch (c2) {
+        case Route.ApiInc:
+            ok2 = true;
+            break;
+        default:
+            ok2 = false;
+            break;
+    }
+    switch (c3) {
+        case Route.NotFound:
+            ok3 = true;
+            break;
+        default:
+            ok3 = false;
+            break;
+    }
+    return ok1 && ok2 && ok3;
+}

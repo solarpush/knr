@@ -9,8 +9,8 @@ use std::time::{Duration, SystemTime};
 use knr_core::manifest::{find_manifest_root, resolve_workspace_members, Manifest};
 use knr_interp::Value;
 use knr_runtime::gui::{
-    has_display_server, launch_ui_app, launch_ui_app_with_reload, HotReloadUpdate, UiEvent,
-    UiNode, WindowBackend, WindowConfig,
+    has_display_server, launch_ui_app, launch_ui_app_with_reload_and_effects, spawn_ui_cmd,
+    HotReloadUpdate, UiCmd, UiEvent, UiNode, WindowBackend, WindowConfig,
 };
 
 use crate::error::CliError;
@@ -180,7 +180,7 @@ pub fn execute_gui(
             initial_shaders,
             initial_has_tick,
             || eval_gui_view(&module_cell, &state_cell, &plat_cell, gas),
-            |ev| dispatch_gui_event(&module_cell, &state_cell, &plat_cell, gas, ev),
+            |ev| dispatch_gui_event(&module_cell, &state_cell, &plat_cell, gas, ev, None),
             |dt, elapsed| {
                 dispatch_gui_tick(&module_cell, &state_cell, &plat_cell, gas, dt, elapsed);
             },
@@ -310,13 +310,14 @@ pub fn execute_gui(
         }
     });
 
+    let (cmd_tx, cmd_rx) = mpsc::channel::<UiEvent>();
     let config = WindowConfig::interactive(format!("knr dev - {file_label}"), 1120, 800);
-    let launch_res = launch_ui_app_with_reload(
+    let launch_res = launch_ui_app_with_reload_and_effects(
         config,
         initial_shaders,
         initial_has_tick,
         || eval_gui_view(&module_cell, &state_cell, &plat_cell, gas),
-        |ev| dispatch_gui_event(&module_cell, &state_cell, &plat_cell, gas, ev),
+        |ev| dispatch_gui_event(&module_cell, &state_cell, &plat_cell, gas, ev, Some(&cmd_tx)),
         |dt, elapsed| {
             dispatch_gui_tick(&module_cell, &state_cell, &plat_cell, gas, dt, elapsed);
         },
@@ -324,6 +325,7 @@ pub fn execute_gui(
             let payload = rx.try_iter().last()?;
             apply_reload_payload(payload, &module_cell, &state_cell, &plat_cell, gas)
         },
+        Some(cmd_rx),
     );
 
     stop_flag.store(true, Ordering::Relaxed);
@@ -346,7 +348,7 @@ pub fn execute_gui(
     Ok(())
 }
 
-/// Parses, verifies, and compiles all `shader fn` declarations for a GUI `.knr` or `.ssa` entrypoint.
+/// Parses, verifies, and compiles all `@shader` declarations for a GUI `.tsk`, `.knr`, or `.ssa` entrypoint.
 fn load_verified_gui_bundle(
     entry: &Path,
 ) -> Result<(knr_core::Module, HashMap<String, String>), String> {
@@ -354,11 +356,11 @@ fn load_verified_gui_bundle(
         return Err(format!("Entrypoint file '{}' not found", entry.display()));
     }
 
-    let is_knr = entry.to_string_lossy().ends_with(".knr");
-    let module = if is_knr {
+    let is_source = knr_core::is_source_file(entry);
+    let module = if is_source {
         let src = fs::read_to_string(entry)
             .map_err(|e| format!("IO Error reading '{}': {e}", entry.display()))?;
-        let _prog = knr_core::syntax::parse_knr(&src).map_err(|e| format!("Syntax Error: {e}"))?;
+        let _prog = knr_core::syntax::parse_tsx(&src).map_err(|e| format!("Syntax Error: {e}"))?;
 
         match knr_verify::verify_program_from_file(entry) {
             Ok(m) => m,
@@ -389,9 +391,19 @@ fn load_verified_gui_bundle(
         module
     };
 
-    let compiled_shaders = knr_codegen::WgslBackend::new()
-        .compile_all_shaders(&module)
-        .map_err(|err| format!("WGSL Shader Error: {err}"))?;
+    let source_map = if is_source && module.functions.iter().any(|f| f.is_shader) {
+        knr_core::lower::lower_program_from_file_with_source_map(entry)
+            .ok()
+            .map(|(_, sm)| sm)
+    } else {
+        None
+    };
+    let wgsl_backend = knr_codegen::WgslBackend::new();
+    let compiled_shaders = match source_map.as_ref() {
+        Some(sm) => wgsl_backend.compile_all_shaders_with_source_map(&module, sm),
+        None => wgsl_backend.compile_all_shaders(&module),
+    }
+    .map_err(|err| format!("WGSL Shader Error: {err}"))?;
     let mut shaders_wgsl = HashMap::with_capacity(compiled_shaders.len());
     for cs in compiled_shaders {
         shaders_wgsl.insert(cs.name, cs.wgsl);
@@ -468,72 +480,143 @@ fn eval_gui_view(
     }
 }
 
+fn format_key_event_combo(key: String, ctrl: bool, shift: bool, alt: bool) -> String {
+    if (ctrl && key.contains("Ctrl+"))
+        || (alt && key.contains("Alt+"))
+        || (shift && key.contains("Shift+"))
+    {
+        key
+    } else {
+        knr_runtime::gui::format_key_combo(&key, ctrl, shift, alt)
+    }
+}
+
+fn resize_dim_value(dim: u32, ty: &knr_core::Type) -> Value {
+    match ty {
+        knr_core::Type::I64 => Value::I64(dim as i64),
+        _ => Value::F64(dim as f64),
+    }
+}
+
 fn dispatch_gui_event(
     module_cell: &RefCell<knr_core::Module>,
     state_cell: &RefCell<Value>,
     plat_cell: &RefCell<CliHostPlatform>,
     gas: u64,
     ev: UiEvent,
+    cmd_tx: Option<&mpsc::Sender<UiEvent>>,
 ) {
     let module = module_cell.borrow();
     let has_update = module.get_function("update").is_some();
     let has_on_slider = module.get_function("on_slider").is_some();
     let has_on_input = module.get_function("on_input").is_some();
+    let has_on_key = module
+        .get_function("on_key")
+        .is_some_and(|f| f.params.len() == 2);
+    let on_resize_types = module
+        .get_function("on_resize")
+        .filter(|f| f.params.len() == 3)
+        .map(|f| (f.params[1].1.clone(), f.params[2].1.clone()));
+    let has_effect = module.get_function("effect").is_some();
     let st = state_cell.borrow().clone();
     let mut plat = plat_cell.borrow_mut();
-    let res = match ev {
+    let (action_label, res) = match ev {
         UiEvent::Click(action) | UiEvent::Toggle { action, .. } if has_update => {
-            knr_interp::execute_module(
+            let r = knr_interp::execute_module(
                 &module,
                 "update",
-                vec![st, Value::Str(action)],
+                vec![st, Value::Str(action.clone())],
                 &mut *plat,
                 gas,
                 false,
-            )
+            );
+            (action, r)
         }
         UiEvent::SliderChange { action, value } => {
             if has_on_slider {
-                knr_interp::execute_module(
+                let r = knr_interp::execute_module(
                     &module,
                     "on_slider",
-                    vec![st, Value::Str(action), Value::F64(value)],
+                    vec![st, Value::Str(action.clone()), Value::F64(value)],
                     &mut *plat,
                     gas,
                     false,
-                )
+                );
+                (action, r)
             } else if has_update {
-                knr_interp::execute_module(
+                let r = knr_interp::execute_module(
                     &module,
                     "update",
                     vec![st, Value::Str(format!("{action}:{value:.3}"))],
                     &mut *plat,
                     gas,
                     false,
-                )
+                );
+                (action, r)
             } else {
                 return;
             }
         }
         UiEvent::TextInput { action, value } => {
             if has_on_input {
-                knr_interp::execute_module(
+                let r = knr_interp::execute_module(
                     &module,
                     "on_input",
-                    vec![st, Value::Str(action), Value::Str(value)],
+                    vec![st, Value::Str(action.clone()), Value::Str(value)],
                     &mut *plat,
                     gas,
                     false,
-                )
+                );
+                (action, r)
             } else if has_update {
-                knr_interp::execute_module(
+                let r = knr_interp::execute_module(
                     &module,
                     "update",
                     vec![st, Value::Str(format!("{action}:{value}"))],
                     &mut *plat,
                     gas,
                     false,
-                )
+                );
+                (action, r)
+            } else {
+                return;
+            }
+        }
+        UiEvent::KeyPress {
+            key,
+            ctrl,
+            shift,
+            alt,
+        } if has_on_key => {
+            let combo = format_key_event_combo(key, ctrl, shift, alt);
+            if combo.is_empty() {
+                return;
+            }
+            let r = knr_interp::execute_module(
+                &module,
+                "on_key",
+                vec![st, Value::Str(combo.clone())],
+                &mut *plat,
+                gas,
+                false,
+            );
+            (format!("key:{combo}"), r)
+        }
+        UiEvent::Resize { width, height } => {
+            if let Some((ref w_ty, ref h_ty)) = on_resize_types {
+                let r = knr_interp::execute_module(
+                    &module,
+                    "on_resize",
+                    vec![
+                        st,
+                        resize_dim_value(width, w_ty),
+                        resize_dim_value(height, h_ty),
+                    ],
+                    &mut *plat,
+                    gas,
+                    false,
+                );
+                (format!("resize:{width}x{height}"), r)
             } else {
                 return;
             }
@@ -541,6 +624,22 @@ fn dispatch_gui_event(
         _ => return,
     };
     if let Ok((next_state, _)) = res {
+        if has_effect {
+            if let Some(tx) = cmd_tx {
+                if let Ok((cmd_val, _)) = knr_interp::execute_module(
+                    &module,
+                    "effect",
+                    vec![next_state.clone(), Value::Str(action_label)],
+                    &mut *plat,
+                    gas,
+                    false,
+                ) {
+                    if let Some(cmd) = UiCmd::from_value(&cmd_val) {
+                        spawn_ui_cmd(cmd, tx.clone());
+                    }
+                }
+            }
+        }
         *state_cell.borrow_mut() = next_state;
     }
 }
@@ -733,8 +832,12 @@ fn resolve_watch_and_entry(start: &Path) -> Result<(PathBuf, PathBuf), CliError>
 
     // Fallbacks if no manifest found
     let candidates = [
+        canonical.join("src/app.tsk"),
+        canonical.join("src/main.tsk"),
         canonical.join("src/main.knr"),
         canonical.join("src/main.ssa"),
+        canonical.join("app.tsk"),
+        canonical.join("main.tsk"),
         canonical.join("main.knr"),
         canonical.join("main.ssa"),
     ];
@@ -745,13 +848,13 @@ fn resolve_watch_and_entry(start: &Path) -> Result<(PathBuf, PathBuf), CliError>
         }
     }
 
-    // Search directory for any knr/ssa file
+    // Search directory for any .tsk/.knr/.ssa file
     if let Some(found) = find_first_source_file(&canonical) {
         return Ok((canonical, found));
     }
 
     Err(CliError::Other(format!(
-        "No entrypoint source file or knr.toml found in '{}'. Expected 'src/main.knr'.",
+        "No entrypoint source file or knr.toml found in '{}'. Expected 'src/app.tsk' or 'src/main.tsk'.",
         canonical.display()
     )))
 }
@@ -761,8 +864,7 @@ fn find_first_source_file(dir: &Path) -> Option<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
-                let s = path.to_string_lossy();
-                if s.ends_with(".knr") || s.ends_with(".ssa") {
+                if knr_core::is_source_file(&path) || path.to_string_lossy().ends_with(".ssa") {
                     return Some(path);
                 }
             } else if path.is_dir() {
@@ -784,11 +886,11 @@ fn run_cycle(entry: &Path, gas: u64, trace: bool) -> Result<(), String> {
         return Err(format!("Entrypoint file '{}' not found", entry.display()));
     }
 
-    let is_knr = entry.to_string_lossy().ends_with(".knr");
+    let is_source = knr_core::is_source_file(entry);
 
-    let module = if is_knr {
+    let module = if is_source {
         let src = fs::read_to_string(entry).map_err(|e| format!("IO Error reading '{}': {e}", entry.display()))?;
-        let _prog = knr_core::syntax::parse_knr(&src).map_err(|e| format!("Syntax Error: {e}"))?;
+        let _prog = knr_core::syntax::parse_tsx(&src).map_err(|e| format!("Syntax Error: {e}"))?;
 
         match knr_verify::verify_program_from_file(entry) {
             Ok(m) => m,
@@ -892,7 +994,7 @@ fn is_watched_file(name: &str) -> bool {
     }
 
     name == "knr.toml"
-        || name.ends_with(".knr")
+        || knr_core::is_source_file(Path::new(name))
         || name.ends_with(".ssa")
         || name.ends_with(".schema")
 }

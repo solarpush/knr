@@ -1,11 +1,11 @@
 // Valid 04: Named struct declaration and instantiation
-schema Point {
-    0: x i64,
-    1: y i64,
-}
+type Point = {
+    x: i64,
+    y: i64,
+};
 
-fn make_point(px: i64, py: i64) -> Point {
-    let pt = Point {
+function make_point(px: i64, py: i64): Point {
+    const pt: Point = {
         x: px,
         y: py,
     };

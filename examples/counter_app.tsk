@@ -1,0 +1,277 @@
+// Interactive MVU Counter App in Strict TSX (`examples/counter_app.tsk`)
+// Zero GC | Deterministic Linear State Transitions | Zero-Copy `readonly State` View
+//
+// Verify statically in < 100 us:
+//   knr check examples/counter_app.tsk --json
+// Run built-in deterministic unit tests:
+//   knr test examples/counter_app.tsk
+// Render headless PNG + automated visual audit:
+//   knr render examples/counter_app.tsk --png /tmp/counter.png --audit
+// Launch native Desktop GPU window:
+//   knr run examples/counter_app.tsk --gui
+// Export standalone Web GPU + zero-import WASM bundle:
+//   knr build examples/counter_app.tsk --target web -o dist_counter/
+
+import {
+    Column,
+    Row,
+    Card,
+    Badge,
+    Text,
+    Button,
+    Icon,
+    Divider,
+} from "std/ui";
+
+export type State = {
+    count: i64;
+    step: i64;
+    status: string;
+};
+
+export function init(): State {
+    return {
+        count: 0,
+        step: 1,
+        status: "Ready - choose an action",
+    };
+}
+
+export function update(s: State, action: string): State {
+    switch (action) {
+        case "inc":
+            return {
+                ...s,
+                count: s.count + s.step,
+                status: `Incremented by +${s.step}`,
+            };
+        case "dec":
+            return {
+                ...s,
+                count: s.count - s.step,
+                status: `Decremented by -${s.step}`,
+            };
+        case "reset":
+            return {
+                ...s,
+                count: 0,
+                status: "Counter reset to 0",
+            };
+        case "step_1":
+            return {
+                ...s,
+                step: 1,
+                status: "Active step set to x1",
+            };
+        case "step_5":
+            return {
+                ...s,
+                step: 5,
+                status: "Active step set to x5",
+            };
+        case "step_10":
+            return {
+                ...s,
+                step: 10,
+                status: "Active step set to x10",
+            };
+        default:
+            return s;
+    }
+}
+
+export function view(s: readonly State): Widget {
+    const step1Bg = s.step === 1 ? "#15233d" : "#0b0f1c";
+    const step1Border = s.step === 1 ? "#38bdf866" : "#ffffff14";
+    const step5Bg = s.step === 5 ? "#15233d" : "#0b0f1c";
+    const step5Border = s.step === 5 ? "#38bdf866" : "#ffffff14";
+    const step10Bg = s.step === 10 ? "#15233d" : "#0b0f1c";
+    const step10Border = s.step === 10 ? "#38bdf866" : "#ffffff14";
+
+    return (
+        <Column
+            key="counter_root"
+            w="full"
+            h="full"
+            bg="#06080f"
+            align="center"
+            justify="center"
+            p={32}
+        >
+            <Card
+                key="counter_card"
+                w="full"
+                maxW={520}
+                bg="#0b0f1c"
+                border="#ffffff14"
+                radius={16}
+                p={28}
+                gap={18}
+            >
+                <Row align="center" justify="between">
+                    <Row align="center" gap={8}>
+                        <Icon name="zap" size={16} color="#38bdf8" />
+                        <Text size={15} weight="bold" font="display" color="#f8fafc">
+                            knr Counter
+                        </Text>
+                    </Row>
+                    <Badge bg="#0e1628" color="#38bdf8" border="#38bdf833">
+                        Strict TSX | Zero GC
+                    </Badge>
+                </Row>
+
+                <Column gap={6}>
+                    <Text
+                        size={48}
+                        weight="extrabold"
+                        font="display"
+                        letterSpacing={-1.5}
+                        color="#f8fafc"
+                    >
+                        {s.count}
+                    </Text>
+                    <Text size={14} color="#94a3b8">
+                        {`Step x${s.step} | ${s.status}`}
+                    </Text>
+                </Column>
+
+                <Row gap={10}>
+                    <Button
+                        key="btn_dec"
+                        onClick="dec"
+                        bg="#0e1322"
+                        color="#e2e8f0"
+                        border="#ffffff18"
+                        hoverBg="#161f36"
+                        hoverBorder="#38bdf855"
+                        px={16}
+                        py={10}
+                        radius={10}
+                        gap={8}
+                        align="center"
+                    >
+                        <Icon name="minus" size={15} color="#94a3b8" />
+                        <Text size={14} weight="semibold" color="#e2e8f0">
+                            Decrease
+                        </Text>
+                    </Button>
+                    <Button
+                        key="btn_inc"
+                        onClick="inc"
+                        bg="linear(135, #0ea5e9, #6366f1)"
+                        color="#ffffff"
+                        border="#38bdf866"
+                        hoverScale={1.02}
+                        px={18}
+                        py={10}
+                        radius={10}
+                        gap={8}
+                        align="center"
+                    >
+                        <Icon name="plus" size={15} color="#ffffff" />
+                        <Text size={14} weight="semibold" color="#ffffff">
+                            Increase
+                        </Text>
+                    </Button>
+                    <Button
+                        key="btn_reset"
+                        onClick="reset"
+                        bg="#0e1322"
+                        color="#94a3b8"
+                        border="#ffffff14"
+                        hoverBg="#161f36"
+                        hoverBorder="#ffffff2a"
+                        px={14}
+                        py={10}
+                        radius={10}
+                        gap={8}
+                        align="center"
+                    >
+                        <Icon name="refresh" size={14} color="#94a3b8" />
+                        <Text size={14} weight="medium" color="#cbd5e1">
+                            Reset
+                        </Text>
+                    </Button>
+                </Row>
+
+                <Divider />
+
+                <Row align="center" justify="between" gap={10}>
+                    <Text size={13} color="#64748b">
+                        Increment Step
+                    </Text>
+                    <Row gap={8}>
+                        <Button
+                            key="btn_step_1"
+                            onClick="step_1"
+                            bg={step1Bg}
+                            color="#e2e8f0"
+                            border={step1Border}
+                            hoverBorder="#38bdf855"
+                            px={12}
+                            py={7}
+                            radius={8}
+                        >
+                            x1
+                        </Button>
+                        <Button
+                            key="btn_step_5"
+                            onClick="step_5"
+                            bg={step5Bg}
+                            color="#e2e8f0"
+                            border={step5Border}
+                            hoverBorder="#38bdf855"
+                            px={12}
+                            py={7}
+                            radius={8}
+                        >
+                            x5
+                        </Button>
+                        <Button
+                            key="btn_step_10"
+                            onClick="step_10"
+                            bg={step10Bg}
+                            color="#e2e8f0"
+                            border={step10Border}
+                            hoverBorder="#38bdf855"
+                            px={12}
+                            py={7}
+                            radius={8}
+                        >
+                            x10
+                        </Button>
+                    </Row>
+                </Row>
+            </Card>
+        </Column>
+    );
+}
+
+// ============================================================================
+// Deterministic Built-in Unit Tests (`knr test examples/counter_app.tsk`)
+// ============================================================================
+
+export function test_counter_init_and_steps(): bool {
+    let s = init();
+    const initOk = s.count === 0 && s.step === 1;
+    s = update(s, "step_5");
+    s = update(s, "inc");
+    s = update(s, "inc");
+    s = update(s, "dec");
+    return initOk && s.count === 5 && s.step === 5;
+}
+
+export function test_counter_reset_and_borrow_view(): bool {
+    let s = init();
+    s = update(s, "step_10");
+    s = update(s, "inc");
+    const v1 = view(s);
+    s = update(s, "reset");
+    const v2 = view(s);
+    return (
+        s.count === 0
+        && v1.kind === "col"
+        && v1.key === "counter_root"
+        && v2.kind === "col"
+    );
+}

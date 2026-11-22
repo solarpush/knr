@@ -27,11 +27,16 @@ pub(crate) fn parse_import_directive(line: &str, line_num: usize) -> Result<Stri
             msg: format!("Unexpected tokens after import statement: '{}'", rest_str.trim()),
         });
     }
-    if !(path.ends_with(".ssa.schema") || path.ends_with(".ssa") || path.ends_with(".knr")) {
+    if !(path.ends_with(".ssa.schema")
+        || path.ends_with(".ssa")
+        || path.ends_with(".tsk")
+        || path.ends_with(".knr")
+        || crate::syntax::stdlib::resolve_builtin_std(&path).is_some())
+    {
         return Err(ParseError::InvalidSyntax {
             line: line_num,
             msg: format!(
-                "Imported file '{}' must have extension '.ssa', '.ssa.schema', or '.knr'",
+                "Imported file '{}' must have extension '.tsk', '.knr', '.ssa', or '.ssa.schema'",
                 path
             ),
         });

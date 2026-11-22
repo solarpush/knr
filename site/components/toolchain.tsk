@@ -1,0 +1,349 @@
+// ============================================================================
+// knr Official Showcase -- Code Gallery & Toolchain (`site/components/toolchain.tsk`)
+// ============================================================================
+
+import {
+    Column,
+    Row,
+    Grid,
+    Card,
+    Badge,
+    Text,
+    Code,
+    Button,
+    Icon,
+    Divider,
+} from "std/ui";
+import { State } from "../state.tsk";
+
+export function sample_filename(idx: i64): string {
+    if (idx === 1) {
+        return "examples/raymarch_3d.tsk";
+    }
+    if (idx === 2) {
+        return "examples/http_server.tsk";
+    }
+    if (idx === 3) {
+        return "examples/sys_demo.tsk";
+    }
+    return "examples/counter_app.tsk";
+}
+
+export function sample_command(idx: i64): string {
+    if (idx === 1) {
+        return "knr run examples/raymarch_3d.tsk --gui";
+    }
+    if (idx === 2) {
+        return "knr build examples/http_server.tsk --target native -o ./http_server";
+    }
+    if (idx === 3) {
+        return "knr run examples/sys_demo.tsk";
+    }
+    return "knr render examples/counter_app.tsk -o /tmp/counter.png --audit";
+}
+
+export function sample_code(idx: i64): string {
+    if (idx === 1) {
+        return "import { Vec2, Color } from \"std/ui\";\n"
+            + "import { Vec3, smin, vec3_dot } from \"std/math\";\n\n"
+            + "@shader\n"
+            + "export function raymarch(uv: Vec2, time: f64, mouse: Vec2): Color {\n"
+            + "    const d = smin(sd_torus(p, 0.88, 0.26), sd_sphere(p, 0.34), 0.42);\n"
+            + "    const shade = max(vec3_dot(n, light), 0.0);\n"
+            + "    return { r: shade * 0.35, g: shade * 0.78, b: 0.98, a: 1.0 };\n"
+            + "}";
+    }
+    if (idx === 2) {
+        return "import { HttpRequest, HttpResponse, classify_route } from \"./http_types.tsk\";\n\n"
+            + "@effects(\"net\")\n"
+            + "export function main(): i64 {\n"
+            + "    const srv: i64 = syscall(\"net\", \"net.listen\", 8080);\n"
+            + "    const req: HttpRequest = syscall(\"net\", \"net.wait_req\", srv);\n"
+            + "    const resp: HttpResponse = { req_id: req.req_id, status: 200, body: \"ok\" };\n"
+            + "    const _ok: bool = syscall(\"net\", \"net.respond\", resp);\n"
+            + "    return 0;\n"
+            + "}";
+    }
+    if (idx === 3) {
+        return "import { fs_write, fs_read, json_get } from \"std/sys\";\n\n"
+            + "@effects(\"hw\")\n"
+            + "export function main(): i64 {\n"
+            + "    const ok = fs_write(\"config.json\", \"{\\\"lang\\\":\\\"knr\\\"}\");\n"
+            + "    const raw = fs_read(\"config.json\");\n"
+            + "    const name = json_get(raw, \"lang\");\n"
+            + "    return ok && name === \"knr\" ? 0 : 1;\n"
+            + "}";
+    }
+    return "import { Column, Button, Text } from \"std/ui\";\n\n"
+        + "export type State = { count: i64 };\n\n"
+        + "export function update(s: State, act: string): State {\n"
+        + "    return act === \"inc\" ? { ...s, count: s.count + 1 } : s;\n"
+        + "}\n\n"
+        + "export function view(s: readonly State): Widget {\n"
+        + "    return (\n"
+        + "        <Column p={24} gap={12}>\n"
+        + "            <Text size={28} weight=\"bold\">{`Count: ${s.count}`}</Text>\n"
+        + "            <Button onClick=\"inc\">Increase</Button>\n"
+        + "        </Column>\n"
+        + "    );\n"
+        + "}";
+}
+
+export function Toolchain(s: readonly State): Widget {
+    return (
+        <Column key="tab_view_toolchain" w="full" gap={22}>
+            <Column gap={8} pt={4}>
+                <Row align="center" gap={8}>
+                    <Icon name="terminal" size={15} color="#38bdf8" />
+                    <Text size={13} weight="semibold" color="#38bdf8">
+                        SINGLE-BINARY TOOLCHAIN
+                    </Text>
+                    <Text size={13} color="#64748b">
+                        Human & AI Agent Workflow
+                    </Text>
+                </Row>
+                <Text
+                    size={32}
+                    weight="extrabold"
+                    font="display"
+                    letterSpacing={-0.8}
+                    color="#f8fafc"
+                >
+                    Explore, Verify, Test, Audit, and Ship from One CLI
+                </Text>
+                <Text size={15} color="#94a3b8" lineHeight={1.55} maxW={820}>
+                    Every stage of the v0.4.0 lifecycle -- built-in MCP server (8 native AI tools), semantic graph exploration, sub-100 us static checks, deterministic testing, Cranelift/VM benchmarks, headless --flow + multi-viewport visual audit, live GPU hot-reload, and native/WASM/web bundling -- ships in one binary. Active preset: {s.preset_name}.
+                </Text>
+            </Column>
+
+            <Card key="toolchain_gallery" bg="#0b0f1c" border="#ffffff14" radius={16} p={24} gap={16}>
+                <Row align="center" justify="between">
+                    <Text size={18} weight="bold" font="display" color="#f8fafc">
+                        Strict TypeScript / TSX Code Gallery
+                    </Text>
+                    <Badge bg="#0e1424" color="#38bdf8" border="#38bdf833">
+                        {sample_filename(s.code_sample)}
+                    </Badge>
+                </Row>
+
+                <Row gap={8}>
+                    <Button
+                        key="code_tab_mvu"
+                        onClick="code_mvu"
+                        bg={s.code_sample === 0 ? "#141f38" : "#0e1322"}
+                        border={s.code_sample === 0 ? "#38bdf866" : "#ffffff14"}
+                        hoverBorder="#38bdf855"
+                        px={13}
+                        py={8}
+                        radius={9}
+                        gap={7}
+                        align="center"
+                    >
+                        <Icon name="layers" size={14} color={s.code_sample === 0 ? "#38bdf8" : "#64748b"} />
+                        <Text size={13} weight="semibold" color={s.code_sample === 0 ? "#f8fafc" : "#94a3b8"}>
+                            MVU App
+                        </Text>
+                    </Button>
+                    <Button
+                        key="code_tab_shader"
+                        onClick="code_shader"
+                        bg={s.code_sample === 1 ? "#1a1936" : "#0e1322"}
+                        border={s.code_sample === 1 ? "#818cf866" : "#ffffff14"}
+                        hoverBorder="#818cf855"
+                        px={13}
+                        py={8}
+                        radius={9}
+                        gap={7}
+                        align="center"
+                    >
+                        <Icon name="cube" size={14} color={s.code_sample === 1 ? "#818cf8" : "#64748b"} />
+                        <Text size={13} weight="semibold" color={s.code_sample === 1 ? "#f8fafc" : "#94a3b8"}>
+                            3D Shader
+                        </Text>
+                    </Button>
+                    <Button
+                        key="code_tab_server"
+                        onClick="code_server"
+                        bg={s.code_sample === 2 ? "#141f38" : "#0e1322"}
+                        border={s.code_sample === 2 ? "#38bdf866" : "#ffffff14"}
+                        hoverBorder="#38bdf855"
+                        px={13}
+                        py={8}
+                        radius={9}
+                        gap={7}
+                        align="center"
+                    >
+                        <Icon name="globe" size={14} color={s.code_sample === 2 ? "#38bdf8" : "#64748b"} />
+                        <Text size={13} weight="semibold" color={s.code_sample === 2 ? "#f8fafc" : "#94a3b8"}>
+                            HTTP Server
+                        </Text>
+                    </Button>
+                    <Button
+                        key="code_tab_sys"
+                        onClick="code_sys"
+                        bg={s.code_sample === 3 ? "#1a1936" : "#0e1322"}
+                        border={s.code_sample === 3 ? "#818cf866" : "#ffffff14"}
+                        hoverBorder="#818cf855"
+                        px={13}
+                        py={8}
+                        radius={9}
+                        gap={7}
+                        align="center"
+                    >
+                        <Icon name="box" size={14} color={s.code_sample === 3 ? "#818cf8" : "#64748b"} />
+                        <Text size={13} weight="semibold" color={s.code_sample === 3 ? "#f8fafc" : "#94a3b8"}>
+                            std/sys
+                        </Text>
+                    </Button>
+                </Row>
+
+                <Code lang="tsx">{sample_code(s.code_sample)}</Code>
+
+                <Row align="center" gap={8}>
+                    <Icon name="terminal" size={14} color="#38bdf8" />
+                    <Text size={13} font="mono" color="#cbd5e1">
+                        {`$ ${sample_command(s.code_sample)}`}
+                    </Text>
+                </Row>
+            </Card>
+
+            <Grid key="toolchain_cli_grid" cols={3} gap={16}>
+                <Card bg="#0b0f1c" border="#ffffff14" hoverBorder="#38bdf866" radius={16} p={20} gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="git-branch" size={15} color="#38bdf8" />
+                        <Text size={15} weight="bold" color="#f8fafc">
+                            knr explore
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.5}>
+                        Map an entire project in one shot: types, callers, callees, effect boundaries, and orphans in AI, JSON, or Mermaid formats.
+                    </Text>
+                    <Text size={12} font="mono" color="#64748b">
+                        knr explore site/ --format ai
+                    </Text>
+                </Card>
+
+                <Card bg="#0b0f1c" border="#ffffff14" hoverBorder="#38bdf866" radius={16} p={20} gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="shield" size={15} color="#818cf8" />
+                        <Text size={15} weight="bold" color="#f8fafc">
+                            knr check
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.5}>
+                        4-pass static verification for SSA, linear ownership, readonly borrows, transitive effects, and GPU shader purity.
+                    </Text>
+                    <Text size={12} font="mono" color="#64748b">
+                        knr check site/app.tsk --json
+                    </Text>
+                </Card>
+
+                <Card bg="#0b0f1c" border="#ffffff14" hoverBorder="#38bdf866" radius={16} p={20} gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="check" size={15} color="#38bdf8" />
+                        <Text size={15} weight="bold" color="#f8fafc">
+                            knr test
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.5}>
+                        Discover and execute every deterministic test_*() function in milliseconds via the reference VM with mocked effects.
+                    </Text>
+                    <Text size={12} font="mono" color="#64748b">
+                        knr test site/app.tsk --json
+                    </Text>
+                </Card>
+
+                <Card bg="#0b0f1c" border="#ffffff14" hoverBorder="#38bdf866" radius={16} p={20} gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="eye" size={15} color="#818cf8" />
+                        <Text size={15} weight="bold" color="#f8fafc">
+                            knr render --audit
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.5}>
+                        Headless GPU/CPU frame capture plus automated layout, clipping, contrast, and missing-glyph audit for AI agents.
+                    </Text>
+                    <Text size={12} font="mono" color="#64748b">
+                        knr render site/app.tsk -o out.png --audit
+                    </Text>
+                </Card>
+
+                <Card bg="#0b0f1c" border="#ffffff14" hoverBorder="#38bdf866" radius={16} p={20} gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="play" size={15} color="#38bdf8" />
+                        <Text size={15} weight="bold" color="#f8fafc">
+                            knr dev --gui
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.5}>
+                        Hardware-accelerated desktop window with instant hot-reload of Strict TSX views and live WGSL shaders on save.
+                    </Text>
+                    <Text size={12} font="mono" color="#64748b">
+                        knr dev site/app.tsk --gui
+                    </Text>
+                </Card>
+
+                <Card bg="#0b0f1c" border="#ffffff14" hoverBorder="#38bdf866" radius={16} p={20} gap={10}>
+                    <Row align="center" gap={8}>
+                        <Icon name="rocket" size={15} color="#818cf8" />
+                        <Text size={15} weight="bold" color="#f8fafc">
+                            knr build
+                        </Text>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.5}>
+                        Ship standalone Cranelift native binaries, zero-import WASM modules, or Flutter-style WebGPU/WebGL2 web bundles.
+                    </Text>
+                    <Text size={12} font="mono" color="#64748b">
+                        knr build site/app.tsk --target web -o dist/
+                    </Text>
+                </Card>
+            </Grid>
+
+            <Divider />
+
+            <Grid key="toolchain_editors_grid" cols={3} gap={16}>
+                <Card bg="#0e1322" border="#ffffff14" hoverBorder="#38bdf866" radius={14} p={20} gap={8}>
+                    <Row align="center" justify="between">
+                        <Text size={15} weight="bold" color="#f8fafc">
+                            VS Code
+                        </Text>
+                        <Badge bg="#0b0f1c" color="#38bdf8" border="#ffffff14">
+                            editors/vscode
+                        </Badge>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.5}>
+                        Zero npm dependencies. Activates on .tsk, .knr, and .ssa with live knr lsp diagnostics, hover, completions, and outline.
+                    </Text>
+                </Card>
+
+                <Card bg="#0e1322" border="#ffffff14" hoverBorder="#38bdf866" radius={14} p={20} gap={8}>
+                    <Row align="center" justify="between">
+                        <Text size={15} weight="bold" color="#f8fafc">
+                            Neovim 0.10+
+                        </Text>
+                        <Badge bg="#0b0f1c" color="#818cf8" border="#ffffff14">
+                            editors/neovim
+                        </Badge>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.5}>
+                        Drop-in Lua plugin wired to native vim.lsp for knr projects with automatic root detection and :KnrLspRestart.
+                    </Text>
+                </Card>
+
+                <Card bg="#0e1322" border="#ffffff14" hoverBorder="#38bdf866" radius={14} p={20} gap={8}>
+                    <Row align="center" justify="between">
+                        <Text size={15} weight="bold" color="#f8fafc">
+                            Zed Editor
+                        </Text>
+                        <Badge bg="#0b0f1c" color="#38bdf8" border="#ffffff14">
+                            editors/zed
+                        </Badge>
+                    </Row>
+                    <Text size={13} color="#94a3b8" lineHeight={1.5}>
+                        First-party dev extension connecting .tsk, .knr, and .ssa buffers directly to the built-in knr lsp binary.
+                    </Text>
+                </Card>
+            </Grid>
+        </Column>
+    );
+}

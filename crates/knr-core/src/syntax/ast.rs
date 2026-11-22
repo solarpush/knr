@@ -54,7 +54,7 @@ impl Ident {
     }
 }
 
-/// The top-level compilation unit of a `.knr` file.
+/// Top-level compilation unit of a Strict TypeScript/TSX `.tsx` / `.ts` / `.knr` file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {
     pub imports: Vec<ImportDecl>,
@@ -62,10 +62,27 @@ pub struct Program {
     pub span: Span,
 }
 
-/// Import directive: `import "path/to/file";`
+/// Import specifier form for preserving exact import syntax during formatting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum ImportKind {
+    #[default]
+    SideEffect,
+    Named(Vec<(Ident, Option<Ident>)>),
+    Namespace(Ident),
+    Default {
+        name: Ident,
+        named: Vec<(Ident, Option<Ident>)>,
+    },
+}
+
+/// Import directive: `import { A, B } from "std/ui";`, `import "./helper.tsk";`, or `export { A } from "./a.tsk";`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImportDecl {
     pub path: String,
+    #[serde(default)]
+    pub kind: ImportKind,
+    #[serde(default)]
+    pub is_reexport: bool,
     pub span: Span,
 }
 
@@ -75,13 +92,29 @@ pub enum Declaration {
     Struct(StructDef),
     Enum(EnumDef),
     Function(FunctionDef),
+    Const(ConstDef),
 }
 
-/// Tagged union / Enum definition: `enum Msg { Inc, Dec, Add(i64) }`
+/// Top-level constant declaration: `export const ACCENT: string = "#38bdf8";`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConstDef {
+    pub name: Ident,
+    pub ty: Option<TypeExpr>,
+    pub value: Expr,
+    #[serde(default)]
+    pub is_exported: bool,
+    pub span: Span,
+}
+
+/// Tagged union / Enum definition: `export enum Action { Inc(i64), Dec(i64), Reset }`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnumDef {
     pub name: Ident,
+    #[serde(default)]
+    pub type_params: Vec<Ident>,
     pub variants: Vec<EnumVariantDef>,
+    #[serde(default)]
+    pub is_exported: bool,
     pub span: Span,
 }
 
@@ -93,15 +126,19 @@ pub struct EnumVariantDef {
     pub span: Span,
 }
 
-/// Struct / Schema definition.
+/// Type / Interface / Struct definition: `export type State = { count: i64; name: string; };`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StructDef {
     pub name: Ident,
+    #[serde(default)]
+    pub type_params: Vec<Ident>,
     pub fields: Vec<FieldDef>,
+    #[serde(default)]
+    pub is_exported: bool,
     pub span: Span,
 }
 
-/// Field within a struct definition.
+/// Field within a type/interface definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FieldDef {
     pub index: Option<u32>,
@@ -110,20 +147,24 @@ pub struct FieldDef {
     pub span: Span,
 }
 
-/// Function definition.
+/// Function definition (`export function ...`, `@shader`, `@effects("net")`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionDef {
     pub name: Ident,
+    #[serde(default)]
+    pub type_params: Vec<Ident>,
     pub params: Vec<ParamDef>,
     pub ret_ty: TypeExpr,
     pub effects: Vec<Ident>,
     #[serde(default)]
     pub is_shader: bool,
+    #[serde(default)]
+    pub is_exported: bool,
     pub body: Block,
     pub span: Span,
 }
 
-/// Function parameter definition.
+/// Function parameter definition (`s: readonly State` -> `is_borrowed: true`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParamDef {
     pub name: Ident,
@@ -148,12 +189,25 @@ pub struct Stmt {
     pub span: Span,
 }
 
+/// Destructuring pattern for `const { a, b: localB } = obj;` and `const [first, second] = arr;`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DestructPattern {
+    /// Object destructuring: `{ a, b: localB }` -> `Vec<(field_name, optional_local_alias)>`
+    Object(Vec<(Ident, Option<Ident>)>),
+    /// Array destructuring: `[first, second]`
+    Array(Vec<Ident>),
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StmtKind {
     Let {
         name: Ident,
         ty: Option<TypeExpr>,
         init: Expr,
+        #[serde(default)]
+        is_const: bool,
+        #[serde(default)]
+        destruct: Option<DestructPattern>,
     },
     Assign {
         target: Expr,
@@ -182,6 +236,36 @@ pub enum StmtKind {
     Block(Block),
 }
 
+/// A part inside a template string literal: `` `Count: ${s.count}` ``
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TemplatePart {
+    Literal(String),
+    Expr(Expr),
+}
+
+/// A prop on a JSX element: `gap={16}`, `bg="#0a0f1e"`, or boolean shorthand `checked`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JsxProp {
+    pub name: Ident,
+    pub value: Option<Expr>,
+    pub span: Span,
+}
+
+/// A child inside a JSX element: raw text, `{expr}`, or nested `<Child />`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum JsxChild {
+    Text(String, Span),
+    Expr(Expr),
+    Element(Expr),
+}
+
+/// Body of an arrow function: `(x) => expr` or `(x) => { ... }`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ArrowBody {
+    Expr(Box<Expr>),
+    Block(Block),
+}
+
 /// Expression with span.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Expr {
@@ -197,23 +281,39 @@ pub enum ExprKind {
     Bool(bool),
     Str(String),
     ColorHex(String),
+    TemplateStr(Vec<TemplatePart>),
 
     // Identifier / Variable
     Variable(Ident),
 
     // Composite Literals
     StructLit {
-        name: Ident,
+        name: Option<Ident>,
         fields: Vec<FieldInit>,
         spread: Option<Box<Expr>>,
     },
     EnumLit {
         enum_name: Ident,
+        #[serde(default)]
+        type_args: Vec<TypeExpr>,
         variant: Ident,
         args: Vec<Expr>,
     },
     ArrayLit(Vec<Expr>),
     Borrow(Box<Expr>),
+
+    // Arrow Function (for `.map(...)` / `.filter(...)`)
+    Arrow {
+        params: Vec<Ident>,
+        body: ArrowBody,
+    },
+
+    // Declarative TSX/JSX Element
+    Jsx {
+        tag: Ident,
+        props: Vec<JsxProp>,
+        children: Vec<JsxChild>,
+    },
 
     // Operations
     Unary {
@@ -229,6 +329,13 @@ pub enum ExprKind {
     // Invocations & Access
     Call {
         callee: Ident,
+        #[serde(default)]
+        type_args: Vec<TypeExpr>,
+        args: Vec<Expr>,
+    },
+    MethodCall {
+        receiver: Box<Expr>,
+        method: Ident,
         args: Vec<Expr>,
     },
     Syscall {
@@ -258,7 +365,7 @@ pub enum ExprKind {
     Block(Block),
 }
 
-/// A single arm inside a `match` expression.
+/// A single arm inside a `switch`/`match` expression.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MatchArm {
     pub pattern: MatchPattern,
@@ -266,7 +373,7 @@ pub struct MatchArm {
     pub span: Span,
 }
 
-/// Pattern matched in a `match` arm.
+/// Pattern matched in a `switch`/`match` arm.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MatchPattern {
     Variant {
@@ -280,7 +387,7 @@ pub enum MatchPattern {
     Wildcard,
 }
 
-/// Field initialization in a struct literal: `tag: "article"`
+/// Field initialization in an object/struct literal: `count: s.count + 1`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FieldInit {
     pub name: Ident,
@@ -304,51 +411,106 @@ pub enum BinaryOp {
     Rem, // %
 
     // Comparison
-    Eq,    // ==
-    NotEq, // !=
+    Eq,    // === / ==
+    NotEq, // !== / !=
     Lt,    // <
     LtEq,  // <=
     Gt,    // >
     GtEq,  // >=
 
-    // Logical
-    And, // &&
-    Or,  // ||
+    // Logical & Nullish Coalescing
+    And,             // &&
+    Or,              // ||
+    NullishCoalesce, // ??
 }
 
-/// High-level type expression.
+/// High-level TypeScript type expression.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypeExpr {
     pub kind: TypeExprKind,
+    #[serde(default)]
+    pub type_args: Vec<TypeExpr>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeExprKind {
-    Named(Ident),                      // i64, f64, bool, str, buf, void, Point
-    Vec(Box<TypeExpr>),                // vec[T] or [T]
-    Map(Box<TypeExpr>, Box<TypeExpr>), // map[K, V]
-    Chan(Box<TypeExpr>),               // chan[T]
-    Struct(Ident),                     // struct[Card]
+    Named(Ident),                      // i64, f64, number, bool, boolean, string, Buffer, void, State
+    Vec(Box<TypeExpr>),                // T[] or Array<T>
+    Map(Box<TypeExpr>, Box<TypeExpr>), // Map<K, V>
+    Chan(Box<TypeExpr>),               // Channel<T>
+    Struct(Ident),                     // explicit struct
+}
+
+/// Canonical deterministic name fragment for monomorphized generic SSA types/functions.
+pub fn mangle_type_name(ty: &crate::ast::Type) -> String {
+    match ty {
+        crate::ast::Type::I64 => "i64".to_string(),
+        crate::ast::Type::F64 => "f64".to_string(),
+        crate::ast::Type::Bool => "bool".to_string(),
+        crate::ast::Type::Str => "str".to_string(),
+        crate::ast::Type::Buf => "buf".to_string(),
+        crate::ast::Type::Void => "void".to_string(),
+        crate::ast::Type::Struct(name) => name.clone(),
+        crate::ast::Type::Vec(inner) => format!("vec_{}", mangle_type_name(inner)),
+        crate::ast::Type::Map(k, v) => {
+            format!("map_{}_{}", mangle_type_name(k), mangle_type_name(v))
+        }
+        crate::ast::Type::Chan(inner) => format!("chan_{}", mangle_type_name(inner)),
+    }
+}
+
+/// Deterministic mangled symbol name for a generic instantiation (e.g. `Option<i64>` -> `Option__i64`).
+pub fn mangle_generic_name(base: &str, args: &[crate::ast::Type]) -> String {
+    if args.is_empty() {
+        base.to_string()
+    } else {
+        let parts: Vec<String> = args.iter().map(mangle_type_name).collect();
+        format!("{base}__{}", parts.join("__"))
+    }
 }
 
 impl TypeExpr {
     pub fn new(kind: TypeExprKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            kind,
+            type_args: Vec::new(),
+            span,
+        }
     }
 
-    /// Helper to convert high-level AST type expression into knr-core SSA IR Type.
+    pub fn with_type_args(kind: TypeExprKind, type_args: Vec<TypeExpr>, span: Span) -> Self {
+        Self {
+            kind,
+            type_args,
+            span,
+        }
+    }
+
+    /// Converts high-level Strict TypeScript type expression into knr-core SSA IR Type.
     pub fn to_core_type(&self) -> Result<crate::ast::Type, String> {
         match &self.kind {
-            TypeExprKind::Named(ident) => match ident.name.as_str() {
-                "i64" => Ok(crate::ast::Type::I64),
-                "f64" => Ok(crate::ast::Type::F64),
-                "bool" => Ok(crate::ast::Type::Bool),
-                "str" => Ok(crate::ast::Type::Str),
-                "buf" => Ok(crate::ast::Type::Buf),
-                "void" => Ok(crate::ast::Type::Void),
-                custom => Ok(crate::ast::Type::Struct(custom.to_string())),
-            },
+            TypeExprKind::Named(ident) => {
+                if !self.type_args.is_empty() {
+                    let mut concrete = Vec::with_capacity(self.type_args.len());
+                    for arg in &self.type_args {
+                        concrete.push(arg.to_core_type()?);
+                    }
+                    return Ok(crate::ast::Type::Struct(mangle_generic_name(
+                        &ident.name,
+                        &concrete,
+                    )));
+                }
+                match ident.name.as_str() {
+                    "i64" | "int" => Ok(crate::ast::Type::I64),
+                    "f64" | "number" => Ok(crate::ast::Type::F64),
+                    "bool" | "boolean" => Ok(crate::ast::Type::Bool),
+                    "str" | "string" => Ok(crate::ast::Type::Str),
+                    "buf" | "Buffer" => Ok(crate::ast::Type::Buf),
+                    "void" => Ok(crate::ast::Type::Void),
+                    custom => Ok(crate::ast::Type::Struct(custom.to_string())),
+                }
+            }
             TypeExprKind::Vec(inner) => {
                 let inner_ty = inner.to_core_type()?;
                 Ok(crate::ast::Type::Vec(Box::new(inner_ty)))
@@ -362,7 +524,19 @@ impl TypeExpr {
                 let inner_ty = inner.to_core_type()?;
                 Ok(crate::ast::Type::Chan(Box::new(inner_ty)))
             }
-            TypeExprKind::Struct(ident) => Ok(crate::ast::Type::Struct(ident.name.clone())),
+            TypeExprKind::Struct(ident) => {
+                if !self.type_args.is_empty() {
+                    let mut concrete = Vec::with_capacity(self.type_args.len());
+                    for arg in &self.type_args {
+                        concrete.push(arg.to_core_type()?);
+                    }
+                    return Ok(crate::ast::Type::Struct(mangle_generic_name(
+                        &ident.name,
+                        &concrete,
+                    )));
+                }
+                Ok(crate::ast::Type::Struct(ident.name.clone()))
+            }
         }
     }
 }

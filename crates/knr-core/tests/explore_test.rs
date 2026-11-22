@@ -32,7 +32,7 @@ impl Drop for TempDir {
 fn site_dir() -> PathBuf {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
-    repo_root.join("site")
+    repo_root.join("tests/fixtures/legacy_site")
 }
 
 #[test]

@@ -1,0 +1,168 @@
+// ============================================================================
+// knr Neural Studio v0.4.0 -- Pure GPU @shader Kernels (WGSL + WebGL2 GLSL)
+// ============================================================================
+
+import { Vec2, Color } from "std/ui";
+import { Vec3, smin, vec3_norm, vec3_dot, tau } from "std/math";
+
+@shader
+export function neural_aurora_field(
+    uv: Vec2,
+    time: f64,
+    mouse: Vec2,
+    res: Vec2,
+    energy: f64,
+    hue: f64,
+    density: f64,
+    glow: f64,
+): Color {
+    const aspect = clamp(res.x / max(res.y, 0.001), 0.85, 2.4);
+    const px = (uv.x - 0.5) * aspect;
+    const py = uv.y - 0.5;
+    const t = time * (0.35 + energy * 0.95);
+    const freq = 2.4 + density * 2.4;
+    const w1 = sin(px * freq + t + cos(py * 2.6 - t * 0.65) * 0.9);
+    const w2 = cos(py * (freq * 0.9) - t * 0.72 + sin(px * 2.2 + t * 0.45) * 0.8);
+    const ribbon = 0.5 + 0.5 * sin((w1 + w2) * 1.45 + px * 1.8);
+    const band = pow(smoothstep(0.18, 0.96, ribbon), 1.65);
+    const mdx = (uv.x - mouse.x) * aspect;
+    const mdy = uv.y - mouse.y;
+    const cursor_bloom = (0.24 + glow * 0.48) / (1.0 + (mdx * mdx + mdy * mdy) * 9.0);
+    const vignette = clamp(1.0 - (px * px * 0.42 + py * py * 0.95), 0.18, 1.0);
+    const phase = hue * tau() + band * 1.75;
+    const cr = 0.36 + 0.48 * cos(phase);
+    const cg = 0.48 + 0.42 * cos(phase + 2.094);
+    const cb = 0.62 + 0.38 * cos(phase + 4.188);
+    const lum = (0.14 + band * (0.48 + glow * 0.36) + cursor_bloom * 0.75) * vignette;
+    const r = clamp(0.02 + cr * lum, 0.0, 1.0);
+    const g = clamp(0.04 + cg * lum, 0.0, 1.0);
+    const b = clamp(0.09 + cb * lum * 1.18, 0.0, 1.0);
+    return {
+        r: r,
+        g: g,
+        b: b,
+        a: 1.0,
+    };
+}
+
+export function sd_sphere_3d(px: f64, py: f64, pz: f64, radius: f64): f64 {
+    return sqrt(px * px + py * py + pz * pz) - radius;
+}
+
+export function sd_neural_core(px: f64, py: f64, pz: f64, time: f64, density: f64): f64 {
+    const a = time * 0.55;
+    const ca = cos(a);
+    const sa = sin(a);
+    const rx = px * ca - pz * sa;
+    const rz = px * sa + pz * ca;
+    const ripple = 0.055 * (0.4 + density) * sin(rx * 3.8 + time) * cos(py * 3.8 - time * 0.8);
+    const core = sd_sphere_3d(rx, py, rz, 0.68 + ripple);
+    const orb1_x = cos(time * 0.9) * 0.86;
+    const orb1_y = sin(time * 1.15) * 0.42;
+    const orb1_z = sin(time * 0.9) * 0.86;
+    const sat1 = sd_sphere_3d(px - orb1_x, py - orb1_y, pz - orb1_z, 0.24);
+    const orb2_x = cos(time * 0.75 + 3.14159) * 0.78;
+    const orb2_y = cos(time * 1.05) * 0.46;
+    const orb2_z = sin(time * 0.75 + 3.14159) * 0.78;
+    const sat2 = sd_sphere_3d(px - orb2_x, py - orb2_y, pz - orb2_z, 0.2);
+    const merged = smin(core, sat1, 0.34);
+    return smin(merged, sat2, 0.32);
+}
+
+@shader
+export function neural_sdf_orb(
+    uv: Vec2,
+    time: f64,
+    mouse: Vec2,
+    energy: f64,
+    hue: f64,
+    density: f64,
+): Color {
+    const sx = (uv.x - 0.5) * 4.2;
+    const sy = (0.5 - uv.y) * 1.12;
+    const t = time * (0.4 + energy * 0.85);
+    const yaw = (mouse.x - 0.5) * 1.4 + t * 0.22;
+    const cam_dist = 3.25;
+    const ro: Vec3 = {
+        x: cam_dist * sin(yaw),
+        y: 0.24 + (mouse.y - 0.5) * 0.45,
+        z: cam_dist * cos(yaw),
+    };
+    const neg_ro: Vec3 = { x: 0.0 - ro.x, y: 0.0 - ro.y, z: 0.0 - ro.z };
+    const fwd = vec3_norm(neg_ro);
+    const right_raw: Vec3 = { x: 0.0 - fwd.z, y: 0.0, z: fwd.x };
+    const right = vec3_norm(right_raw);
+    const up: Vec3 = {
+        x: right.y * fwd.z - right.z * fwd.y,
+        y: right.z * fwd.x - right.x * fwd.z,
+        z: right.x * fwd.y - right.y * fwd.x,
+    };
+    const rd_raw: Vec3 = {
+        x: fwd.x * 1.5 + right.x * sx + up.x * sy,
+        y: fwd.y * 1.5 + right.y * sx + up.y * sy,
+        z: fwd.z * 1.5 + right.z * sx + up.z * sy,
+    };
+    const rd = vec3_norm(rd_raw);
+    let dist = 0.0;
+    let hit = false;
+    let glow_acc = 0.0;
+    {
+        let i = 0;
+        while (i < 40) {
+            const px = ro.x + rd.x * dist;
+            const py = ro.y + rd.y * dist;
+            const pz = ro.z + rd.z * dist;
+            const d = sd_neural_core(px, py, pz, t, density);
+            glow_acc = glow_acc + 0.016 / (0.14 + abs(d) * 3.8);
+            if (d < 0.004) {
+                hit = true;
+                break;
+            }
+            dist = dist + d;
+            if (dist > 6.5) {
+                break;
+            }
+            i = i + 1;
+        }
+    }
+    const phase = hue * tau();
+    const tint_r = 0.35 + 0.42 * cos(phase);
+    const tint_g = 0.58 + 0.36 * cos(phase + 2.094);
+    const tint_b = 0.78 + 0.22 * cos(phase + 4.188);
+    const halo = clamp(glow_acc * (0.45 + energy * 0.4), 0.0, 1.0);
+    if (!hit) {
+        const bg_r = clamp(0.03 + halo * tint_r * 0.65, 0.0, 1.0);
+        const bg_g = clamp(0.05 + halo * tint_g * 0.75, 0.0, 1.0);
+        const bg_b = clamp(0.11 + halo * tint_b * 0.95, 0.0, 1.0);
+        return {
+            r: bg_r,
+            g: bg_g,
+            b: bg_b,
+            a: 1.0,
+        };
+    }
+    const hx = ro.x + rd.x * dist;
+    const hy = ro.y + rd.y * dist;
+    const hz = ro.z + rd.z * dist;
+    const eps = 0.004;
+    const nx = sd_neural_core(hx + eps, hy, hz, t, density) - sd_neural_core(hx - eps, hy, hz, t, density);
+    const ny = sd_neural_core(hx, hy + eps, hz, t, density) - sd_neural_core(hx, hy - eps, hz, t, density);
+    const nz = sd_neural_core(hx, hy, hz + eps, t, density) - sd_neural_core(hx, hy, hz - eps, t, density);
+    const n_raw: Vec3 = { x: nx, y: ny, z: nz };
+    const norm = vec3_norm(n_raw);
+    const light_raw: Vec3 = { x: 0.55, y: 0.72, z: 0.42 };
+    const light = vec3_norm(light_raw);
+    const diff = max(vec3_dot(norm, light), 0.0);
+    const neg_rd: Vec3 = { x: 0.0 - rd.x, y: 0.0 - rd.y, z: 0.0 - rd.z };
+    const ndv = clamp(vec3_dot(norm, neg_rd), 0.0, 1.0);
+    const fres = pow(1.0 - ndv, 2.6);
+    const r = clamp(0.06 + diff * tint_r * 0.85 + fres * 0.52 + halo * 0.16, 0.0, 1.0);
+    const g = clamp(0.09 + diff * tint_g * 0.92 + fres * 0.78 + halo * 0.22, 0.0, 1.0);
+    const b = clamp(0.16 + diff * tint_b * 1.02 + fres * 0.96 + halo * 0.3, 0.0, 1.0);
+    return {
+        r: r,
+        g: g,
+        b: b,
+        a: 1.0,
+    };
+}

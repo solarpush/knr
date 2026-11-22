@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::args::{SkillArgs, VERSION};
 use crate::error::CliError;
 
-pub const SKILL_MARKDOWN: &str = include_str!("../assets/SKILL.md");
+pub const SKILL_MARKDOWN: &str = include_str!("../../../../.agents/skills/knr-ssa/SKILL.md");
 pub const GEN_VDOM_SCRIPT: &str = include_str!("../assets/gen_vdom_ssa.py");
 
 #[derive(Serialize)]
@@ -56,7 +56,7 @@ pub fn execute(args: &SkillArgs) -> Result<(), CliError> {
         let payload = SkillJsonPayload {
             name: "knr-ssa",
             version: VERSION,
-            description: "Official guide, ISA reference, and AI workflow for the knr linear SSA programming language and toolchain",
+            description: "Official guide, Strict TypeScript/TSX (.tsk) language reference, Unified GPU Engine UI guide, MCP server & AI workflow for the knr v0.4.0 toolchain",
             skill_path: ".agents/skills/knr-ssa/SKILL.md",
             helper_script_path: ".agents/skills/knr-ssa/scripts/gen_vdom_ssa.py",
             skill_markdown: SKILL_MARKDOWN,

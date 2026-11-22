@@ -33,36 +33,48 @@ fn http_request(port: u16, method: &str, path: &str) -> String {
 #[test]
 fn test_milestone_c_native_compiled_http_server_e2e() {
     let root = repo_root();
-    let server_knr = root.join("examples/http_server.knr");
+    let server_ts = root.join("examples/http_server.tsk");
     let out_bin = std::env::temp_dir().join(format!(
         "knr_native_http_server_test_{}",
         std::process::id()
     ));
 
-    // 1. Verify multi-file .knr project cleanly (imports http_types.knr + ui.knr)
+    // 1. Verify multi-file Strict TS project cleanly (imports ./http_types.tsk)
     let check_out = Command::new(knr_bin())
-        .args(["check", server_knr.to_str().unwrap()])
+        .args(["check", server_ts.to_str().unwrap()])
         .output()
-        .expect("knr check http_server.knr");
+        .expect("knr check http_server.tsk");
     assert!(
         check_out.status.success(),
-        "knr check examples/http_server.knr failed:\nstdout: {}\nstderr: {}",
+        "knr check examples/http_server.tsk failed:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&check_out.stdout),
         String::from_utf8_lossy(&check_out.stderr)
+    );
+
+    // 1b. Run built-in deterministic unit tests (`knr test examples/http_server.tsk`)
+    let test_out = Command::new(knr_bin())
+        .args(["test", server_ts.to_str().unwrap(), "--json"])
+        .output()
+        .expect("knr test http_server.tsk");
+    assert!(
+        test_out.status.success(),
+        "knr test examples/http_server.tsk failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&test_out.stdout),
+        String::from_utf8_lossy(&test_out.stderr)
     );
 
     // 2. Compile to standalone native ELF binary linked against Rust libknr_runtime.a
     let build_out = Command::new(knr_bin())
         .args([
             "build",
-            server_knr.to_str().unwrap(),
+            server_ts.to_str().unwrap(),
             "--target",
             "native",
             "-o",
             out_bin.to_str().unwrap(),
         ])
         .output()
-        .expect("knr build native http_server.knr");
+        .expect("knr build native http_server.tsk");
     assert!(
         build_out.status.success(),
         "knr build native failed:\nstdout: {}\nstderr: {}",
@@ -101,30 +113,47 @@ fn test_milestone_c_native_compiled_http_server_e2e() {
         }
     };
 
-    // 4. Verify dark-mode typed UiNode SSR dashboard on GET /
+    // 4. Verify structured JSON status on GET / and GET /health
     let home = http_request(port, "GET", "/");
     assert!(home.starts_with("HTTP/1.1 200 OK"), "GET / failed: {home}");
-    assert!(home.contains("<!DOCTYPE html>"), "GET / must return full styled HTML5 doc");
-    assert!(home.contains("Count: 0"), "GET / body unexpected: {home}");
-    assert!(home.contains("data-knr-action=\"/ui/inc\""), "GET / must expose interactive SSR buttons");
+    assert!(
+        home.contains(r#"{"service":"knr-http","count":0,"requests":1,"route":"/"}"#),
+        "GET / body unexpected: {home}"
+    );
 
-    // 5. Verify live SSR interactive button routes (POST /ui/step5, POST /ui/inc -> Count: 5)
-    let step5 = http_request(port, "POST", "/ui/step5");
-    assert!(step5.starts_with("HTTP/1.1 200 OK"), "POST /ui/step5 failed: {step5}");
-    assert!(step5.contains("Active step: x5"), "step5 UI did not update: {step5}");
+    let health = http_request(port, "GET", "/health");
+    assert!(health.starts_with("HTTP/1.1 200 OK"), "GET /health failed: {health}");
+    assert!(health.contains(r#"{"status":"ok"}"#), "GET /health body unexpected: {health}");
 
-    let ui_inc = http_request(port, "POST", "/ui/inc");
-    assert!(ui_inc.starts_with("HTTP/1.1 200 OK"), "POST /ui/inc failed: {ui_inc}");
-    assert!(ui_inc.contains("Count: 5"), "ui_inc must render Count: 5: {ui_inc}");
+    // 5. Verify state transitions via POST /api/inc, /api/dec, /api/reset
+    let inc1 = http_request(port, "POST", "/api/inc");
+    assert!(inc1.starts_with("HTTP/1.1 200 OK"), "POST /api/inc #1 failed: {inc1}");
+    assert!(inc1.contains(r#"{"count":1}"#), "inc1 body unexpected: {inc1}");
 
-    // 6. Verify JSON & plain API routes still work cleanly (5 + 5 = 10)
-    let api_inc = http_request(port, "POST", "/api/inc");
-    assert!(api_inc.starts_with("HTTP/1.1 200 OK"), "POST /api/inc failed: {api_inc}");
-    assert!(api_inc.contains("{\"count\":10}"), "api_inc body unexpected: {api_inc}");
+    let inc2 = http_request(port, "POST", "/api/inc");
+    assert!(inc2.starts_with("HTTP/1.1 200 OK"), "POST /api/inc #2 failed: {inc2}");
+    assert!(inc2.contains(r#"{"count":2}"#), "inc2 body unexpected: {inc2}");
+
+    let inc3 = http_request(port, "POST", "/api/inc");
+    assert!(inc3.starts_with("HTTP/1.1 200 OK"), "POST /api/inc #3 failed: {inc3}");
+    assert!(inc3.contains(r#"{"count":3}"#), "inc3 body unexpected: {inc3}");
+
+    let dec1 = http_request(port, "POST", "/api/dec");
+    assert!(dec1.starts_with("HTTP/1.1 200 OK"), "POST /api/dec failed: {dec1}");
+    assert!(dec1.contains(r#"{"count":2}"#), "dec1 body unexpected: {dec1}");
 
     let count_resp = http_request(port, "GET", "/count");
     assert!(count_resp.starts_with("HTTP/1.1 200 OK"), "GET /count failed: {count_resp}");
-    assert!(count_resp.ends_with("\r\n\r\n10"), "GET /count body unexpected: {count_resp}");
+    assert!(count_resp.ends_with("\r\n\r\n2"), "GET /count body unexpected: {count_resp}");
+
+    let reset_resp = http_request(port, "POST", "/api/reset");
+    assert!(reset_resp.starts_with("HTTP/1.1 200 OK"), "POST /api/reset failed: {reset_resp}");
+    assert!(reset_resp.contains(r#"{"count":0}"#), "reset body unexpected: {reset_resp}");
+
+    let inc_final_1 = http_request(port, "POST", "/api/inc");
+    assert!(inc_final_1.contains(r#"{"count":1}"#), "inc_final_1 unexpected: {inc_final_1}");
+    let inc_final_2 = http_request(port, "POST", "/api/inc");
+    assert!(inc_final_2.contains(r#"{"count":2}"#), "inc_final_2 unexpected: {inc_final_2}");
 
     let missing = http_request(port, "GET", "/nope");
     assert!(missing.starts_with("HTTP/1.1 404 Not Found"), "GET /nope expected 404: {missing}");
@@ -133,12 +162,12 @@ fn test_milestone_c_native_compiled_http_server_e2e() {
     assert!(bye.starts_with("HTTP/1.1 200 OK"), "GET /shutdown failed: {bye}");
     assert!(bye.contains("bye"), "GET /shutdown body unexpected: {bye}");
 
-    // 7. Verify clean shutdown with exit code == final counter (10)
+    // 6. Verify clean shutdown with exit code == final counter (2)
     let status = child.wait().expect("wait for native server exit");
     let _ = std::fs::remove_file(&out_bin);
     assert_eq!(
         status.code(),
-        Some(10),
-        "Native server must exit cleanly with count == 10"
+        Some(2),
+        "Native server must exit cleanly with count == 2"
     );
 }

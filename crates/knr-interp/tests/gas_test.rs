@@ -261,7 +261,7 @@ impl HostPlatform for BoundedServerPlatform {
 fn test_site_server_ssa_execution_with_gas_refill_and_unlimited() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
-    let server_path = repo_root.join("site").join("server.ssa");
+    let server_path = repo_root.join("tests/fixtures/legacy_site").join("server.ssa");
     let content = std::fs::read_to_string(&server_path).expect("read site/server.ssa");
 
     // 1. Module must parse cleanly into AST

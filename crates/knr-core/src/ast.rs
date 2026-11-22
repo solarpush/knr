@@ -21,9 +21,11 @@ pub enum Type {
 
 impl Type {
     /// Returns true if this type has linear ownership semantics (Move-only).
+    /// Immutable strings (`Str`) and scalars (`I64`, `F64`, `Bool`, `Void`) are Copy;
+    /// heap resources (`Buf`, `Vec`, `Map`, `Chan`, `Struct`) have unique linear ownership.
     #[inline]
     pub fn is_linear(&self) -> bool {
-        !matches!(self, Type::I64 | Type::F64 | Type::Bool | Type::Void)
+        !matches!(self, Type::I64 | Type::F64 | Type::Bool | Type::Str | Type::Void)
     }
 }
 

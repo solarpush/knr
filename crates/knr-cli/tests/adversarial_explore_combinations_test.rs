@@ -49,7 +49,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn test_adv_json_with_symbol_schema_found() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--json", "--symbol", "Card"])
         .output()
@@ -66,7 +66,7 @@ fn test_adv_json_with_symbol_schema_found() {
 
 #[test]
 fn test_adv_json_with_symbol_function_found() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--json", "-s", "render_page"])
         .output()
@@ -83,7 +83,7 @@ fn test_adv_json_with_symbol_function_found() {
 
 #[test]
 fn test_adv_json_with_symbol_not_found() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--json", "--symbol=NonExistentSymbol999"])
         .output()
@@ -100,7 +100,7 @@ fn test_adv_json_with_symbol_not_found() {
 
 #[test]
 fn test_adv_json_with_callers() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--json", "--callers", "build_nav"])
         .output()
@@ -116,7 +116,7 @@ fn test_adv_json_with_callers() {
 
 #[test]
 fn test_adv_json_with_callers_nonexistent() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--json", "--callers=unknown_fn_xyz"])
         .output()
@@ -131,7 +131,7 @@ fn test_adv_json_with_callers_nonexistent() {
 
 #[test]
 fn test_adv_json_with_callees() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--json", "--callees", "render_page"])
         .output()
@@ -148,7 +148,7 @@ fn test_adv_json_with_callees() {
 
 #[test]
 fn test_adv_json_with_effects_case_insensitive() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
 
     // Lowercase
     let out_lower = knr_bin()
@@ -175,7 +175,7 @@ fn test_adv_json_with_effects_case_insensitive() {
 
 #[test]
 fn test_adv_json_with_effects_nonexistent() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--json", "--effects", "nonexistent_effect"])
         .output()
@@ -190,7 +190,7 @@ fn test_adv_json_with_effects_nonexistent() {
 
 #[test]
 fn test_adv_json_with_orphans() {
-    let http_schema = repo_root().join("site").join("schemas").join("http.ssa.schema");
+    let http_schema = repo_root().join("tests/fixtures/legacy_site").join("schemas").join("http.ssa.schema");
     let output = knr_bin()
         .args(["explore", http_schema.to_str().unwrap(), "--json", "--orphans"])
         .output()
@@ -211,7 +211,7 @@ fn test_adv_json_with_orphans() {
 
 #[test]
 fn test_adv_conflicting_json_and_format_mermaid() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--json", "--format", "mermaid"])
         .output()
@@ -226,7 +226,7 @@ fn test_adv_conflicting_json_and_format_mermaid() {
 
 #[test]
 fn test_adv_conflicting_json_and_format_ai() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--format=ai", "--json"])
         .output()
@@ -241,7 +241,7 @@ fn test_adv_conflicting_json_and_format_ai() {
 
 #[test]
 fn test_adv_compatible_json_and_format_json() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let output = knr_bin()
         .args(["explore", site.to_str().unwrap(), "--format=json", "--json"])
         .output()
@@ -253,7 +253,7 @@ fn test_adv_compatible_json_and_format_json() {
 
 #[test]
 fn test_adv_missing_flag_values() {
-    let site = repo_root().join("site");
+    let site = repo_root().join("tests/fixtures/legacy_site");
     let site_str = site.to_str().unwrap();
 
     // Missing value for --symbol

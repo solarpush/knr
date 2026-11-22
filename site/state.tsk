@@ -1,0 +1,210 @@
+// ============================================================================
+// knr Official Showcase -- Application State & Pure MVU Transitions (`site/state.tsk`)
+// Zero GC | Deterministic Linear State | Zero-Copy `readonly State` Borrows
+// ============================================================================
+
+import { ease_in_out_sine } from "std/ui";
+
+export type State = {
+    active_tab: i64;
+    active_shader: i64;
+    energy: f64;
+    hue_shift: f64;
+    depth: f64;
+    paused: bool;
+    elapsed: f64;
+    pulse: f64;
+    headline: string;
+    preset_name: string;
+    diag_case: i64;
+    code_sample: i64;
+    demo_count: i64;
+    demo_ops: i64;
+};
+
+export function init(): State {
+    return {
+        active_tab: 0,
+        active_shader: 0,
+        energy: 0.68,
+        hue_shift: 0.12,
+        depth: 0.52,
+        paused: false,
+        elapsed: 0.0,
+        pulse: 0.5,
+        headline: "Strict TSX. Linear Memory. Unified GPU.",
+        preset_name: "Midnight Cobalt",
+        diag_case: 0,
+        code_sample: 0,
+        demo_count: 42,
+        demo_ops: 1,
+    };
+}
+
+export function tick(s: State, dt: f64, _wall_elapsed: f64): State {
+    const next_elapsed = s.paused ? s.elapsed : s.elapsed + dt;
+    const next_pulse = ease_in_out_sine(0.5 + 0.5 * sin(next_elapsed * 1.9));
+    return {
+        ...s,
+        elapsed: next_elapsed,
+        pulse: next_pulse,
+    };
+}
+
+export function update(s: State, action: string): State {
+    switch (action) {
+        // Primary navigation tabs
+        case "tab_overview":
+            return { ...s, active_tab: 0 };
+        case "tab_shaders":
+            return { ...s, active_tab: 1 };
+        case "tab_safety":
+            return { ...s, active_tab: 2 };
+        case "tab_toolchain":
+            return { ...s, active_tab: 3 };
+
+        // Live GPU shader kernel switcher
+        case "shader_nebula":
+            return { ...s, active_shader: 0 };
+        case "shader_crystal":
+            return { ...s, active_shader: 1 };
+        case "shader_grid":
+            return { ...s, active_shader: 2 };
+
+        // Curated obsidian editorial shader presets
+        case "preset_midnight_cobalt":
+            return {
+                ...s,
+                energy: 0.68,
+                hue_shift: 0.12,
+                depth: 0.52,
+                preset_name: "Midnight Cobalt",
+            };
+        case "preset_ultraviolet":
+            return {
+                ...s,
+                energy: 0.84,
+                hue_shift: 0.44,
+                depth: 0.70,
+                preset_name: "Ultraviolet",
+            };
+        case "preset_arctic_cyan":
+            return {
+                ...s,
+                energy: 0.54,
+                hue_shift: 0.02,
+                depth: 0.40,
+                preset_name: "Arctic Cyan",
+            };
+        case "preset_obsidian_ember":
+            return {
+                ...s,
+                energy: 0.82,
+                hue_shift: 0.72,
+                depth: 0.78,
+                preset_name: "Obsidian Ember",
+            };
+
+        // Simulation clock & reset
+        case "toggle_pause":
+            return { ...s, paused: !s.paused };
+        case "reset_defaults":
+            return {
+                ...s,
+                active_shader: 0,
+                energy: 0.68,
+                hue_shift: 0.12,
+                depth: 0.52,
+                paused: false,
+                headline: "Strict TSX. Linear Memory. Unified GPU.",
+                preset_name: "Midnight Cobalt",
+            };
+
+        // Interactive Static Verifier Explorer
+        case "diag_uam":
+            return { ...s, diag_case: 0 };
+        case "diag_leak":
+            return { ...s, diag_case: 1 };
+        case "diag_escape":
+            return { ...s, diag_case: 2 };
+        case "diag_shader":
+            return { ...s, diag_case: 3 };
+
+        // Interactive Code Gallery Switcher
+        case "code_mvu":
+            return { ...s, code_sample: 0 };
+        case "code_shader":
+            return { ...s, code_sample: 1 };
+        case "code_server":
+            return { ...s, code_sample: 2 };
+        case "code_sys":
+            return { ...s, code_sample: 3 };
+
+        // Interactive Linear Ownership Playground
+        case "demo_dec":
+            return { ...s, demo_count: s.demo_count - 1, demo_ops: s.demo_ops + 1 };
+        case "demo_inc":
+            return { ...s, demo_count: s.demo_count + 1, demo_ops: s.demo_ops + 1 };
+        case "demo_boost":
+            return { ...s, demo_count: s.demo_count + 10, demo_ops: s.demo_ops + 1 };
+        case "demo_reset":
+            return { ...s, demo_count: 42, demo_ops: s.demo_ops + 1 };
+
+        default:
+            return s;
+    }
+}
+
+export function on_slider(s: State, action: string, val: f64): State {
+    const v = clamp(val, 0.0, 1.0);
+    switch (action) {
+        case "slider_energy":
+            return { ...s, energy: v, preset_name: "Custom" };
+        case "slider_hue":
+            return { ...s, hue_shift: v, preset_name: "Custom" };
+        case "slider_depth":
+            return { ...s, depth: v, preset_name: "Custom" };
+        default:
+            return s;
+    }
+}
+
+export function on_input(s: State, action: string, text: string): State {
+    if (action === "input_headline") {
+        return { ...s, headline: text };
+    }
+    return s;
+}
+
+export function active_shader_fn_name(active_shader: i64): string {
+    if (active_shader === 1) {
+        return "knr_sdf_crystal";
+    }
+    if (active_shader === 2) {
+        return "knr_quantum_grid";
+    }
+    return "knr_hero_nebula";
+}
+
+export function active_shader_label(active_shader: i64): string {
+    if (active_shader === 1) {
+        return "3D SDF Crystal";
+    }
+    if (active_shader === 2) {
+        return "Architectural Grid";
+    }
+    return "Aurora Silk";
+}
+
+export function active_tab_label(active_tab: i64): string {
+    if (active_tab === 1) {
+        return "GPU Studio";
+    }
+    if (active_tab === 2) {
+        return "Safety";
+    }
+    if (active_tab === 3) {
+        return "Toolchain";
+    }
+    return "Overview";
+}

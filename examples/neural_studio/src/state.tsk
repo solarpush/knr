@@ -1,0 +1,506 @@
+// ============================================================================
+// knr Neural Studio v0.4.0 -- MVU State, Router, Themes, Actions & Async Cmd
+// ============================================================================
+
+import { Theme, theme_obsidian, theme_light, theme_nord, theme_solar } from "std/theme";
+import {
+    Route,
+    router_init,
+    router_push,
+    router_back,
+    router_is,
+    router_can_back,
+} from "std/router";
+import { responsive_cols, responsive_pad, is_compact } from "std/layout";
+import { Cmd, cmd_none, cmd_timer } from "std/cmd";
+import { Option } from "std/core";
+
+export type JobItem = {
+    id: i64;
+    name: string;
+    stage: string;
+    epochs: i64;
+    done: bool;
+};
+
+export enum Action {
+    RouteStudio,
+    RoutePipeline,
+    RouteShaders,
+    RouteBack,
+    CycleTheme,
+    TogglePause,
+    AddJob,
+    CompleteNext,
+    FilterAll,
+    FilterActive,
+    FilterDone,
+    SelectShaderWave,
+    SelectShaderOrb,
+    TriggerPulse,
+    PulseDone,
+    ResetAll,
+}
+
+export type State = {
+    route: Route;
+    theme_idx: i64;
+    paused: bool;
+    pulse_active: bool;
+    pulse_count: i64;
+    shader_idx: i64;
+    energy: f64;
+    hue: f64;
+    density: f64;
+    glow: f64;
+    filter_mode: i64;
+    draft: string;
+    next_id: i64;
+    jobs: JobItem[];
+    latencies_ms: i64[];
+    viewport_w: f64;
+    viewport_h: f64;
+    elapsed: f64;
+};
+
+export function init(): State {
+    const jobs: JobItem[] = [
+        {
+            id: 1,
+            name: "SSA Dominance Verifier",
+            stage: "core",
+            epochs: 12,
+            done: true,
+        },
+        {
+            id: 2,
+            name: "WGSL Aurora Kernel",
+            stage: "gpu",
+            epochs: 24,
+            done: true,
+        },
+        {
+            id: 3,
+            name: "Zero-GC Linear Scheduler",
+            stage: "runtime",
+            epochs: 18,
+            done: false,
+        },
+        {
+            id: 4,
+            name: "3D SDF Neural Orb",
+            stage: "shader",
+            epochs: 32,
+            done: false,
+        },
+        {
+            id: 5,
+            name: "MCP Audit Flow Runner",
+            stage: "agent",
+            epochs: 14,
+            done: false,
+        },
+    ];
+    const latencies_ms: i64[] = [9, 12, 16, 22, 14, 29];
+    return {
+        route: router_init("/studio"),
+        theme_idx: 0,
+        paused: false,
+        pulse_active: false,
+        pulse_count: 1,
+        shader_idx: 0,
+        energy: 0.68,
+        hue: 0.34,
+        density: 0.56,
+        glow: 0.74,
+        filter_mode: 0,
+        draft: "",
+        next_id: 6,
+        jobs: jobs,
+        latencies_ms: latencies_ms,
+        viewport_w: 1280.0,
+        viewport_h: 900.0,
+        elapsed: 0.0,
+    };
+}
+
+export function active_theme(s: readonly State): Theme {
+    const { theme_idx } = s;
+    if (theme_idx === 1) {
+        return theme_light();
+    }
+    if (theme_idx === 2) {
+        return theme_nord();
+    }
+    if (theme_idx === 3) {
+        return theme_solar();
+    }
+    return theme_obsidian();
+}
+
+export function theme_label(idx: i64): string {
+    if (idx === 1) {
+        return "Light";
+    }
+    if (idx === 2) {
+        return "Nord";
+    }
+    if (idx === 3) {
+        return "Solar";
+    }
+    return "Obsidian";
+}
+
+export function primary_btn_bg(idx: i64): string {
+    if (idx === 1) {
+        return "#0369a1";
+    }
+    if (idx === 2) {
+        return "#88c0d0";
+    }
+    if (idx === 3) {
+        return "#2aa198";
+    }
+    return "#38bdf8";
+}
+
+export function primary_btn_fg(idx: i64): string {
+    if (idx === 1) {
+        return "#ffffff";
+    }
+    if (idx === 2) {
+        return "#1e2430";
+    }
+    if (idx === 3) {
+        return "#002028";
+    }
+    return "#06080f";
+}
+
+export function accent_text_color(idx: i64): string {
+    if (idx === 1) {
+        return "#0369a1";
+    }
+    if (idx === 2) {
+        return "#a8dce8";
+    }
+    if (idx === 3) {
+        return "#38c6bd";
+    }
+    return "#38bdf8";
+}
+
+export function card_shadow_color(idx: i64): string {
+    if (idx === 1) {
+        return "#0f172a12";
+    }
+    return "#0000004d";
+}
+
+export function studio_cols(s: readonly State): i64 {
+    const { viewport_w } = s;
+    return responsive_cols(viewport_w, 1, 2, 3);
+}
+
+export function studio_pad(s: readonly State): f64 {
+    const { viewport_w } = s;
+    return is_compact(viewport_w) ? 12.0 : responsive_pad(viewport_w);
+}
+
+export function can_go_back(s: readonly State): bool {
+    return router_can_back(s.route);
+}
+
+export function is_route_studio(s: readonly State): bool {
+    return router_is(s.route, "/studio");
+}
+
+export function is_route_pipeline(s: readonly State): bool {
+    return router_is(s.route, "/pipeline");
+}
+
+export function is_route_shaders(s: readonly State): bool {
+    return router_is(s.route, "/shaders");
+}
+
+export function count_done_jobs(s: readonly State): i64 {
+    return s.jobs.count((job) => job.done);
+}
+
+export function count_active_jobs(s: readonly State): i64 {
+    return s.jobs.count((job) => !job.done);
+}
+
+export function has_active_jobs(s: readonly State): bool {
+    return s.jobs.some((job) => !job.done);
+}
+
+export function total_epochs(s: readonly State): i64 {
+    return s.jobs.reduce((acc, job) => acc + job.epochs, 0);
+}
+
+export function fast_latency_count(s: readonly State): i64 {
+    const fast = s.latencies_ms.filter((ms) => ms <= 18);
+    return fast.length;
+}
+
+export function job_summary_labels(s: readonly State): string[] {
+    return s.jobs.map((job, idx) => `#${idx + 1} ${job.name}`);
+}
+
+export function find_next_active_id(s: readonly State): Option<i64> {
+    const n = s.jobs.length;
+    {
+        let i = 0;
+        while (i < n) {
+            const j = s.jobs[i];
+            if (!j.done) {
+                return Option<i64>.Some(j.id);
+            }
+            i = i + 1;
+        }
+    }
+    return Option<i64>.None;
+}
+
+export function next_active_id_or_zero(s: readonly State): i64 {
+    const next_opt = find_next_active_id(s);
+    return next_opt ?? 0;
+}
+
+export function clone_route(r: readonly Route): Route {
+    return { current: r.current, previous: r.previous, depth: r.depth };
+}
+
+export function clone_jobs_append(src: readonly JobItem[], new_id: i64, new_name: string): JobItem[] {
+    let out: JobItem[] = [];
+    const n = src.length;
+    {
+        let i = 0;
+        while (i < n) {
+            const j = src[i];
+            out = vec_push(out, {
+                id: j.id,
+                name: j.name,
+                stage: j.stage,
+                epochs: j.epochs,
+                done: j.done,
+            });
+            i = i + 1;
+        }
+    }
+    out = vec_push(out, {
+        id: new_id,
+        name: new_name,
+        stage: "custom",
+        epochs: 16,
+        done: false,
+    });
+    return out;
+}
+
+export function clone_jobs_complete(src: readonly JobItem[], target_id: i64): JobItem[] {
+    let out: JobItem[] = [];
+    const n = src.length;
+    {
+        let i = 0;
+        while (i < n) {
+            const j = src[i];
+            const done = j.id === target_id ? true : j.done;
+            out = vec_push(out, {
+                id: j.id,
+                name: j.name,
+                stage: j.stage,
+                epochs: j.epochs,
+                done: done,
+            });
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+export function visible_jobs(s: readonly State): JobItem[] {
+    let out: JobItem[] = [];
+    const n = s.jobs.length;
+    {
+        let i = 0;
+        while (i < n) {
+            const j = s.jobs[i];
+            const keep = s.filter_mode === 0 || s.filter_mode === 1 && !j.done || s.filter_mode === 2 && j.done;
+            if (keep) {
+                out = vec_push(out, {
+                    id: j.id,
+                    name: j.name,
+                    stage: j.stage,
+                    epochs: j.epochs,
+                    done: j.done,
+                });
+            }
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+export function tick(s: State, dt: f64): State {
+    if (s.paused) {
+        return s;
+    }
+    return { ...s, elapsed: s.elapsed + max(dt, 0.0) };
+}
+
+export function update(s: State, action: Action): State {
+    switch (action) {
+        case Action.RouteStudio:
+            {
+                if (router_is(s.route, "/studio")) {
+                    return s;
+                }
+                const next_route = router_push(clone_route(s.route), "/studio");
+                return { ...s, route: next_route };
+            }
+            break;
+        case Action.RoutePipeline:
+            {
+                if (router_is(s.route, "/pipeline")) {
+                    return s;
+                }
+                const next_route = router_push(clone_route(s.route), "/pipeline");
+                return { ...s, route: next_route };
+            }
+            break;
+        case Action.RouteShaders:
+            {
+                if (router_is(s.route, "/shaders")) {
+                    return s;
+                }
+                const next_route = router_push(clone_route(s.route), "/shaders");
+                return { ...s, route: next_route };
+            }
+            break;
+        case Action.RouteBack:
+            {
+                const prev_route = router_back(clone_route(s.route));
+                return { ...s, route: prev_route };
+            }
+            break;
+        case Action.CycleTheme:
+            {
+                const next_idx = (s.theme_idx + 1) % 4;
+                return { ...s, theme_idx: next_idx };
+            }
+            break;
+        case Action.TogglePause:
+            return { ...s, paused: !s.paused };
+        case Action.AddJob:
+            {
+                const label = str_len(s.draft) > 0 ? s.draft : `Kernel Job #${s.next_id}`;
+                const updated = clone_jobs_append(s.jobs, s.next_id, label);
+                return {
+                    ...s,
+                    jobs: updated,
+                    next_id: s.next_id + 1,
+                    draft: "",
+                };
+            }
+            break;
+        case Action.CompleteNext:
+            {
+                const next_opt = find_next_active_id(s);
+                switch (next_opt) {
+                    case Option.Some(target_id):
+                        {
+                            const updated = clone_jobs_complete(s.jobs, target_id);
+                            return { ...s, jobs: updated };
+                        }
+                        break;
+                    case Option.None:
+                        return s;
+                }
+            }
+            break;
+        case Action.FilterAll:
+            return { ...s, filter_mode: 0 };
+        case Action.FilterActive:
+            return { ...s, filter_mode: 1 };
+        case Action.FilterDone:
+            return { ...s, filter_mode: 2 };
+        case Action.SelectShaderWave:
+            return { ...s, shader_idx: 0 };
+        case Action.SelectShaderOrb:
+            return { ...s, shader_idx: 1 };
+        case Action.TriggerPulse:
+            return {
+                ...s,
+                pulse_active: true,
+                pulse_count: s.pulse_count + 1,
+            };
+        case Action.PulseDone:
+            return { ...s, pulse_active: false };
+        case Action.ResetAll:
+            return init();
+    }
+}
+
+export function on_input(s: State, action: string, val: string): State {
+    if (action === "job_draft_input") {
+        return { ...s, draft: val };
+    }
+    return s;
+}
+
+export function on_slider(s: State, action: string, val: f64): State {
+    const v = clamp(val, 0.0, 1.0);
+    if (action === "slider_energy") {
+        return { ...s, energy: v };
+    }
+    if (action === "slider_hue") {
+        return { ...s, hue: v };
+    }
+    if (action === "slider_density") {
+        return { ...s, density: v };
+    }
+    if (action === "slider_glow") {
+        return { ...s, glow: v };
+    }
+    return s;
+}
+
+export function on_key(s: State, key: string): State {
+    if (key === "Ctrl+1") {
+        return update(s, Action.RouteStudio);
+    }
+    if (key === "Ctrl+2") {
+        return update(s, Action.RoutePipeline);
+    }
+    if (key === "Ctrl+3") {
+        return update(s, Action.RouteShaders);
+    }
+    if (key === "Ctrl+T") {
+        return update(s, Action.CycleTheme);
+    }
+    if (key === "Space") {
+        return update(s, Action.TogglePause);
+    }
+    return s;
+}
+
+export function on_resize(s: State, w: f64, h: f64): State {
+    return {
+        ...s,
+        viewport_w: max(w, 320.0),
+        viewport_h: max(h, 400.0),
+    };
+}
+
+export function effect(s: readonly State, action: string): Cmd {
+    if (action === "TriggerPulse") {
+        return cmd_timer(350.0, "PulseDone");
+    }
+    const _ready = s.pulse_count >= 0;
+    if (!_ready) {
+        return cmd_none();
+    }
+    return cmd_none();
+}

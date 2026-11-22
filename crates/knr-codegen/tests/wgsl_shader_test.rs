@@ -1,11 +1,11 @@
 //! End-to-End GPU Shader Compiler (`knr-codegen::wgsl`) & Static Purity Verifier Tests.
 //!
 //! Proves:
-//! 1. Pure `.knr` `shader fn` (with flat structs, `#hex` Color literals, loops, branches,
+//! 1. Pure Strict TS `@shader` function (with flat structs, `#hex` Color literals, loops, branches,
 //!    pure helper calls, and GPU math intrinsics) compiles to `naga`-validated WGSL AND
 //!    `naga`-transpiled WebGL2 GLSL ES 3.00 (`#version 300 es`).
-//! 2. `knr-verify` statically rejects effectful, heap-allocating, and recursive `shader fn`s.
-//! 3. `examples/shader_studio.knr` compiles both `aurora_waves` and `plasma_orbit` cleanly.
+//! 2. `knr-verify` statically rejects effectful, heap-allocating, and recursive `@shader` functions.
+//! 3. `examples/shader_studio.tsk` compiles both `aurora_waves` and `plasma_orbit` cleanly.
 
 use std::path::PathBuf;
 
@@ -17,42 +17,43 @@ use knr_verify::{verify_program, verify_program_from_file};
 #[test]
 fn test_shader_fn_compiles_to_naga_validated_wgsl_and_webgl2_glsl() {
     let src = r##"
-        schema Vec2 {
-            0: x f64,
-            1: y f64,
-        }
+        type Vec2 = {
+            x: f64,
+            y: f64,
+        };
 
-        schema Color {
-            0: r f64,
-            1: g f64,
-            2: b f64,
-            3: a f64,
-        }
+        type Color = {
+            r: f64,
+            g: f64,
+            b: f64,
+            a: f64,
+        };
 
-        fn wave_mix(a: f64, b: f64, t: f64) -> f64 {
+        function wave_mix(a: f64, b: f64, t: f64): f64 {
             return lerp(a, b, smoothstep(0.0, 1.0, t));
         }
 
-        shader fn cosmic_grid(uv: Vec2, time: f64, speed: f64, rings: i64) -> Color {
-            let base: Color = #0f172a;
-            let accent: Color = #38bdf8;
-            let cx = uv.x - 0.5;
-            let cy = uv.y - 0.5;
-            let dist = sqrt(cx * cx + cy * cy);
-            let ang = atan2(cy, cx);
+        @shader
+        function cosmic_grid(uv: Vec2, time: f64, speed: f64, rings: i64): Color {
+            const base: Color = #0f172a;
+            const accent: Color = #38bdf8;
+            const cx = uv.x - 0.5;
+            const cy = uv.y - 0.5;
+            const dist = sqrt(cx * cx + cy * cy);
+            const ang = atan2(cy, cx);
 
             let acc = 0.0;
             let i = 0;
-            while i < rings {
-                let fi = to_f64(i + 1);
+            while (i < rings) {
+                const fi = to_f64(i + 1);
                 acc = acc + sin(dist * fi * 8.0 - time * speed + ang);
                 i = i + 1;
             }
-            let norm = clamp(0.5 + 0.25 * acc, 0.0, 1.0);
-            let r = wave_mix(base.r, accent.r, norm);
-            let g = wave_mix(base.g, accent.g, norm);
-            let b = wave_mix(base.b, accent.b, norm);
-            return Color { r: r, g: g, b: b, a: 1.0 };
+            const norm = clamp(0.5 + 0.25 * acc, 0.0, 1.0);
+            const r = wave_mix(base.r, accent.r, norm);
+            const g = wave_mix(base.g, accent.g, norm);
+            const b = wave_mix(base.b, accent.b, norm);
+            return { r: r, g: g, b: b, a: 1.0 };
         }
     "##;
 
@@ -90,7 +91,9 @@ fn test_shader_fn_compiles_to_naga_validated_wgsl_and_webgl2_glsl() {
 fn test_shader_verifier_rejects_effects_heap_and_recursion() {
     // 1. Effectful shader forbidden
     let effect_src = r#"
-        shader fn bad_effect(x: f64, y: f64) -> f64 effects(Net) {
+        @shader
+        @effects("net")
+        function bad_effect(x: f64, y: f64): f64 {
             return x + y;
         }
     "#;
@@ -103,9 +106,10 @@ fn test_shader_verifier_rejects_effects_heap_and_recursion() {
 
     // 2. Heap allocation / string forbidden in GPU shader
     let heap_src = r#"
-        shader fn bad_heap(x: f64) -> f64 {
-            let s = "illegal_on_gpu";
-            let n = str_len(s);
+        @shader
+        function bad_heap(x: f64): f64 {
+            const s = "illegal_on_gpu";
+            const n = str_len(s);
             return x + to_f64(n);
         }
     "#;
@@ -119,8 +123,9 @@ fn test_shader_verifier_rejects_effects_heap_and_recursion() {
 
     // 3. Direct recursion forbidden in GPU shader
     let rec_src = r#"
-        shader fn bad_rec(x: f64) -> f64 {
-            if x <= 0.0 {
+        @shader
+        function bad_rec(x: f64): f64 {
+            if (x <= 0.0) {
                 return 0.0;
             }
             return bad_rec(x - 1.0);
@@ -143,12 +148,12 @@ fn test_examples_shader_studio_compiles_all_gpu_shaders() {
         .parent()
         .unwrap()
         .to_path_buf();
-    let studio_path = root.join("examples/shader_studio.knr");
-    let module = verify_program_from_file(&studio_path).expect("verify examples/shader_studio.knr");
+    let studio_path = root.join("examples/shader_studio.tsk");
+    let module = verify_program_from_file(&studio_path).expect("verify examples/shader_studio.tsk");
 
     let shaders = WgslBackend::new()
         .compile_all_shaders(&module)
-        .expect("compile all shaders in shader_studio.knr");
+        .expect("compile all shaders in shader_studio.tsk");
     assert_eq!(shaders.len(), 2, "Expected aurora_waves and plasma_orbit");
 
     let names: Vec<&str> = shaders.iter().map(|s| s.name.as_str()).collect();

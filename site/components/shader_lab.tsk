@@ -1,0 +1,282 @@
+// ============================================================================
+// knr Official Showcase -- GPU Shader Studio (`site/components/shader_lab.tsk`)
+// ============================================================================
+
+import {
+    Column,
+    Row,
+    Grid,
+    Card,
+    Badge,
+    Text,
+    Code,
+    Button,
+    Input,
+    Slider,
+    Toggle,
+    Icon,
+    Divider,
+} from "std/ui";
+import { State, active_shader_fn_name, active_shader_label } from "../state.tsk";
+import { ShaderStage, ShaderSwitcher } from "./hero.tsk";
+
+export function shader_source_excerpt(active_shader: i64): string {
+    if (active_shader === 1) {
+        return "@shader\n"
+            + "export function knr_sdf_crystal(\n"
+            + "    uv: Vec2, time: f64, mouse: Vec2, energy: f64, hue: f64, depth: f64\n"
+            + "): Color {\n"
+            + "    // 48-step 3D SDF sphere tracing + smooth minimum (smin)\n"
+            + "    for (let step = 0; step < 48; step += 1) {\n"
+            + "        const d = crystal_scene_sdf(px, py, pz, time, energy);\n"
+            + "        glow_acc = glow_acc + 0.012 / (abs(d) + 0.056);\n"
+            + "        if (d < 0.0026) { hit = 1.0; break; }\n"
+            + "        t = t + d * 0.85;\n"
+            + "    }\n"
+            + "    // Central-difference 3D normals + Blinn-Phong + Fresnel dispersion\n"
+            + "    return { r, g, b, a: 1.0 };\n"
+            + "}";
+    }
+    if (active_shader === 2) {
+        return "@shader\n"
+            + "export function knr_quantum_grid(\n"
+            + "    uv: Vec2, time: f64, mouse: Vec2, energy: f64, hue: f64, depth: f64\n"
+            + "): Color {\n"
+            + "    // Minimalist architectural perspective grid with distance anti-aliasing\n"
+            + "    const horizon = 0.44 + (mouse.y - 0.5) * 0.10;\n"
+            + "    const z = (0.34 + depth * 0.44) / max(abs(uv.y - horizon), 0.028);\n"
+            + "    const aa = clamp(0.016 + z * 0.008, 0.016, 0.12);\n"
+            + "    const line_x = smoothstep(aa + 0.018, 0.005, abs(fract(gx * 0.72) - 0.5));\n"
+            + "    const line_z = smoothstep(aa + 0.018, 0.005, abs(fract(gz * 0.58) - 0.5));\n"
+            + "    return { r, g, b, a: 1.0 };\n"
+            + "}";
+    }
+    return "@shader\n"
+        + "export function knr_hero_nebula(\n"
+        + "    uv: Vec2, time: f64, mouse: Vec2, energy: f64, hue: f64, depth: f64\n"
+        + "): Color {\n"
+        + "    // Continuous 2-pass domain-warped silk waves (zero atan2 branch cuts)\n"
+        + "    const w1x = px + (0.32 + depth * 0.18) * sin(py * 2.2 + t * 0.55);\n"
+        + "    const w1y = py + (0.26 + depth * 0.16) * cos(px * 2.0 - t * 0.48);\n"
+        + "    const fold = sin(wx * 2.4 + cos(wy * 1.9 - t * 0.46));\n"
+        + "    const mouse_bloom = (0.28 + energy * 0.26) / (1.0 + mdist2 * 5.2);\n"
+        + "    return { r, g, b, a: 1.0 };\n"
+        + "}";
+}
+
+export function ShaderLab(s: readonly State): Widget {
+    const energy_pct = toInt(s.energy * 100.0);
+    const hue_pct = toInt(s.hue_shift * 100.0);
+    const depth_pct = toInt(s.depth * 100.0);
+    const shader_fn = active_shader_fn_name(s.active_shader);
+    const shader_title = active_shader_label(s.active_shader);
+    const clock_txt = s.paused ? "Frozen" : "60/120 FPS Live";
+
+    return (
+        <Column key="tab_view_shaders" w="full" gap={22}>
+            <Column gap={8} pt={4}>
+                <Row align="center" gap={8}>
+                    <Icon name="palette" size={15} color="#818cf8" />
+                    <Text size={13} weight="semibold" color="#818cf8">
+                        GPU SHADER STUDIO
+                    </Text>
+                    <Text size={13} color="#64748b">
+                        naga-Validated WGSL + WebGL2 GLSL ES 3.00
+                    </Text>
+                </Row>
+                <Text
+                    size={32}
+                    weight="extrabold"
+                    font="display"
+                    letterSpacing={-0.8}
+                    color="#f8fafc"
+                >
+                    {s.headline}
+                </Text>
+                <Text size={14} color="#94a3b8">
+                    {`Active Kernel: ${shader_title} (${shader_fn}) | Preset: ${s.preset_name} | Clock: ${clock_txt}`}
+                </Text>
+            </Column>
+
+            <Column gap={12}>
+                <ShaderStage s={s} prefix="lab" height={380} />
+                <Row align="center" justify="between" gap={12}>
+                    <ShaderSwitcher s={s} prefix="lab" />
+                    <Text size={13} color="#64748b">
+                        Uniform buffer: u.params[0].xyz = [energy, hue, depth]
+                    </Text>
+                </Row>
+            </Column>
+
+            <Grid key="shader_controls_grid" cols={2} gap={16}>
+                <Card bg="#0b0f1c" border="#ffffff14" radius={16} p={22} gap={14}>
+                    <Row align="center" gap={8}>
+                        <Icon name="sliders" size={15} color="#38bdf8" />
+                        <Text size={16} weight="bold" color="#f8fafc">
+                            Real-Time GPU Uniforms
+                        </Text>
+                    </Row>
+
+                    <Column gap={6}>
+                        <Row justify="between">
+                            <Text size={13} color="#cbd5e1">
+                                Energy / Helical Twist (uniforms[0])
+                            </Text>
+                            <Text size={13} font="mono" color="#38bdf8">
+                                {`${energy_pct}%`}
+                            </Text>
+                        </Row>
+                        <Slider value={s.energy} onChange="slider_energy" />
+                    </Column>
+
+                    <Column gap={6}>
+                        <Row justify="between">
+                            <Text size={13} color="#cbd5e1">
+                                Spectral Hue Shift (uniforms[1])
+                            </Text>
+                            <Text size={13} font="mono" color="#818cf8">
+                                {`${hue_pct}%`}
+                            </Text>
+                        </Row>
+                        <Slider value={s.hue_shift} onChange="slider_hue" />
+                    </Column>
+
+                    <Column gap={6}>
+                        <Row justify="between">
+                            <Text size={13} color="#cbd5e1">
+                                Spatial Depth / Camera Zoom (uniforms[2])
+                            </Text>
+                            <Text size={13} font="mono" color="#38bdf8">
+                                {`${depth_pct}%`}
+                            </Text>
+                        </Row>
+                        <Slider value={s.depth} onChange="slider_depth" />
+                    </Column>
+
+                    <Divider />
+
+                    <Row align="center" justify="between" gap={10}>
+                        <Toggle
+                            checked={s.paused}
+                            onToggle="toggle_pause"
+                            label="Freeze Clock"
+                        />
+                        <Button
+                            key="btn_reset_studio"
+                            onClick="reset_defaults"
+                            bg="#0e1322"
+                            border="#ffffff18"
+                            hoverBorder="#38bdf866"
+                            px={14}
+                            py={9}
+                            radius={9}
+                            gap={7}
+                            align="center"
+                        >
+                            <Icon name="refresh" size={14} color="#94a3b8" />
+                            <Text size={13} weight="medium" color="#e2e8f0">
+                                Reset Studio
+                            </Text>
+                        </Button>
+                    </Row>
+                </Card>
+
+                <Card bg="#0b0f1c" border="#ffffff14" radius={16} p={22} gap={14}>
+                    <Row align="center" gap={8}>
+                        <Icon name="sparkles" size={15} color="#818cf8" />
+                        <Text size={16} weight="bold" color="#f8fafc">
+                            Atmosphere Presets & Live Headline
+                        </Text>
+                    </Row>
+
+                    <Grid cols={2} gap={8}>
+                        <Button
+                            key="btn_midnight_cobalt"
+                            onClick="preset_midnight_cobalt"
+                            w="full"
+                            justify="center"
+                            bg={s.preset_name === "Midnight Cobalt" ? "#141f38" : "#0e1322"}
+                            border={s.preset_name === "Midnight Cobalt" ? "#38bdf866" : "#ffffff14"}
+                            hoverBorder="#38bdf855"
+                            px={13}
+                            py={9}
+                            radius={9}
+                        >
+                            Midnight Cobalt
+                        </Button>
+                        <Button
+                            key="btn_ultraviolet"
+                            onClick="preset_ultraviolet"
+                            w="full"
+                            justify="center"
+                            bg={s.preset_name === "Ultraviolet" ? "#1c1938" : "#0e1322"}
+                            border={s.preset_name === "Ultraviolet" ? "#818cf866" : "#ffffff14"}
+                            hoverBorder="#818cf855"
+                            px={13}
+                            py={9}
+                            radius={9}
+                        >
+                            Ultraviolet
+                        </Button>
+                        <Button
+                            key="btn_arctic_cyan"
+                            onClick="preset_arctic_cyan"
+                            w="full"
+                            justify="center"
+                            bg={s.preset_name === "Arctic Cyan" ? "#112238" : "#0e1322"}
+                            border={s.preset_name === "Arctic Cyan" ? "#38bdf866" : "#ffffff14"}
+                            hoverBorder="#38bdf855"
+                            px={13}
+                            py={9}
+                            radius={9}
+                        >
+                            Arctic Cyan
+                        </Button>
+                        <Button
+                            key="btn_obsidian_ember"
+                            onClick="preset_obsidian_ember"
+                            w="full"
+                            justify="center"
+                            bg={s.preset_name === "Obsidian Ember" ? "#261829" : "#0e1322"}
+                            border={s.preset_name === "Obsidian Ember" ? "#818cf866" : "#ffffff14"}
+                            hoverBorder="#818cf855"
+                            px={13}
+                            py={9}
+                            radius={9}
+                        >
+                            Obsidian Ember
+                        </Button>
+                    </Grid>
+
+                    <Divider />
+
+                    <Column gap={8}>
+                        <Text size={13} color="#94a3b8">
+                            Live Hero Headline (syncs across Overview and GPU Studio)
+                        </Text>
+                        <Input value={s.headline} onInput="input_headline" />
+                    </Column>
+
+                    <Text size={12} font="mono" color="#64748b">
+                        KnrUniforms(128B) | CPU parity verified by knr test site/app.tsk
+                    </Text>
+                </Card>
+            </Grid>
+
+            <Card bg="#0b0f1c" border="#ffffff14" radius={16} p={22} gap={14}>
+                <Row align="center" justify="between">
+                    <Row align="center" gap={8}>
+                        <Icon name="code" size={15} color="#38bdf8" />
+                        <Text size={14} weight="semibold" font="mono" color="#f8fafc">
+                            {`site/shaders.tsk  |  ${shader_fn}()`}
+                        </Text>
+                    </Row>
+                    <Badge bg="#0e1424" color="#818cf8" border="#818cf844">
+                        GPU-PURE VERIFIED
+                    </Badge>
+                </Row>
+                <Code lang="tsx">{shader_source_excerpt(s.active_shader)}</Code>
+            </Card>
+        </Column>
+    );
+}

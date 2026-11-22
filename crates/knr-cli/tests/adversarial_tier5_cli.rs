@@ -221,7 +221,7 @@ fn test_adv_cli_unlimited_gas_case_insensitivity_and_aliases() {
 fn test_adv_cli_site_server_ssa_verification_and_event_loop() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
-    let server_path = repo_root.join("site").join("server.ssa");
+    let server_path = repo_root.join("tests/fixtures/legacy_site").join("server.ssa");
     let server_str = server_path.to_str().unwrap();
 
     // 1. Verify site/server.ssa parses and verifies cleanly via knr check CLI

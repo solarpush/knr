@@ -1,7 +1,7 @@
 // Error: TypeMismatch
-fn test_arith() -> i64 {
-    let a = 10;
-    let b = true;
-    let c = a + b;
+function test_arith(): i64 {
+    const a = 10;
+    const b = true;
+    const c = a + b;
     return c;
 }
