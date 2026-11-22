@@ -761,19 +761,19 @@ fn test_v04_wgsl_vec2_vec3_color_uniforms_and_resolution_dt_auto_binding() {
 
     // Custom slots: offset (2) + light_dir (3) + tint (4) + gain (1) = 10 slots
     assert_eq!(compiled.custom_param_count, 10);
-    assert!(compiled.wgsl.contains("knr_s_Vec2(in.uv.x, in.uv.y)"));
-    assert!(compiled.wgsl.contains("u.time"));
-    assert!(compiled.wgsl.contains("u.dt"));
-    assert!(compiled.wgsl.contains("knr_s_Vec2(u.resolution.x, u.resolution.y)"));
-    assert!(compiled.wgsl.contains("knr_s_Vec2(u.mouse.x, u.mouse.y)"));
-    assert!(compiled.wgsl.contains("knr_s_Vec2(u.params[0].x, u.params[0].y)"));
-    assert!(compiled.wgsl.contains("knr_s_Vec3(u.params[0].z, u.params[0].w, u.params[1].x)"));
+    let wgsl_nospace: String = compiled.wgsl.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(wgsl_nospace.contains("knr_s_Vec2(in.uv.x,in.uv.y)"));
+    assert!(wgsl_nospace.contains("u.time"));
+    assert!(wgsl_nospace.contains("u.dt"));
+    assert!(wgsl_nospace.contains("knr_s_Vec2(u.resolution.x,u.resolution.y)"));
+    assert!(wgsl_nospace.contains("knr_s_Vec2(u.mouse.x,u.mouse.y)"));
+    assert!(wgsl_nospace.contains("knr_s_Vec2(u.params[0].x,u.params[0].y)"));
+    assert!(wgsl_nospace.contains("knr_s_Vec3(u.params[0].z,u.params[0].w,u.params[1].x)"));
     assert!(
-        compiled
-            .wgsl
-            .contains("knr_s_Color(u.params[1].y, u.params[1].z, u.params[1].w, u.params[2].x)")
+        wgsl_nospace
+            .contains("knr_s_Color(u.params[1].y,u.params[1].z,u.params[1].w,u.params[2].x)")
     );
-    assert!(compiled.wgsl.contains("u.params[2].y"));
+    assert!(wgsl_nospace.contains("u.params[2].y"));
     assert!(compiled.glsl_vertex.starts_with("#version 300 es"));
     assert!(compiled.glsl_fragment.starts_with("#version 300 es"));
 
@@ -787,9 +787,12 @@ fn test_v04_wgsl_vec2_vec3_color_uniforms_and_resolution_dt_auto_binding() {
             ],
         )
         .expect("`res` alias must bind u.resolution cleanly");
-    assert!(compiled_alias
+    let alias_nospace: String = compiled_alias
         .wgsl
-        .contains("knr_s_Vec2(u.resolution.x, u.resolution.y)"));
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(alias_nospace.contains("knr_s_Vec2(u.resolution.x,u.resolution.y)"));
     assert_eq!(compiled_alias.custom_param_count, 10);
 }
 
@@ -843,12 +846,16 @@ fn test_v04_wgsl_f64_and_i64_rem_and_all_math_intrinsics() {
         .expect("f64 + i64 Op::Rem and all math intrinsics must pass naga WGSL + GLSL ES 3.00");
 
     assert!(
-        compiled.wgsl.contains("floor((r_3 / r_5))")
+        compiled.wgsl.contains("0.5 * floor(r3 / 0.5)")
             || compiled.wgsl.contains("r_3 - r_5 * floor(r_3 / r_5)"),
         "Expected f64 Rem lowered to a - b * floor(a / b):\n{}",
         compiled.wgsl
     );
-    assert!(compiled.wgsl.contains("(r_2 % r_7)"));
+    assert!(
+        compiled.wgsl.contains("(p2 % 3i)") || compiled.wgsl.contains("(r_2 % r_7)"),
+        "Expected i64 Rem lowered to `%`:\n{}",
+        compiled.wgsl
+    );
     assert!(compiled.glsl_vertex.starts_with("#version 300 es"));
     assert!(compiled.glsl_fragment.starts_with("#version 300 es"));
 }
@@ -913,7 +920,11 @@ fn test_v04_wgsl_tagged_enum_branching_and_equality() {
     assert_eq!(compiled.custom_param_count, 3);
     assert!(compiled.wgsl.contains("struct knr_s_ShaderMode"));
     assert!(compiled.wgsl.contains("struct knr_s_Palette"));
-    assert!(compiled.wgsl.contains(".f0 =="));
+    assert!(
+        compiled.wgsl.contains(".f0==") || compiled.wgsl.contains(".f0 =="),
+        "Expected tagged enum discriminant comparison on .f0:\n{}",
+        compiled.wgsl
+    );
     assert!(compiled.glsl_vertex.starts_with("#version 300 es"));
     assert!(compiled.glsl_fragment.starts_with("#version 300 es"));
 }

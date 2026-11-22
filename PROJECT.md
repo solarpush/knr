@@ -1,17 +1,17 @@
-# Project: knr Linear SSA Language & Toolchain
+# Project: knr v0.4.0 — Strict TSX (`.tsk`), Linear SSA Language & Unified GPU Toolchain
 
 ## Architecture
-The `knr` programming language is a high-performance, verifiable systems language based on a linear Single Static Assignment (SSA) intermediate representation. It enforces memory safety without garbage collection or reference counting via a compile-time linear ownership state machine (`Alive` vs `Moved`).
+The `knr` programming language is a high-performance, verifiable cross-platform language with a **Strict TypeScript / TSX (`.tsk`)** surface syntax lowering to a monotonic linear Single Static Assignment (SSA) intermediate representation (`.ssa` / `.knrbin`). It enforces zero-GC memory safety without lifetime annotations via a compile-time linear ownership state machine (`Alive` vs `Moved`) plus second-class `readonly T` borrows.
 
 The system is organized into a modular 6-crate Rust workspace:
-1. `knr-core`: Abstract Syntax Tree (AST), Types, Effects, Opcodes, Textual `.ssa` parser/formatter, and Binary `.knrbin` codec with `"KNIR"` magic header.
-2. `knr-verify`: Formal static analysis passes (monotonic SSA dominance, linear memory state machine, static typing, effect capabilities, and structured JSON diagnostics).
-3. `knr-runtime`: Abstract `HostPlatform` capability trait and concrete platform adapters (`Net` via Tokio, `Ui` via VDOM tree, `Hw` via 64-byte aligned SIMD XOR buffers) plus `extern "C"` ABI bindings.
-4. `knr-interp`: Deterministic reference VM oracle, cycle-counting gas metering (`max_steps`), and step-by-step JSON execution tracing (`--trace`).
-5. `knr-codegen`: Dual compilation backends: Cranelift native code generation (supporting JIT execution and AOT ELF/Mach-O object file emission) and WebAssembly binary generation (`wasm-encoder`).
-6. `knr-cli`: Universal command-line tool `knr` exposing subcommands `check`, `run`, `build`, `asm`, and `disasm`.
+1. `knr-core`: Strict TSX (`.tsk`) parser & formatter, generics monomorphizer, functional array/destructuring/`??` lowering, zero-default struct field elision, 10 built-in `std/*` modules, cross-file module resolver (aliases, `* as ns`, barrels, `knr.toml`), `explore` graph engine, textual `.ssa` parser/formatter, and lossless `.knrbin` binary codec (`"KNIR"`).
+2. `knr-verify`: Sub-100 µs 4-pass static verifier (monotonic SSA dominance, linear ownership & `readonly` borrow escape analysis, exhaustive `enum` matching, static typing, `@effects` capabilities, GPU `@shader` purity, and structured JSON diagnostics).
+3. `knr-runtime`: `HostPlatform` capability trait (`Net` via Tokio, `Hw`/`Sys`, async `UiCmd`), `extern "C"` staticlib ABI (`libknr_runtime.a`), and the **Unified GPU UI Engine** (`wgpu` + headless CPU renderer, `z_index` sorting, H/V `<Scroll>`, spring physics, 67 analytical vector icons, keyboard focus/shortcuts, `<Image>`, and Visual Auditor Pro v2).
+4. `knr-interp`: High-speed deterministic reference VM oracle (flat `RegisterFile`, O(1) `SchemaMeta` & pure-const caches, cycle-counting gas metering, `--profile` hotspot profiler, and `--trace` JSON output).
+5. `knr-codegen`: Triple compilation backends: SELinux-safe Cranelift native AOT/JIT (`MmapPageAllocator`, `opt_level="speed"`), optimizing zero-import WebAssembly (`wasm-encoder`, `__knr_heap` arena, single-use constant forwarding, linear local aliasing), and `naga`-validated compact WGSL + WebGL2 GLSL ES 3.00 GPU shader compiler (16 uniforms + `res`/`dt` auto-binding, standalone vertex transpilation).
+6. `knr-cli`: Universal `knr` CLI exposing 19 subcommands (`mcp`, `doctor`, `bench`, `explore`, `check`, `fix`, `fmt`, `test`, `render --flow --viewports --diff-out --assert-audit`, `run --profile --gui`, `dev --gui`, `build --target native|wasm|web --gui --standalone`, `lsp`, `asm`, `disasm`, `init`, `new --template`, `skill`, `update`), plus the slim minified `v4-canvas` Web host with tree-shaking.
 
-Differential fuzzing with `proptest` guarantees exact bitwise and semantic parity between the `knr-interp` reference oracle and `knr-codegen` native execution across at least 1,000 generated valid programs.
+Differential fuzzing with `proptest` and 967+ workspace tests verify exact semantic parity across VM, Cranelift JIT/AOT, zero-import WASM, and `naga`-validated WGSL/GLSL shaders.
 
 ```text
                   ┌───────────────────────┐
@@ -170,7 +170,7 @@ Differential fuzzing with `proptest` guarantees exact bitwise and semantic parit
 ## Code Layout
 
 ```text
-/home/pierre/Projects/krn/
+/home/pierre/Projects/knr/
 ├── Cargo.toml                              # Root workspace configuration
 ├── README.md                               # Project documentation
 ├── SPEC.md                                 # Technical specification

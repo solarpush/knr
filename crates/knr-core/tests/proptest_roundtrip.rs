@@ -93,8 +93,8 @@ proptest! {
 
     #[test]
     fn prop_arbitrary_linear_types_predicate(ty in arb_type()) {
-        let is_scalar = matches!(ty, Type::I64 | Type::F64 | Type::Bool | Type::Void);
-        prop_assert_eq!(ty.is_linear(), !is_scalar);
+        let is_copyable = matches!(ty, Type::I64 | Type::F64 | Type::Bool | Type::Void | Type::Str);
+        prop_assert_eq!(ty.is_linear(), !is_copyable);
     }
 
     #[test]

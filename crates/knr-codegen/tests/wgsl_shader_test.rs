@@ -164,5 +164,20 @@ fn test_examples_shader_studio_compiles_all_gpu_shaders() {
         assert!(sh.wgsl.contains("@fragment"));
         assert!(sh.glsl_vertex.contains("#version 300 es"));
         assert!(sh.glsl_fragment.contains("#version 300 es"));
+        // Compacted WGSL must still parse and validate cleanly via naga
+        knr_codegen::wgsl::validate_wgsl_source(&sh.wgsl)
+            .unwrap_or_else(|e| panic!("Compacted WGSL failed naga validation for {}: {e}", sh.name));
+        // Standalone vertex shader must NEVER carry dead fragment helpers (must be tiny!)
+        assert!(
+            sh.glsl_vertex.len() < 1500,
+            "glsl_vertex for {} unexpectedly large ({} B): dead fragment code leaked?",
+            sh.name,
+            sh.glsl_vertex.len()
+        );
+        assert!(
+            sh.glsl_vertex.contains("_vs2fs_location0") && sh.glsl_fragment.contains("_vs2fs_location0"),
+            "Vertex/fragment varying `_vs2fs_location0` mismatch for {}",
+            sh.name
+        );
     }
 }

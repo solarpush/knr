@@ -39,8 +39,25 @@ knr update
 - **Built-in MCP Server, E2E Flows, Multi-Viewport Audit, Benchmarks & IDE-Ultra LSP**:
   - **`knr mcp`**: Native Model Context Protocol (2024-11-05) JSON-RPC 2.0 server over stdio exposing **8 native AI tools** (`knr_check`, `knr_explore`, `knr_test`, `knr_render_audit`, `knr_fmt`, `knr_fix`, `knr_bench`, `knr_get_skill`).
   - **`knr render --flow` / `--viewports` / `--diff-out`**: Declarative E2E user-journey JSON scripts, single-command responsive audits (`mobile,tablet,desktop` or `WxH`), and 3-panel magenta visual regression diff PNGs.
-  - **`knr doctor`**, **`knr bench`**, and **`knr new --template app|dashboard|shader|ui|minimal`**.
+  - **`knr doctor`**, **`knr bench`**, **`knr run --profile`**, and **`knr new --template app|dashboard|shader|ui|minimal`**.
   - **IDE-Ultra `knr lsp`**: Cross-file hover, Go-to-Definition, completions & auto-imports, Find References, Safe Rename, QuickFix CodeActions, Format Document, **SignatureHelp**, **InlayHints**, **WorkspaceSymbol**, and **FoldingRange**.
+- **Optimizing Compiler Pipeline & Slim Web Bundles**:
+  - **32× Faster Reference VM & SELinux-Safe Cranelift JIT**: Dense flat register file, O(1) schema metadata & pure-const caching, plus Linux/SELinux-safe `MmapPageAllocator` (`opt_level = "speed"`) enabling native Cranelift JIT everywhere.
+  - **Zero-Default Struct Field Elision**: Skips redundant `0` / `0.0` / `false` `StructSet` writes on freshly zero-initialized `StructNew` structs (cutting `style_default()` by 59% across VM, Cranelift, WASM, and WGSL).
+  - **Compact WGSL/GLSL Shader Compiler**: Standalone vertex shader transpilation (`-137 KB` dead fragment code eliminated), SSA constant/expression inlining, `StructNew`/`StructSet` constructor collapsing, immutable `let` bindings, and `naga`-verified shader minification (`365 KB -> 37.4 KB` on `site/`).
+  - **Lean Zero-Import WASM & `--target web` Bundler**: Single-use constant forwarding, linear `StructSet`/`BufWriteU8` local aliasing, Web entrypoint tree-shaking (`prune_web_module`), minified `v4-canvas` JS/CSS host, and HTTP-first `fetch("app.wasm")` default (`--standalone` embeds inline Base64 WASM for offline `file://` opening).
+
+---
+
+## Performance & Bundle Sizes (Measured on `knr v0.4.0`)
+
+| Benchmark / Artifact | Result | Notes |
+| :--- | :--- | :--- |
+| **`site/app.tsk` -> `view(init())`** (Cranelift JIT) | **17.0 µs P50** (`16.2 µs` min) | ~59,000 frames/s native evaluation (`19.8×` vs VM) |
+| **`site/app.tsk` -> `view(init())`** (Reference VM) | **330 µs P50** (`9,887` ops) | 141 JSX nodes, 58 functions, 3 GPU `@shader` kernels |
+| **`examples/neural_studio` -> `main()`** (Cranelift JIT) | **621 ns P50** (`481 ns` min) | `32.2×` vs VM (`20.8 µs`) across 100 functions |
+| **Web Showcase (`site/index.html` + `site/app.wasm`)** | **224.6 KB raw · 71.7 KB gzip** | `30.9 KB` gzip HTML + `v4-canvas` host + 3 WGSL/GLSL shaders + `40.7 KB` gzip zero-import WASM |
+| **Offline Single-File (`--target web --standalone`)** | **259.8 KB raw · 85.8 KB gzip** | Self-contained `index.html` with inline Base64 WASM for direct `file://` opening |
 
 ---
 
@@ -76,7 +93,8 @@ knr dev site/app.tsk --gui
 knr build examples/http_server.tsk --target native -o ./http_server
 knr build examples/raymarch_3d.tsk --target native --gui -o ./raymarch_3d
 knr build examples/counter_app.tsk --target wasm -o counter.wasm
-knr build site/app.tsk --target web -o dist_site/
+knr build site/app.tsk --target web -o dist_site/                # Slim HTTP bundle (fetch app.wasm, tree-shaken, minified)
+knr build site/app.tsk --target web --standalone -o dist_file/   # Single-file offline bundle (inline Base64 WASM for file://)
 ```
 
 ---
@@ -140,7 +158,7 @@ Register `knr mcp` directly in Claude Code, Cursor, Windsurf, or Antigravity (ru
 | :--- | :--- | :--- |
 | **`knr-core`** | `crates/knr-core` | Strict TSX (`.tsk`) parser, generics monomorphizer, functional array & destructuring lowering, `??`, barrel/alias/namespace/package imports, canonical formatter, 10 built-in `std/*` modules, `explore`, lossless `.knrbin` codec |
 | **`knr-verify`** | `crates/knr-verify` | Sub-100 us 4-pass static verifier (SSA, linear ownership + `readonly` borrows, exhaustive enums, types, `@effects`, GPU purity) + JSON diagnostics |
-| **`knr-interp`** | `crates/knr-interp` | Deterministic gas-metered reference VM with step-by-step tracing and mocked effects |
+| **`knr-interp`** | `crates/knr-interp` | High-speed deterministic gas-metered reference VM (flat register file, O(1) schema/pure-const caches, `--profile` & `--trace`, mocked effects) |
 | **`knr-runtime`** | `crates/knr-runtime` | Rust runtime (`rlib` + `staticlib` C-ABI): `Net` (Tokio), `Hw`/`Sys`, Unified GPU Engine (`wgpu` + CPU fallback + `z_index` sorting + spring physics + 67 vector icons + H/V `<Scroll>` + keyboard focus/shortcuts + `<Image>` + async `UiCmd` + Visual Auditor Pro v2) |
-| **`knr-codegen`** | `crates/knr-codegen` | Cranelift native AOT/JIT, zero-import WebAssembly (`wasm-encoder` with `__knr_heap` arena reset), and `naga`-validated WGSL / GLSL ES 3.00 shader compiler (16 uniforms + `res`/`dt` auto-binding) |
-| **`knr-cli`** | `crates/knr-cli` | Unified `knr` CLI (`mcp`, `doctor`, `bench`, `explore`, `check`, `fix`, `fmt`, `test`, `render`, `run`, `dev`, `build`, `lsp`, `asm`, `disasm`, `init`, `new`, `skill`, `update`) |
+| **`knr-codegen`** | `crates/knr-codegen` | SELinux-safe Cranelift native AOT/JIT (`opt_level="speed"`), optimizing zero-import WebAssembly (`wasm-encoder` with `__knr_heap` arena, constant forwarding & linear local aliasing), and `naga`-validated compact WGSL / GLSL ES 3.00 shader compiler (16 uniforms + `res`/`dt` auto-binding) |
+| **`knr-cli`** | `crates/knr-cli` | Unified `knr` CLI (`mcp`, `doctor`, `bench`, `explore`, `check`, `fix`, `fmt`, `test`, `render`, `run --profile`, `dev`, `build --standalone`, `lsp`, `asm`, `disasm`, `init`, `new`, `skill`, `update`) |

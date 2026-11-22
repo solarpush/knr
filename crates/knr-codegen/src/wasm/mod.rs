@@ -1,6 +1,6 @@
 use crate::CodegenError;
 use knr_core::{BasicBlock, BlockId, Function, Instruction as KnrInst, Module, Op, RegId, Schema, Terminator, Type};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use wasm_encoder::{
     BlockType, CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection,
     Function as WasmFunction, FunctionSection, GlobalSection, GlobalType, ImportSection,
@@ -2267,14 +2267,68 @@ impl WasmBackend {
             }
         }
 
-        // 2. Discover all non-param registers (block params + instruction dsts)
+        // 2. Discover all non-param registers, block params, use counts, single-use constants,
+        //    and linear StructSet/BufWriteU8 local aliases (eliminates thousands of redundant
+        //    local.set/local.get instructions & local slots in large JSX view functions!).
+        let mut block_param_regs: HashSet<RegId> = HashSet::new();
+        let mut use_count: HashMap<RegId, usize> = HashMap::new();
         for block in &func.blocks {
             for (preg, pty) in &block.params {
                 reg_types.insert(*preg, pty.clone());
+                block_param_regs.insert(*preg);
             }
             for inst in &block.instructions {
                 if let Some(dst) = inst.dst {
                     reg_types.insert(dst, inst.ty.clone());
+                }
+                Self::for_each_op_reg(&inst.op, &inst.ty, |r| {
+                    *use_count.entry(r).or_insert(0) += 1;
+                });
+            }
+            Self::for_each_term_reg(&block.terminator, |r| {
+                *use_count.entry(r).or_insert(0) += 1;
+            });
+        }
+
+        let mut inlined_consts: HashMap<RegId, WasmInlineConst> = HashMap::new();
+        let mut struct_alias: HashMap<RegId, RegId> = HashMap::new();
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                let Some(dst) = inst.dst else { continue };
+                if block_param_regs.contains(&dst) {
+                    continue;
+                }
+                let uses = use_count.get(&dst).copied().unwrap_or(0);
+                match &inst.op {
+                    Op::ConstI64(v) if uses <= 1 => {
+                        inlined_consts.insert(dst, WasmInlineConst::I64(*v));
+                    }
+                    Op::ConstF64(v) if uses <= 1 => {
+                        inlined_consts.insert(dst, WasmInlineConst::F64(*v));
+                    }
+                    Op::ConstBool(b) if uses <= 1 => {
+                        inlined_consts.insert(dst, WasmInlineConst::Bool(*b));
+                    }
+                    Op::ConstStr(s) if uses <= 1 => {
+                        inlined_consts.insert(dst, WasmInlineConst::Str(string_pool.get_offset(s)));
+                    }
+                    Op::StructSet(s, _, _) | Op::BufWriteU8(s, _, _) => {
+                        let mut root = *s;
+                        while let Some(&p) = struct_alias.get(&root) {
+                            root = p;
+                        }
+                        if !block_param_regs.contains(&root)
+                            && !inlined_consts.contains_key(&root)
+                            && Self::type_to_wasm(&inst.ty) == Some(ValType::I64)
+                            && reg_types
+                                .get(&root)
+                                .and_then(Self::type_to_wasm)
+                                == Some(ValType::I64)
+                        {
+                            struct_alias.insert(dst, root);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -2284,7 +2338,10 @@ impl WasmBackend {
         let mut non_param_i32: Vec<RegId> = Vec::new();
 
         for (&reg, ty) in &reg_types {
-            if func.params.iter().any(|(p, _)| *p == reg) {
+            if func.params.iter().any(|(p, _)| *p == reg)
+                || inlined_consts.contains_key(&reg)
+                || struct_alias.contains_key(&reg)
+            {
                 continue;
             }
             match Self::type_to_wasm(ty) {
@@ -2311,6 +2368,11 @@ impl WasmBackend {
         for &reg in &non_param_i32 {
             reg_to_local.insert(reg, next_local);
             next_local += 1;
+        }
+        for (&dst, &root) in &struct_alias {
+            if let Some(&loc) = reg_to_local.get(&root) {
+                reg_to_local.insert(dst, loc);
+            }
         }
 
         let needs_dispatch = func.blocks.len() > 1
@@ -2350,13 +2412,19 @@ impl WasmBackend {
                     schemas,
                     &mut wasm_fn,
                     &reg_to_local,
+                    &inlined_consts,
                     &reg_types,
                     import_indices,
                     func_indices,
                     builtins,
                     string_pool,
                 )?;
-                Self::emit_single_block_terminator(&block.terminator, &mut wasm_fn, &reg_to_local);
+                Self::emit_single_block_terminator(
+                    &block.terminator,
+                    &mut wasm_fn,
+                    &reg_to_local,
+                    &inlined_consts,
+                );
             } else {
                 wasm_fn.instruction(&Instruction::Return);
             }
@@ -2380,6 +2448,7 @@ impl WasmBackend {
                     schemas,
                     &mut wasm_fn,
                     &reg_to_local,
+                    &inlined_consts,
                     &reg_types,
                     import_indices,
                     func_indices,
@@ -2389,8 +2458,7 @@ impl WasmBackend {
 
                 match &block.terminator {
                     Terminator::Ret(Some(r)) => {
-                        let loc = reg_to_local[r];
-                        wasm_fn.instruction(&Instruction::LocalGet(loc));
+                        Self::emit_get_reg(*r, &reg_to_local, &inlined_consts, &mut wasm_fn);
                         wasm_fn.instruction(&Instruction::Return);
                     }
                     Terminator::Ret(None) => {
@@ -2407,6 +2475,7 @@ impl WasmBackend {
                             args,
                             &block_params_map,
                             &reg_to_local,
+                            &inlined_consts,
                             &mut wasm_fn,
                         );
                         wasm_fn.instruction(&Instruction::I32Const(*target as i32));
@@ -2418,8 +2487,7 @@ impl WasmBackend {
                         then_blk,
                         else_blk,
                     } => {
-                        let c_loc = reg_to_local[cond];
-                        wasm_fn.instruction(&Instruction::LocalGet(c_loc));
+                        Self::emit_get_reg(*cond, &reg_to_local, &inlined_consts, &mut wasm_fn);
                         wasm_fn.instruction(&Instruction::If(BlockType::Empty));
                         wasm_fn.instruction(&Instruction::I32Const(*then_blk as i32));
                         wasm_fn.instruction(&Instruction::LocalSet(state_var));
@@ -2436,14 +2504,14 @@ impl WasmBackend {
                         else_blk,
                         else_args,
                     } => {
-                        let c_loc = reg_to_local[cond];
-                        wasm_fn.instruction(&Instruction::LocalGet(c_loc));
+                        Self::emit_get_reg(*cond, &reg_to_local, &inlined_consts, &mut wasm_fn);
                         wasm_fn.instruction(&Instruction::If(BlockType::Empty));
                         Self::emit_parallel_param_copy(
                             *then_blk,
                             then_args,
                             &block_params_map,
                             &reg_to_local,
+                            &inlined_consts,
                             &mut wasm_fn,
                         );
                         wasm_fn.instruction(&Instruction::I32Const(*then_blk as i32));
@@ -2454,6 +2522,7 @@ impl WasmBackend {
                             else_args,
                             &block_params_map,
                             &reg_to_local,
+                            &inlined_consts,
                             &mut wasm_fn,
                         );
                         wasm_fn.instruction(&Instruction::I32Const(*else_blk as i32));
@@ -2478,6 +2547,125 @@ impl WasmBackend {
         Ok(wasm_fn)
     }
 
+    fn for_each_op_reg(op: &Op, inst_ty: &Type, mut f: impl FnMut(RegId)) {
+        match op {
+            Op::ConstI64(_)
+            | Op::ConstF64(_)
+            | Op::ConstBool(_)
+            | Op::ConstStr(_)
+            | Op::VecNew(_)
+            | Op::MapNew(_, _)
+            | Op::StructNew(_) => {}
+            Op::IntToStr(a)
+            | Op::StrLen(a)
+            | Op::Sin(a)
+            | Op::Cos(a)
+            | Op::Tan(a)
+            | Op::Sqrt(a)
+            | Op::Abs(a)
+            | Op::Floor(a)
+            | Op::Ceil(a)
+            | Op::IntToFloat(a)
+            | Op::FloatToInt(a)
+            | Op::BufAlloc(a)
+            | Op::VecLen(a)
+            | Op::ChanNew(_, a)
+            | Op::ChanRecv(a)
+            | Op::Spawn(_, a)
+            | Op::Syscall(_, _, a)
+            | Op::Free(a)
+            | Op::StructGet(a, _) => f(*a),
+            Op::Rem(a, b) if *inst_ty == Type::F64 => {
+                // Float remainder pushes both operands twice
+                f(*a);
+                f(*a);
+                f(*b);
+                f(*b);
+            }
+            Op::Add(a, b)
+            | Op::Sub(a, b)
+            | Op::Mul(a, b)
+            | Op::Div(a, b)
+            | Op::Rem(a, b)
+            | Op::CmpEq(a, b)
+            | Op::CmpLt(a, b)
+            | Op::Pow(a, b)
+            | Op::Atan2(a, b)
+            | Op::Min(a, b)
+            | Op::Max(a, b)
+            | Op::BufReadU8(a, b)
+            | Op::VecPush(a, b)
+            | Op::VecGet(a, b)
+            | Op::MapGet(a, b)
+            | Op::MapDel(a, b)
+            | Op::ChanSend(a, b)
+            | Op::StructSet(a, _, b) => {
+                f(*a);
+                f(*b);
+            }
+            Op::BufWriteU8(a, b, c) | Op::BufSlice(a, b, c) | Op::MapSet(a, b, c) => {
+                f(*a);
+                f(*b);
+                f(*c);
+            }
+            Op::Call(_, args) => {
+                for &r in args {
+                    f(r);
+                }
+            }
+        }
+    }
+
+    fn for_each_term_reg(term: &Terminator, mut f: impl FnMut(RegId)) {
+        match term {
+            Terminator::Ret(Some(r)) => f(*r),
+            Terminator::Ret(None) | Terminator::Br(_) => {}
+            Terminator::BrIf { cond, .. } => f(*cond),
+            Terminator::BrArgs { args, .. } => {
+                for &r in args {
+                    f(r);
+                }
+            }
+            Terminator::BrIfArgs {
+                cond,
+                then_args,
+                else_args,
+                ..
+            } => {
+                f(*cond);
+                for &r in then_args {
+                    f(r);
+                }
+                for &r in else_args {
+                    f(r);
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn emit_get_reg(
+        reg: RegId,
+        reg_to_local: &HashMap<RegId, u32>,
+        inlined_consts: &HashMap<RegId, WasmInlineConst>,
+        wasm_fn: &mut WasmFunction,
+    ) {
+        if let Some(c) = inlined_consts.get(&reg) {
+            match *c {
+                WasmInlineConst::I64(v) => wasm_fn.instruction(&Instruction::I64Const(v)),
+                WasmInlineConst::F64(v) => wasm_fn.instruction(&Instruction::F64Const(v)),
+                WasmInlineConst::Bool(b) => {
+                    wasm_fn.instruction(&Instruction::I32Const(if b { 1 } else { 0 }))
+                }
+                WasmInlineConst::Str(off) => {
+                    wasm_fn.instruction(&Instruction::I64Const(off as i64))
+                }
+            };
+        } else {
+            wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[&reg]));
+        }
+    }
+
     /// Parallel-copies branch `args` into `target` block parameters via the Wasm operand stack
     /// (pushes all args first, then pops in reverse order so swaps/self-references never clobber).
     fn emit_parallel_param_copy(
@@ -2485,6 +2673,7 @@ impl WasmBackend {
         args: &[RegId],
         block_params_map: &HashMap<BlockId, Vec<RegId>>,
         reg_to_local: &HashMap<RegId, u32>,
+        inlined_consts: &HashMap<RegId, WasmInlineConst>,
         wasm_fn: &mut WasmFunction,
     ) {
         if args.is_empty() {
@@ -2494,11 +2683,11 @@ impl WasmBackend {
             let count = args.len().min(params.len());
             let mut active_params: Vec<u32> = Vec::with_capacity(count);
             for (arg, param) in args[..count].iter().zip(&params[..count]) {
-                if let (Some(&arg_loc), Some(&param_loc)) =
-                    (reg_to_local.get(arg), reg_to_local.get(param))
-                {
-                    wasm_fn.instruction(&Instruction::LocalGet(arg_loc));
-                    active_params.push(param_loc);
+                if let Some(&param_loc) = reg_to_local.get(param) {
+                    if inlined_consts.contains_key(arg) || reg_to_local.contains_key(arg) {
+                        Self::emit_get_reg(*arg, reg_to_local, inlined_consts, wasm_fn);
+                        active_params.push(param_loc);
+                    }
                 }
             }
             for param_loc in active_params.into_iter().rev() {
@@ -2513,6 +2702,7 @@ impl WasmBackend {
         schemas: &[Schema],
         wasm_fn: &mut WasmFunction,
         reg_to_local: &HashMap<RegId, u32>,
+        inlined_consts: &HashMap<RegId, WasmInlineConst>,
         reg_types: &HashMap<RegId, Type>,
         import_indices: &HashMap<&'static str, u32>,
         func_indices: &HashMap<String, u32>,
@@ -2525,6 +2715,7 @@ impl WasmBackend {
                 schemas,
                 wasm_fn,
                 reg_to_local,
+                inlined_consts,
                 reg_types,
                 import_indices,
                 func_indices,
@@ -2541,6 +2732,7 @@ impl WasmBackend {
         schemas: &[Schema],
         wasm_fn: &mut WasmFunction,
         reg_to_local: &HashMap<RegId, u32>,
+        inlined_consts: &HashMap<RegId, WasmInlineConst>,
         reg_types: &HashMap<RegId, Type>,
         import_indices: &HashMap<&'static str, u32>,
         func_indices: &HashMap<String, u32>,
@@ -2551,24 +2743,36 @@ impl WasmBackend {
 
         match &inst.op {
             Op::ConstI64(val) => {
+                if inst.dst.is_some_and(|d| inlined_consts.contains_key(&d)) {
+                    return Ok(());
+                }
                 wasm_fn.instruction(&Instruction::I64Const(*val));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::ConstF64(val) => {
+                if inst.dst.is_some_and(|d| inlined_consts.contains_key(&d)) {
+                    return Ok(());
+                }
                 wasm_fn.instruction(&Instruction::F64Const(*val));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::ConstBool(val) => {
+                if inst.dst.is_some_and(|d| inlined_consts.contains_key(&d)) {
+                    return Ok(());
+                }
                 wasm_fn.instruction(&Instruction::I32Const(if *val { 1 } else { 0 }));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::ConstStr(s) => {
+                if inst.dst.is_some_and(|d| inlined_consts.contains_key(&d)) {
+                    return Ok(());
+                }
                 let offset = string_pool.get_offset(s);
                 wasm_fn.instruction(&Instruction::I64Const(offset as i64));
                 if let Some(dst) = dst_loc {
@@ -2576,8 +2780,8 @@ impl WasmBackend {
                 }
             }
             Op::Add(a, b) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                 if inst.ty == Type::F64 {
                     wasm_fn.instruction(&Instruction::F64Add);
                 } else if inst.ty == Type::Str {
@@ -2590,8 +2794,8 @@ impl WasmBackend {
                 }
             }
             Op::Sub(a, b) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                 if inst.ty == Type::F64 {
                     wasm_fn.instruction(&Instruction::F64Sub);
                 } else {
@@ -2602,8 +2806,8 @@ impl WasmBackend {
                 }
             }
             Op::Mul(a, b) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                 if inst.ty == Type::F64 {
                     wasm_fn.instruction(&Instruction::F64Mul);
                 } else {
@@ -2614,8 +2818,8 @@ impl WasmBackend {
                 }
             }
             Op::Div(a, b) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                 if inst.ty == Type::F64 {
                     wasm_fn.instruction(&Instruction::F64Div);
                 } else {
@@ -2628,17 +2832,17 @@ impl WasmBackend {
             Op::Rem(a, b) => {
                 if inst.ty == Type::F64 {
                     // IEEE-754 truncated remainder: a - trunc(a / b) * b
-                    wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                    wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                    wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                    Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                    Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                    Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                     wasm_fn.instruction(&Instruction::F64Div);
                     wasm_fn.instruction(&Instruction::F64Trunc);
-                    wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                    Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                     wasm_fn.instruction(&Instruction::F64Mul);
                     wasm_fn.instruction(&Instruction::F64Sub);
                 } else {
-                    wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                    wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                    Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                    Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                     wasm_fn.instruction(&Instruction::I64RemS);
                 }
                 if let Some(dst) = dst_loc {
@@ -2649,18 +2853,18 @@ impl WasmBackend {
                 let ty_a = reg_types.get(a).unwrap_or(&Type::I64);
                 match ty_a {
                     Type::Str => {
-                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                        Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                        Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                         wasm_fn.instruction(&Instruction::Call(builtins.str_eq.unwrap()));
                     }
                     Type::F64 => {
-                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                        Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                        Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                         wasm_fn.instruction(&Instruction::F64Eq);
                     }
                     Type::Bool => {
-                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                        Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                        Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                         wasm_fn.instruction(&Instruction::I32Eq);
                     }
                     Type::Struct(sname) => {
@@ -2674,8 +2878,8 @@ impl WasmBackend {
                         );
                     }
                     _ => {
-                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                        wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                        Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                        Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                         wasm_fn.instruction(&Instruction::I64Eq);
                     }
                 }
@@ -2684,8 +2888,8 @@ impl WasmBackend {
                 }
             }
             Op::CmpLt(a, b) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                 let ty_a = reg_types.get(a).unwrap_or(&Type::I64);
                 if *ty_a == Type::F64 {
                     wasm_fn.instruction(&Instruction::F64Lt);
@@ -2698,108 +2902,116 @@ impl WasmBackend {
             }
             Op::IntToStr(a) => {
                 let ty_a = reg_types.get(a).unwrap_or(&Type::I64);
-                Self::emit_wasm_to_str(reg_to_local[a], ty_a, builtins, string_pool, wasm_fn);
+                Self::emit_wasm_to_str(
+                    *a,
+                    reg_to_local,
+                    inlined_consts,
+                    ty_a,
+                    builtins,
+                    string_pool,
+                    wasm_fn,
+                );
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::StrLen(a) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Call(builtins.str_len.unwrap()));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::Sin(a) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Call(builtins.math_sin.unwrap()));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::Cos(a) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Call(builtins.math_cos.unwrap()));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::Tan(a) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Call(builtins.math_tan.unwrap()));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::Sqrt(a) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::F64Sqrt);
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::Abs(a) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::F64Abs);
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::Floor(a) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::F64Floor);
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::Ceil(a) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::F64Ceil);
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::Pow(a, b) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Call(builtins.math_pow.unwrap()));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::Atan2(y, x) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[y]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[x]));
+                Self::emit_get_reg(*y, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*x, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Call(builtins.math_atan2.unwrap()));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::Min(a, b) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::F64Min);
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::Max(a, b) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[b]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*b, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::F64Max);
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::IntToFloat(a) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::F64ConvertI64S);
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::FloatToInt(a) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[a]));
+                Self::emit_get_reg(*a, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::I64TruncSatF64S);
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
@@ -2807,16 +3019,16 @@ impl WasmBackend {
             }
             Op::BufAlloc(size) => {
                 let call_idx = builtins.buf_alloc.unwrap();
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[size]));
+                Self::emit_get_reg(*size, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Call(call_idx));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
                 }
             }
             Op::BufReadU8(buf, idx) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[buf]));
+                Self::emit_get_reg(*buf, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::I32WrapI64);
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[idx]));
+                Self::emit_get_reg(*idx, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::I32WrapI64);
                 wasm_fn.instruction(&Instruction::I32Add);
                 wasm_fn.instruction(&Instruction::I32Load8U(MemArg {
@@ -2830,12 +3042,12 @@ impl WasmBackend {
                 }
             }
             Op::BufWriteU8(buf, idx, val) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[buf]));
+                Self::emit_get_reg(*buf, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::I32WrapI64);
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[idx]));
+                Self::emit_get_reg(*idx, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::I32WrapI64);
                 wasm_fn.instruction(&Instruction::I32Add);
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[val]));
+                Self::emit_get_reg(*val, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::I32WrapI64);
                 wasm_fn.instruction(&Instruction::I32Store8(MemArg {
                     offset: 0,
@@ -2843,13 +3055,16 @@ impl WasmBackend {
                     memory_index: 0,
                 }));
                 if let Some(dst) = dst_loc {
-                    wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[buf]));
-                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                    let src_loc = reg_to_local[buf];
+                    if dst != src_loc {
+                        wasm_fn.instruction(&Instruction::LocalGet(src_loc));
+                        wasm_fn.instruction(&Instruction::LocalSet(dst));
+                    }
                 }
             }
             Op::BufSlice(buf, start, _len) => {
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[buf]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[start]));
+                Self::emit_get_reg(*buf, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*start, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::I64Add);
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
@@ -2864,8 +3079,8 @@ impl WasmBackend {
             }
             Op::VecPush(v, val) => {
                 let call_idx = builtins.vec_push.unwrap();
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[v]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[val]));
+                Self::emit_get_reg(*v, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*val, reg_to_local, inlined_consts, wasm_fn);
                 match reg_types.get(val) {
                     Some(Type::F64) => {
                         wasm_fn.instruction(&Instruction::I64ReinterpretF64);
@@ -2882,8 +3097,8 @@ impl WasmBackend {
             }
             Op::VecGet(v, idx) => {
                 let call_idx = builtins.vec_get.unwrap();
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[v]));
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[idx]));
+                Self::emit_get_reg(*v, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_get_reg(*idx, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Call(call_idx));
                 match inst.ty {
                     Type::F64 => {
@@ -2900,7 +3115,7 @@ impl WasmBackend {
             }
             Op::VecLen(v) => {
                 let call_idx = builtins.vec_len.unwrap();
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[v]));
+                Self::emit_get_reg(*v, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Call(call_idx));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
@@ -2916,9 +3131,17 @@ impl WasmBackend {
             Op::MapSet(m, k, v) => {
                 let call_idx = builtins.map_set.unwrap();
                 let key_ty = reg_types.get(k).unwrap_or(&Type::Str);
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[m]));
-                Self::emit_wasm_to_str(reg_to_local[k], key_ty, builtins, string_pool, wasm_fn);
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[v]));
+                Self::emit_get_reg(*m, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_wasm_to_str(
+                    *k,
+                    reg_to_local,
+                    inlined_consts,
+                    key_ty,
+                    builtins,
+                    string_pool,
+                    wasm_fn,
+                );
+                Self::emit_get_reg(*v, reg_to_local, inlined_consts, wasm_fn);
                 match reg_types.get(v) {
                     Some(Type::F64) => {
                         wasm_fn.instruction(&Instruction::I64ReinterpretF64);
@@ -2936,8 +3159,16 @@ impl WasmBackend {
             Op::MapGet(m, k) => {
                 let call_idx = builtins.map_get.unwrap();
                 let key_ty = reg_types.get(k).unwrap_or(&Type::Str);
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[m]));
-                Self::emit_wasm_to_str(reg_to_local[k], key_ty, builtins, string_pool, wasm_fn);
+                Self::emit_get_reg(*m, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_wasm_to_str(
+                    *k,
+                    reg_to_local,
+                    inlined_consts,
+                    key_ty,
+                    builtins,
+                    string_pool,
+                    wasm_fn,
+                );
                 wasm_fn.instruction(&Instruction::Call(call_idx));
                 match inst.ty {
                     Type::F64 => {
@@ -2955,8 +3186,16 @@ impl WasmBackend {
             Op::MapDel(m, k) => {
                 let call_idx = builtins.map_del.unwrap();
                 let key_ty = reg_types.get(k).unwrap_or(&Type::Str);
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[m]));
-                Self::emit_wasm_to_str(reg_to_local[k], key_ty, builtins, string_pool, wasm_fn);
+                Self::emit_get_reg(*m, reg_to_local, inlined_consts, wasm_fn);
+                Self::emit_wasm_to_str(
+                    *k,
+                    reg_to_local,
+                    inlined_consts,
+                    key_ty,
+                    builtins,
+                    string_pool,
+                    wasm_fn,
+                );
                 wasm_fn.instruction(&Instruction::Call(call_idx));
                 if let Some(dst) = dst_loc {
                     wasm_fn.instruction(&Instruction::LocalSet(dst));
@@ -3022,7 +3261,7 @@ impl WasmBackend {
             }
             Op::StructGet(s, field_idx) => {
                 let byte_off = (*field_idx as u64) * 8;
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[s]));
+                Self::emit_get_reg(*s, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::I32WrapI64);
                 match inst.ty {
                     Type::F64 => {
@@ -3054,9 +3293,9 @@ impl WasmBackend {
             }
             Op::StructSet(s, field_idx, val) => {
                 let byte_off = (*field_idx as u64) * 8;
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[s]));
+                Self::emit_get_reg(*s, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::I32WrapI64);
-                wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[val]));
+                Self::emit_get_reg(*val, reg_to_local, inlined_consts, wasm_fn);
                 match reg_types.get(val) {
                     Some(Type::F64) => {
                         wasm_fn.instruction(&Instruction::F64Store(MemArg {
@@ -3082,8 +3321,11 @@ impl WasmBackend {
                     }
                 }
                 if let Some(dst) = dst_loc {
-                    wasm_fn.instruction(&Instruction::LocalGet(reg_to_local[s]));
-                    wasm_fn.instruction(&Instruction::LocalSet(dst));
+                    let src_loc = reg_to_local[s];
+                    if dst != src_loc {
+                        wasm_fn.instruction(&Instruction::LocalGet(src_loc));
+                        wasm_fn.instruction(&Instruction::LocalSet(dst));
+                    }
                 }
             }
             Op::Call(fn_name, args) => {
@@ -3092,12 +3334,12 @@ impl WasmBackend {
                 })?;
 
                 for arg in args {
-                    let loc = reg_to_local.get(arg).ok_or_else(|| {
-                        CodegenError::Wasm(format!(
+                    if !inlined_consts.contains_key(arg) && !reg_to_local.contains_key(arg) {
+                        return Err(CodegenError::Wasm(format!(
                             "Unknown argument register %{arg} in call to {fn_name}"
-                        ))
-                    })?;
-                    wasm_fn.instruction(&Instruction::LocalGet(*loc));
+                        )));
+                    }
+                    Self::emit_get_reg(*arg, reg_to_local, inlined_consts, wasm_fn);
                 }
 
                 wasm_fn.instruction(&Instruction::Call(*target_idx));
@@ -3113,9 +3355,11 @@ impl WasmBackend {
         Ok(())
     }
 
-    /// Pushes a string pointer (`i64`) representing `local_idx` of type `ty` onto the Wasm stack.
+    /// Pushes a string pointer (`i64`) representing `reg` of type `ty` onto the Wasm stack.
     fn emit_wasm_to_str(
-        local_idx: u32,
+        reg: RegId,
+        reg_to_local: &HashMap<RegId, u32>,
+        inlined_consts: &HashMap<RegId, WasmInlineConst>,
         ty: &Type,
         builtins: &BuiltinIndices,
         string_pool: &StringPool,
@@ -3123,22 +3367,22 @@ impl WasmBackend {
     ) {
         match ty {
             Type::Str => {
-                wasm_fn.instruction(&Instruction::LocalGet(local_idx));
+                Self::emit_get_reg(reg, reg_to_local, inlined_consts, wasm_fn);
             }
             Type::Bool => {
                 let true_off = string_pool.get_offset("true") as i64;
                 let false_off = string_pool.get_offset("false") as i64;
                 wasm_fn.instruction(&Instruction::I64Const(true_off));
                 wasm_fn.instruction(&Instruction::I64Const(false_off));
-                wasm_fn.instruction(&Instruction::LocalGet(local_idx));
+                Self::emit_get_reg(reg, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Select);
             }
             Type::F64 => {
-                wasm_fn.instruction(&Instruction::LocalGet(local_idx));
+                Self::emit_get_reg(reg, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Call(builtins.f64_to_str.unwrap()));
             }
             _ => {
-                wasm_fn.instruction(&Instruction::LocalGet(local_idx));
+                Self::emit_get_reg(reg, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Call(builtins.int_to_str.unwrap()));
             }
         }
@@ -3247,11 +3491,11 @@ impl WasmBackend {
         term: &Terminator,
         wasm_fn: &mut WasmFunction,
         reg_to_local: &HashMap<RegId, u32>,
+        inlined_consts: &HashMap<RegId, WasmInlineConst>,
     ) {
         match term {
             Terminator::Ret(Some(r)) => {
-                let loc = reg_to_local[r];
-                wasm_fn.instruction(&Instruction::LocalGet(loc));
+                Self::emit_get_reg(*r, reg_to_local, inlined_consts, wasm_fn);
                 wasm_fn.instruction(&Instruction::Return);
             }
             Terminator::Ret(None) => {
@@ -3265,6 +3509,14 @@ impl WasmBackend {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WasmInlineConst {
+    I64(i64),
+    F64(f64),
+    Bool(bool),
+    Str(u32),
 }
 
 /// Helper tracking constant strings placed into WebAssembly linear memory data segments.

@@ -202,6 +202,42 @@ fn v04_neural_studio_check_test_flow_viewports_and_web_v4_canvas_wasm_300_frames
     assert!(html.contains("__knr_heap_used"), "Web bundle must wire arena telemetry");
     assert!(html.contains("on_key"), "Web bundle must wire on_key dispatch");
     assert!(html.contains("on_resize"), "Web bundle must wire on_resize dispatch");
+    assert!(
+        html.contains(r#"const WASM_B64="""#) || html.contains(r#"const WASM_B64 = """#),
+        "Default `--target web` build must omit inline base64 WASM (only --standalone embeds it)"
+    );
+
+    // 5b. Verify `--standalone` flag embeds inline Base64 WASM for offline file:// opening
+    let standalone_dir = out_dir.join("standalone_out");
+    let bld_sa = Command::new(knr_bin())
+        .args([
+            "build",
+            app.to_str().unwrap(),
+            "--target",
+            "web",
+            "--standalone",
+            "-o",
+            standalone_dir.to_str().unwrap(),
+        ])
+        .env("KNR_HEADLESS", "1")
+        .output()
+        .expect("knr build --target web --standalone");
+    assert!(
+        bld_sa.status.success(),
+        "knr build --target web --standalone failed: {}",
+        String::from_utf8_lossy(&bld_sa.stderr)
+    );
+    let html_sa = fs::read_to_string(standalone_dir.join("index.html")).expect("read standalone html");
+    assert!(
+        !html_sa.contains(r#"const WASM_B64="""#) && !html_sa.contains(r#"const WASM_B64 = """#),
+        "`--standalone` build must embed non-empty base64 WASM"
+    );
+    assert!(
+        html_sa.len() > html.len() + 20_000,
+        "Standalone HTML ({}) should be noticeably larger than default slim HTML ({})",
+        html_sa.len(),
+        html.len()
+    );
 
     // 6. Verify BOTH embedded JS syntax AND real Node.js WASM 300-frame zero-GC arena loop!
     let node_check = Command::new("node").arg("--version").output();

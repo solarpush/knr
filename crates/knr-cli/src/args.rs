@@ -166,6 +166,7 @@ pub enum CliCommand {
         target: BuildTarget,
         output: PathBuf,
         gui: bool,
+        standalone: bool,
     },
     Asm {
         file: PathBuf,
@@ -925,6 +926,7 @@ fn parse_build(args: &[String]) -> Result<CliCommand, CliError> {
     let mut target: Option<BuildTarget> = None;
     let mut output: Option<PathBuf> = None;
     let mut gui = false;
+    let mut standalone = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -943,11 +945,14 @@ OPTIONS:
     --target <TARGET>    Compilation target: 'native', 'wasm', or 'web'
     -o, --output <PATH>  Output artifact file or directory path
     -g, --gui            Build standalone native desktop GUI executable (with --target native)
+    --standalone         Embed base64-encoded WASM inline in index.html for offline file:// opening (with --target web)
     -h, --help           Print help information"
             );
             return Ok(CliCommand::Help);
         } else if arg == "--gui" || arg == "-g" {
             gui = true;
+        } else if arg == "--standalone" {
+            standalone = true;
         } else if arg == "--target" {
             i += 1;
             if i >= args.len() {
@@ -979,7 +984,7 @@ OPTIONS:
     }
 
     let file = file.ok_or_else(|| {
-        CliError::Args("Missing input file for 'knr build'. Usage: knr build <file.knr> --target <native|wasm|web> -o <out> [--gui]".to_string())
+        CliError::Args("Missing input file for 'knr build'. Usage: knr build <file.knr> --target <native|wasm|web> -o <out> [--gui] [--standalone]".to_string())
     })?;
 
     let target = target.ok_or_else(|| {
@@ -995,6 +1000,7 @@ OPTIONS:
         target,
         output,
         gui,
+        standalone,
     })
 }
 

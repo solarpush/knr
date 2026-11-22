@@ -663,7 +663,7 @@ impl<'a> FnLoweringContext<'a> {
             self.emit_empty_widget_vec(line)
         };
 
-        // 4. Construct Widget struct
+        // 4. Construct Widget struct (skip `value` StructSet when omitted since StructNew zero-initializes f64 to 0.0)
         let final_key = key_reg.unwrap_or_else(|| {
             let auto_k = format!("jsx_{}_{}_{}", kind_str, span.line, span.col);
             self.emit_const_str(&auto_k, line)
@@ -671,7 +671,6 @@ impl<'a> FnLoweringContext<'a> {
         let final_kind = self.emit_const_str(kind_str, line);
         let final_text = text_reg.unwrap_or_else(|| self.emit_const_str("", line));
         let final_action = action_reg.unwrap_or_else(|| self.emit_const_str("", line));
-        let final_value = value_reg.unwrap_or_else(|| self.emit_const_f64(0.0, line));
         let final_uniforms = uniforms_reg.unwrap_or_else(|| self.emit_empty_f64_vec(line));
 
         let widget_ty = Type::Struct("Widget".to_string());
@@ -685,16 +684,17 @@ impl<'a> FnLoweringContext<'a> {
         self.linear_tracker
             .mark_alive(w_reg, widget_ty.clone(), true, line);
 
-        let field_regs: [(&str, RegId, bool); 8] = [
-            ("key", final_key, false),
-            ("kind", final_kind, false),
-            ("text", final_text, false),
-            ("action", final_action, false),
-            ("value", final_value, false),
-            ("uniforms", final_uniforms, true),
-            ("style", style_reg, true),
-            ("children", children_vec_reg, true),
-        ];
+        let mut field_regs: Vec<(&str, RegId, bool)> = Vec::with_capacity(8);
+        field_regs.push(("key", final_key, false));
+        field_regs.push(("kind", final_kind, false));
+        field_regs.push(("text", final_text, false));
+        field_regs.push(("action", final_action, false));
+        if let Some(final_value) = value_reg {
+            field_regs.push(("value", final_value, false));
+        }
+        field_regs.push(("uniforms", final_uniforms, true));
+        field_regs.push(("style", style_reg, true));
+        field_regs.push(("children", children_vec_reg, true));
 
         for (fname, fval, is_lin) in field_regs {
             let fdef = widget_schema
@@ -1236,7 +1236,6 @@ impl<'a> FnLoweringContext<'a> {
         let key_reg = self.emit_const_str(&format!("jsx_txt_{}_{}", span.line, span.col), line);
         let kind_reg = self.emit_const_str("text", line);
         let act_reg = self.emit_const_str("", line);
-        let val_reg = self.emit_const_f64(0.0, line);
         let u_reg = self.emit_empty_f64_vec(line);
         let c_reg = self.emit_empty_widget_vec(line);
 
@@ -1256,7 +1255,6 @@ impl<'a> FnLoweringContext<'a> {
             ("kind", kind_reg, false),
             ("text", text_reg, false),
             ("action", act_reg, false),
-            ("value", val_reg, false),
             ("uniforms", u_reg, true),
             ("style", style_reg, true),
             ("children", c_reg, true),

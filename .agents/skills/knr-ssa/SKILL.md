@@ -65,6 +65,7 @@ AI agents with MCP support can connect directly to **`knr mcp`** (Model Context 
 6. **Execute, Serve MCP/LSP, or Compile (VM == Native Cranelift == Zero-Import WASM == Unified GPU Web)**:
    ```bash
    knr run <entry.tsk>                               # Reference VM (default gas: 1,000,000)
+   knr run <entry.tsk> --profile                     # VM instruction/gas/allocation & per-function hotspot profiler
    knr run <app.tsk> --gui                           # Native GPU desktop window (wgpu + CPU fallback + async Cmd + on_key + on_resize)
    knr dev <app.tsk> --gui                           # Live hot-reloading .tsk UI + WGSL shaders + async Cmd
    knr mcp                                           # Built-in MCP 2024-11-05 JSON-RPC 2.0 server over stdio (8 tools)
@@ -72,7 +73,8 @@ AI agents with MCP support can connect directly to **`knr mcp`** (Model Context 
    knr build <server.tsk> --target native -o server  # Standalone native binary linked with libknr_runtime.a
    knr build <app.tsk> --target native --gui -o app  # Standalone native desktop GPU executable
    knr build <app.tsk> --target wasm -o app.wasm     # Standalone zero-import WebAssembly binary
-   knr build <app.tsk> --target web -o dist/         # Unified Flutter-style Canvas/WebGPU/WebGL2 + app.wasm
+   knr build <app.tsk> --target web -o dist/         # Slim HTTP Web bundle (tree-shaken app.wasm + minified v4-canvas host + compact WGSL/GLSL)
+   knr build <app.tsk> --target web --standalone -o dist/  # Self-contained offline file:// index.html with inline Base64 WASM
    knr asm <file.ssa> -o out.knrbin                  # Lossless 1:1 binary IR codec
    knr disasm out.knrbin -o roundtrip.ssa
    ```

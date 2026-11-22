@@ -395,3 +395,26 @@ Le binaire `knr` est le point d'entrée unique en ligne de commande. Il expose 5
 ### Étape 5 — La Compilation AOT (`knr-codegen` + Fuzzing Différentiel)
 - Implémenter l'abaissement vers `wasm-encoder` puis `cranelift`.
 - **Critère de validation** : Ajouter un test `proptest` qui génère 1 000 séquences d'instructions SSA valides, les exécute sur `knr-interp` et sur le binaire compilé par `knr-codegen`, et vérifie que les sorties sont strictement égales.
+
+---
+
+## 9. Implémentation Actuelle — `knr v0.4.0`
+
+Au-delà du noyau SSA fondateur décrit dans les sections 1 à 8, l'implémentation courante couvre toute la chaîne **Strict TypeScript/TSX (`.tsk`) -> SSA linéaire -> Natif / WASM / Web GPU / MCP / LSP** :
+
+### 9.1 Frontend Strict TSX (`.tsk`) & Sémantique Linéaire (`knr-core` / `knr-verify`)
+- **Surface `.tsk`** : génériques monomorphisés, `type`/`enum` algébriques avec vérification d'exhaustivité (`NonExhaustiveMatch`), destructuring d'objets/tableaux non-consommant, opérateur `??` sur `Option<T>` / `Result<T, E>`, combinators fonctionnels abaissés en boucles SSA monotones (`.map`, `.filter`, `.reduce`, `.some`, `.every`, `.count`, `.findIndex`, `.includes`, `.indexOf`, `.flatMap`, `.slice`, `.concat`, `.reverse`), et imports modulaires (`"./state"`, `as`, `* as ns`, barrels `index.tsk`, packages `knr.toml`).
+- **Types & Emprunts** : `str` est copiable (`Copy`) ; les types linéaires (`struct`, `enum`, `vec[T]`, `map[K, V]`, `buf`, `chan[T]`) supportent les emprunts de seconde classe `readonly T` (`&T`) sans annotations de durées de vie ni GC, avec libération déterministe (`free`) insérée automatiquement.
+- **Élision des zéros par défaut** : les littéraux `StructLit` (hors spread) et les widgets JSX omettent les écritures `StructSet` pour les champs scalaires initialisés à `0` / `0.0` / `false` (tous les backends zéro-initialisent déjà `StructNew`).
+- **10 modules standard intégrés (`std/*`)** : `std/ui`, `std/core`, `std/cmd`, `std/theme`, `std/router`, `std/layout`, `std/testing`, `std/math`, `std/anim`, `std/sys`.
+
+### 9.2 Moteurs d'Exécution & Backends Optimisés (`knr-interp` / `knr-codegen`)
+- **VM de référence (`knr-interp`)** : fichier de registres plat dense (`RegisterFile`), métadonnées de schémas O(1) (`SchemaMeta`), cache des constructeurs purs à 0 argument (`style_default`, etc.), profiling par fonction (`knr run --profile`) et trace JSON (`--trace`).
+- **Cranelift JIT & AOT (`--target native` / `--gui`)** : `opt_level = "speed"`, allocateur mémoire `MmapPageAllocator` compatible SELinux/W^X sous Linux (`mmap` anonyme RW → `mprotect` RX), et liaison avec `libknr_runtime.a` (`--gui` embarque le moteur GPU `wgpu` natif + shaders WGSL).
+- **WebAssembly zéro-import (`--target wasm` / `--target web`)** : allocateur bump 8-octets zéro-initialisé en mémoire linéaire (`__knr_alloc`, `__knr_heap_mark`, `__knr_heap_reset`, `__knr_heap_used`, `__knr_heap_capacity`) avec `Map`/`Buf`/`Vec`/strings/math 100% autonomes en WASM, forwarding des constantes à usage unique sur la pile, et aliasing des locaux linéaires sur `StructSet` / `BufWriteU8`.
+- **Compilateur GPU `@shader` (`knr-codegen::wgsl`)** : transpile les fonctions `@shader` vérifiées pures vers **WGSL** (Desktop `wgpu` + WebGPU) et **GLSL ES 3.00** (fallback WebGL2) validés par `naga`, avec 16 uniforms flottants + binding automatique `uv`/`time`/`mouse`/`res`/`dt`, compilation isolée du vertex shader (`VERTEX_ONLY_WGSL`), inlining SSA, fusion `StructNew`/`StructSet` en constructeurs directs et minification shader validée.
+
+### 9.3 Moteur UI GPU Unifié, Bundle Web Slim & Tooling Agentique (`knr-runtime` / `knr-cli`)
+- **Rendu unifié Desktop (`wgpu`) / CPU Headless (`knr render`) / Web (`v4-canvas`)** : Flexbox 2-passes + Bento Grid (`colSpan`) + Stack, tri par `z_index`, `<Scroll>` horizontal/vertical avec clipping matériel/CPU, ressorts amortis (`spring_step`), 67 icônes vectorielles analytiques, focus clavier (`Tab`/`Shift+Tab`, `on_key`, `on_resize`), `<Image>`, commandes asynchrones `std/cmd`, et **Visual Auditor Pro v2** (`--assert-audit`, `--flow`, `--viewports`, `--diff-out`).
+- **Export Web (`knr build --target web`)** : tree-shaking des fonctions inatteignables (`prune_web_module`), hôte `v4-canvas` JS/CSS minifié, vertex shader GLSL partagé (`KNR_GLSL_VERT`), chargement HTTP `fetch("app.wasm")` par défaut (**71.7 KB gzip** total pour le site showcase complet avec 3 shaders GPU), et flag **`--standalone`** pour embarquer le WASM en Base64 dans un unique `index.html` ouvrable en `file://` (**85.8 KB gzip**).
+- **CLI, MCP & LSP** : 19 sous-commandes incluant **`knr mcp`** (serveur MCP 2024-11-05 stdio avec 8 outils natifs), **`knr lsp`** (IDE-Ultra multi-fichiers), **`knr doctor`**, **`knr bench`**, **`knr fix`**, **`knr fmt`**, **`knr explore`**, **`knr test`**, et **`knr new --template`**.

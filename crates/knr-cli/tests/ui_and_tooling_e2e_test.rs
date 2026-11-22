@@ -223,8 +223,14 @@ fn test_milestone_d_and_e_counter_app_check_test_explore_gui_and_web_wasm() {
     assert!(html_content.contains("data-knr-web-host=\"v3-canvas\""));
     assert!(html_content.contains("<canvas id=\"knr-surface\"></canvas>"));
     assert!(html_content.contains("id=\"knr-ime-input\""));
-    assert!(html_content.contains("const IS_WIDGET_V2 = true;"));
-    assert!(html_content.contains("const STYLE_FIELDS = 45;"));
+    assert!(
+        html_content.contains("const IS_WIDGET_V2=true;")
+            || html_content.contains("const IS_WIDGET_V2 = true;")
+    );
+    assert!(
+        html_content.contains("const STYLE_FIELDS=45;")
+            || html_content.contains("const STYLE_FIELDS = 45;")
+    );
     assert!(html_content.contains("__knr_heap"));
     assert!(!html_content.contains("site.wasm"), "Zero hardcoded site.wasm hacks");
     assert!(!html_content.contains("/nav/"), "Zero hardcoded /nav/ hacks");
@@ -543,8 +549,14 @@ fn test_gpu_shader_studio_full_e2e_check_test_anim_gui_and_web_wasm() {
     let html_content = fs::read_to_string(&html_path).expect("read index.html");
     assert!(html_content.contains("data-knr-web-host=\"v3-canvas\""));
     assert!(html_content.contains("<canvas id=\"knr-surface\"></canvas>"));
-    assert!(html_content.contains("const IS_WIDGET_V2 = true;"));
-    assert!(html_content.contains("const STYLE_FIELDS = 45;"));
+    assert!(
+        html_content.contains("const IS_WIDGET_V2=true;")
+            || html_content.contains("const IS_WIDGET_V2 = true;")
+    );
+    assert!(
+        html_content.contains("const STYLE_FIELDS=45;")
+            || html_content.contains("const STYLE_FIELDS = 45;")
+    );
     assert!(html_content.contains("__knr_heap"));
     assert!(html_content.contains("aurora_waves"));
     assert!(html_content.contains("plasma_orbit"));

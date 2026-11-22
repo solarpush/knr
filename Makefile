@@ -11,31 +11,32 @@ KNR_BIN     := target/release/knr
 .DEFAULT_GOAL := help
 
 .PHONY: help build release install install-debug install-vscode install-all \
-        test clippy check-all site dev-site dev-studio dev-tasks dev-raymarch serve-site \
+        test clippy check-all site site-standalone dev-site dev-studio dev-tasks dev-raymarch serve-site \
         render-site render-studio render-tasks doctor bench mcp-info clean
 
 help: ## Show available targets
 	@echo "knr v0.4.0 Makefile targets:"
-	@echo "  make install         Build release binary and atomically install into $(BINDIR)/knr"
-	@echo "  make install-debug   Build dev binary and atomically install into $(BINDIR)/knr (faster)"
-	@echo "  make install-vscode  Symlink editors/vscode into $(VSCODE_EXT)"
-	@echo "  make install-all     Install both release CLI binary and VS Code extension"
-	@echo "  make test            Run full workspace test suite (headless)"
-	@echo "  make clippy          Run clippy (-D warnings) across default, no-default, and gpu"
-	@echo "  make check-all       Run full test suite + all clippy checks"
-	@echo "  make doctor          Run knr environment & toolchain health diagnostics"
-	@echo "  make bench           Benchmark site/app.tsk & examples/neural_studio/src/app.tsk"
-	@echo "  make mcp-info        Print ready-to-paste MCP server config for AI editors/agents"
-	@echo "  make site            Rebuild site/ Web Canvas+WebGPU+WASM bundle & audit"
-	@echo "  make dev-studio      Launch examples/neural_studio/src/app.tsk in Desktop GPU window"
-	@echo "  make dev-site        Launch site/app.tsk in native Desktop GPU window (hot-reload)"
-	@echo "  make dev-tasks       Launch examples/task_studio.tsk in Desktop GPU window"
-	@echo "  make dev-raymarch    Launch examples/raymarch_3d.tsk in Desktop GPU window"
-	@echo "  make serve-site      Serve site/ locally at http://localhost:8080"
-	@echo "  make render-studio   Run Neural Studio flow.json E2E + multi-viewport audit"
-	@echo "  make render-site     Render site/app.tsk to /tmp/knr_site.png with --assert-audit"
-	@echo "  make render-tasks    Render examples/task_studio.tsk flow to /tmp/knr_tasks.png"
-	@echo "  make clean           Remove target/ artifacts"
+	@echo "  make install          Build release binary and atomically install into $(BINDIR)/knr"
+	@echo "  make install-debug    Build dev binary and atomically install into $(BINDIR)/knr (faster)"
+	@echo "  make install-vscode   Symlink editors/vscode into $(VSCODE_EXT)"
+	@echo "  make install-all      Install both release CLI binary and VS Code extension"
+	@echo "  make test             Run full workspace test suite (headless)"
+	@echo "  make clippy           Run clippy (-D warnings) across default, no-default, and gpu"
+	@echo "  make check-all        Run full test suite + all clippy checks"
+	@echo "  make doctor           Run knr environment & toolchain health diagnostics"
+	@echo "  make bench            Benchmark site/app.tsk & examples/neural_studio/src/app.tsk"
+	@echo "  make mcp-info         Print ready-to-paste MCP server config for AI editors/agents"
+	@echo "  make site             Rebuild slim HTTP site/ Web Canvas+WebGPU+WASM bundle & audit"
+	@echo "  make site-standalone  Rebuild offline file:// single-file site/ bundle (--standalone)"
+	@echo "  make dev-studio       Launch examples/neural_studio/src/app.tsk in Desktop GPU window"
+	@echo "  make dev-site         Launch site/app.tsk in native Desktop GPU window (hot-reload)"
+	@echo "  make dev-tasks        Launch examples/task_studio.tsk in Desktop GPU window"
+	@echo "  make dev-raymarch     Launch examples/raymarch_3d.tsk in Desktop GPU window"
+	@echo "  make serve-site       Serve site/ locally at http://localhost:8080"
+	@echo "  make render-studio    Run Neural Studio flow.json E2E + multi-viewport audit"
+	@echo "  make render-site      Render site/app.tsk to /tmp/knr_site.png with --assert-audit"
+	@echo "  make render-tasks     Render examples/task_studio.tsk flow to /tmp/knr_tasks.png"
+	@echo "  make clean            Remove target/ artifacts"
 
 build: ## Build dev binary
 	$(CARGO) build -p knr-cli --bin knr
@@ -75,8 +76,8 @@ test: ## Run full workspace test suite
 
 clippy: ## Run strict clippy across all feature sets
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
-	$(CARGO) clippy -p knr-runtime --no-default-features -- -D warnings
-	$(CARGO) clippy -p knr-runtime --features gpu --all-targets -- -D warnings
+	$(CARGO) clippy -p knr-runtime -p knr-cli --no-default-features --all-targets -- -D warnings
+	$(CARGO) clippy -p knr-runtime -p knr-cli --features gpu --all-targets -- -D warnings
 
 check-all: test clippy ## Run all tests and clippy checks
 
@@ -99,10 +100,16 @@ mcp-info: ## Print ready-to-paste JSON config to register `knr mcp` in AI agents
 	@echo '  }'
 	@echo '}'
 
-site: release ## Rebuild site/ web bundle and verify check + test + visual audit
+site: release ## Rebuild slim HTTP site/ web bundle and verify check + test + visual audit
 	$(KNR_BIN) check site/app.tsk --json
 	$(KNR_BIN) test site/app.tsk
 	$(KNR_BIN) build site/app.tsk --target web -o site/
+	$(KNR_BIN) render site/app.tsk --width 1280 --height 1450 --scale 1.5 --assert-audit
+
+site-standalone: release ## Rebuild self-contained offline file:// site/ web bundle (--standalone)
+	$(KNR_BIN) check site/app.tsk --json
+	$(KNR_BIN) test site/app.tsk
+	$(KNR_BIN) build site/app.tsk --target web --standalone -o site/
 	$(KNR_BIN) render site/app.tsk --width 1280 --height 1450 --scale 1.5 --assert-audit
 
 dev-studio: ## Launch examples/neural_studio/src/app.tsk with live GPU hot-reload

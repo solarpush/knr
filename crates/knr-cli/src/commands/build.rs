@@ -29,7 +29,56 @@ fn compile_shaders_for_build(
     })
 }
 
-pub fn execute(file: &Path, target: BuildTarget, output: &Path, gui: bool) -> Result<(), CliError> {
+/// Tree-shakes unreachable functions (such as `test_*` suites, unused stdlib helpers, and
+/// GPU-only `@shader` CPU code not called from UI lifecycle hooks) when building `--target web`.
+fn prune_web_module(module: &knr_core::Module) -> knr_core::Module {
+    const WEB_ENTRYPOINTS: &[&str] = &[
+        "init",
+        "view",
+        "update",
+        "tick",
+        "on_input",
+        "on_slider",
+        "on_key",
+        "on_resize",
+        "effect",
+        "main",
+    ];
+    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut reachable: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for &ep in WEB_ENTRYPOINTS {
+        if module.get_function(ep).is_some() && reachable.insert(ep.to_string()) {
+            queue.push_back(ep.to_string());
+        }
+    }
+    if reachable.is_empty() {
+        return module.clone();
+    }
+    while let Some(fname) = queue.pop_front() {
+        if let Some(func) = module.get_function(&fname) {
+            for blk in &func.blocks {
+                for inst in &blk.instructions {
+                    if let knr_core::Op::Call(ref callee, _) = inst.op {
+                        if reachable.insert(callee.clone()) {
+                            queue.push_back(callee.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut pruned = module.clone();
+    pruned.functions.retain(|f| reachable.contains(&f.name));
+    pruned
+}
+
+pub fn execute(
+    file: &Path,
+    target: BuildTarget,
+    output: &Path,
+    gui: bool,
+    standalone: bool,
+) -> Result<(), CliError> {
     let is_source = knr_core::is_source_file(file);
     let module = if is_source {
         let src = std::fs::read_to_string(file).map_err(|e| {
@@ -79,29 +128,46 @@ pub fn execute(file: &Path, target: BuildTarget, output: &Path, gui: bool) -> Re
             Ok(())
         }
         BuildTarget::Web => {
-            let backend = knr_codegen::WasmBackend::new();
-            let wasm_bytes = backend.compile(&module).map_err(|err| {
-                eprintln!("{err}");
-                CliError::Codegen(err)
-            })?;
-
-            // Compile all `@shader` declarations to naga-validated WGSL + WebGL2 GLSL ES 3.00
-            // using SourceMap parameter names so `resolution` and `dt` auto-bind cleanly!
+            // Compile all `@shader` declarations on the full module first (naga-validated WGSL +
+            // WebGL2 GLSL ES 3.00) using SourceMap parameter names so `resolution` and `dt` auto-bind!
             let compiled_shaders = compile_shaders_for_build(file, is_source, &module)?;
+            let shared_glsl_vert = compiled_shaders
+                .first()
+                .map(|cs| cs.glsl_vertex.clone())
+                .unwrap_or_default();
             let mut shader_map = std::collections::BTreeMap::new();
             for cs in compiled_shaders {
-                shader_map.insert(
-                    cs.name.clone(),
-                    serde_json::json!({
-                        "wgsl": cs.wgsl,
-                        "glsl_vertex": cs.glsl_vertex,
-                        "glsl_fragment": cs.glsl_fragment,
-                        "custom_param_count": cs.custom_param_count,
-                    }),
-                );
+                if cs.glsl_vertex == shared_glsl_vert {
+                    shader_map.insert(
+                        cs.name.clone(),
+                        serde_json::json!({
+                            "wgsl": cs.wgsl,
+                            "glsl_fragment": cs.glsl_fragment,
+                            "custom_param_count": cs.custom_param_count,
+                        }),
+                    );
+                } else {
+                    shader_map.insert(
+                        cs.name.clone(),
+                        serde_json::json!({
+                            "wgsl": cs.wgsl,
+                            "glsl_vertex": cs.glsl_vertex,
+                            "glsl_fragment": cs.glsl_fragment,
+                            "custom_param_count": cs.custom_param_count,
+                        }),
+                    );
+                }
             }
             let shaders_json =
                 serde_json::to_string(&shader_map).unwrap_or_else(|_| "{}".to_string());
+
+            // Tree-shake dead `test_*`, unused stdlib, and GPU-only shader CPU functions from app.wasm
+            let web_module = prune_web_module(&module);
+            let backend = knr_codegen::WasmBackend::new();
+            let wasm_bytes = backend.compile(&web_module).map_err(|err| {
+                eprintln!("{err}");
+                CliError::Codegen(err)
+            })?;
 
             let is_widget_v2 = module
                 .get_function("view")
@@ -150,11 +216,18 @@ pub fn execute(file: &Path, target: BuildTarget, output: &Path, gui: bool) -> Re
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("knr app");
-            let wasm_b64 = base64_encode(&wasm_bytes);
+            // Only inline Base64 WASM when `--standalone` is requested (for offline `file://` opening).
+            // Default HTTP/web builds fetch `app.wasm` directly, avoiding ~250 KB+ duplication!
+            let wasm_b64 = if standalone {
+                base64_encode(&wasm_bytes)
+            } else {
+                String::new()
+            };
             let index_html = generate_web_host_html(&WebHostConfig {
                 title,
                 wasm_file: &wasm_file_name,
                 wasm_b64: &wasm_b64,
+                glsl_vertex: &shared_glsl_vert,
                 shaders_json: &shaders_json,
                 is_widget_v2,
                 style_field_count,
@@ -540,6 +613,7 @@ struct WebHostConfig<'a> {
     title: &'a str,
     wasm_file: &'a str,
     wasm_b64: &'a str,
+    glsl_vertex: &'a str,
     shaders_json: &'a str,
     is_widget_v2: bool,
     style_field_count: usize,
@@ -547,6 +621,390 @@ struct WebHostConfig<'a> {
     on_resize_arity: usize,
     on_resize_w_i64: bool,
     on_resize_h_i64: bool,
+}
+
+/// Safely compacts CSS inside `<style>...</style>` by stripping comments and whitespace.
+fn minify_web_css(css: &str) -> String {
+    let bytes = css.as_bytes();
+    let mut out = String::with_capacity(css.len() / 2);
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            continue;
+        }
+        if bytes[i].is_ascii_whitespace() {
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let prev = out.as_bytes().last().copied();
+            let next = bytes.get(i).copied();
+            if let (Some(p), Some(n)) = (prev, next) {
+                let tight = matches!(p, b'{' | b'}' | b':' | b';' | b',' | b'>')
+                    || matches!(n, b'{' | b'}' | b':' | b';' | b',' | b'>');
+                if !tight {
+                    out.push(' ');
+                }
+            }
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Safely minifies JavaScript while preserving 100% of string literals, template literals
+/// (including nested `${...}` expressions), regex literals, and newline-based ASI boundaries.
+fn minify_web_js(js: &str) -> String {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Tok {
+        Start,
+        Punct,
+        Keyword,
+        Value,
+    }
+
+    fn is_id_start(b: u8) -> bool {
+        b.is_ascii_alphabetic() || b == b'_' || b == b'$'
+    }
+    fn is_id_cont(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+    }
+    fn is_regex_prefix_kw(word: &str) -> bool {
+        matches!(
+            word,
+            "return"
+                | "case"
+                | "throw"
+                | "typeof"
+                | "void"
+                | "delete"
+                | "in"
+                | "instanceof"
+                | "new"
+                | "of"
+                | "else"
+                | "do"
+                | "yield"
+                | "await"
+        )
+    }
+
+    let bytes = js.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len * 2 / 3);
+    let mut i = 0;
+    let mut last_tok = Tok::Start;
+    let mut tpl_braces: Vec<usize> = Vec::new();
+    let mut in_template = false;
+
+    while i < len {
+        if in_template {
+            let b = bytes[i];
+            if b == b'\\' && i + 1 < len {
+                out.push(b as char);
+                out.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            if b == b'`' {
+                out.push('`');
+                i += 1;
+                in_template = false;
+                last_tok = Tok::Value;
+                continue;
+            }
+            if b == b'$' && i + 1 < len && bytes[i + 1] == b'{' {
+                out.push_str("${");
+                i += 2;
+                tpl_braces.push(0);
+                in_template = false;
+                last_tok = Tok::Punct;
+                continue;
+            }
+            // Copy UTF-8 char intact
+            let ch = js[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+
+        let b = bytes[i];
+
+        // String literals ('...' or "...")
+        if b == b'"' || b == b'\'' {
+            let quote = b;
+            out.push(quote as char);
+            i += 1;
+            while i < len {
+                let c = bytes[i];
+                if c == b'\\' && i + 1 < len {
+                    out.push('\\');
+                    let next_ch = js[i + 1..].chars().next().unwrap();
+                    out.push(next_ch);
+                    i += 1 + next_ch.len_utf8();
+                    continue;
+                }
+                let ch = js[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+                if c == quote {
+                    break;
+                }
+            }
+            last_tok = Tok::Value;
+            continue;
+        }
+
+        // Template literal start
+        if b == b'`' {
+            out.push('`');
+            i += 1;
+            in_template = true;
+            continue;
+        }
+
+        // Comments & Regex literals starting with `/`
+        if b == b'/' {
+            if i + 1 < len && bytes[i + 1] == b'/' {
+                // Line comment: skip up to `\n`
+                i += 2;
+                while i < len && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if i + 1 < len && bytes[i + 1] == b'*' {
+                // Block comment: skip to `*/`
+                i += 2;
+                while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(len);
+                // Preserve word boundary if comment sat between two identifiers
+                if let (Some(&p), Some(&n)) = (out.as_bytes().last(), bytes.get(i)) {
+                    if is_id_cont(p) && is_id_cont(n) {
+                        out.push(' ');
+                    }
+                }
+                continue;
+            }
+            if matches!(last_tok, Tok::Start | Tok::Punct | Tok::Keyword) {
+                // Regex literal `/pattern/flags`
+                out.push('/');
+                i += 1;
+                let mut in_class = false;
+                while i < len {
+                    let c = bytes[i];
+                    if c == b'\\' && i + 1 < len {
+                        out.push('\\');
+                        let next_ch = js[i + 1..].chars().next().unwrap();
+                        out.push(next_ch);
+                        i += 1 + next_ch.len_utf8();
+                        continue;
+                    }
+                    if c == b'[' {
+                        in_class = true;
+                    } else if c == b']' {
+                        in_class = false;
+                    } else if c == b'/' && !in_class {
+                        out.push('/');
+                        i += 1;
+                        while i < len && bytes[i].is_ascii_alphabetic() {
+                            out.push(bytes[i] as char);
+                            i += 1;
+                        }
+                        break;
+                    }
+                    let ch = js[i..].chars().next().unwrap();
+                    out.push(ch);
+                    i += ch.len_utf8();
+                }
+                last_tok = Tok::Value;
+                continue;
+            }
+            out.push('/');
+            i += 1;
+            last_tok = Tok::Punct;
+            continue;
+        }
+
+        // Newlines: trim trailing space and drop blank lines (keeps ASI 100% intact)
+        if b == b'\n' || b == b'\r' {
+            while out.ends_with(' ') {
+                out.pop();
+            }
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            i += 1;
+            continue;
+        }
+
+        // Horizontal whitespace
+        if b == b' ' || b == b'\t' {
+            while i < len && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
+            if out.is_empty() || out.ends_with('\n') {
+                continue;
+            }
+            // Peek next non-horizontal char
+            let next = bytes.get(i).copied();
+            if matches!(next, None | Some(b'\n') | Some(b'\r')) {
+                continue;
+            }
+            // Skip space before `//` or `/*` comments — they'll be stripped next
+            if next == Some(b'/')
+                && i + 1 < len
+                && (bytes[i + 1] == b'/' || bytes[i + 1] == b'*')
+            {
+                // Keep a single space placeholder only if needed after comment
+                if !out.ends_with(' ') {
+                    out.push(' ');
+                }
+                continue;
+            }
+            let prev = out.as_bytes().last().copied();
+            if let (Some(p), Some(n)) = (prev, next) {
+                let tight_prev = matches!(
+                    p,
+                    b'(' | b'[' | b'{' | b',' | b';' | b':' | b'=' | b'?' | b'&' | b'|' | b'<'
+                        | b'>' | b'*' | b'%' | b'^' | b'~' | b'!'
+                );
+                let tight_next = matches!(
+                    n,
+                    b')' | b']' | b'}' | b',' | b';' | b':' | b'=' | b'?' | b'&' | b'|' | b'<'
+                        | b'>' | b'*' | b'%' | b'^' | b'~'
+                );
+                // Never remove space adjacent to `+`, `-`, `/` to prevent `++`, `--`, or regex ambiguity
+                let near_ambig =
+                    matches!(p, b'+' | b'-' | b'/') || matches!(n, b'+' | b'-' | b'/');
+                if !near_ambig && (tight_prev || tight_next) {
+                    continue;
+                }
+                if !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            }
+            continue;
+        }
+
+        // Identifiers & keywords
+        if is_id_start(b) {
+            let start = i;
+            i += 1;
+            while i < len && is_id_cont(bytes[i]) {
+                i += 1;
+            }
+            let word = &js[start..i];
+            out.push_str(word);
+            last_tok = if is_regex_prefix_kw(word) {
+                Tok::Keyword
+            } else {
+                Tok::Value
+            };
+            continue;
+        }
+
+        // Numbers
+        if b.is_ascii_digit() {
+            let start = i;
+            i += 1;
+            while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'.' || bytes[i] == b'_') {
+                i += 1;
+            }
+            out.push_str(&js[start..i]);
+            last_tok = Tok::Value;
+            continue;
+        }
+
+        // Track nested `{` / `}` inside template literal `${ ... }` interpolations
+        if b == b'{' {
+            if let Some(depth) = tpl_braces.last_mut() {
+                *depth += 1;
+            }
+            out.push('{');
+            i += 1;
+            last_tok = Tok::Punct;
+            continue;
+        }
+        if b == b'}' {
+            if let Some(depth) = tpl_braces.last_mut() {
+                if *depth == 0 {
+                    tpl_braces.pop();
+                    out.push('}');
+                    i += 1;
+                    in_template = true;
+                    continue;
+                } else {
+                    *depth -= 1;
+                }
+            }
+            out.push('}');
+            i += 1;
+            last_tok = Tok::Punct;
+            continue;
+        }
+
+        // Other punctuation / UTF-8 chars
+        let ch = js[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+        last_tok = if matches!(b, b')' | b']') {
+            Tok::Value
+        } else {
+            Tok::Punct
+        };
+    }
+
+    while out.ends_with(' ') || out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+/// Minifies the `<style>...</style>` and `<script ...>...</script>` blocks of the web host HTML
+/// template BEFORE substituting shader JSON or base64 WASM payloads.
+fn minify_web_host_template(template: &str) -> String {
+    let mut out = String::with_capacity(template.len() * 2 / 3);
+    let mut rest = template;
+
+    // 1. Minify `<style>...</style>`
+    if let Some(s_start) = rest.find("<style>") {
+        let after_tag = s_start + "<style>".len();
+        if let Some(s_end_rel) = rest[after_tag..].find("</style>") {
+            let s_end = after_tag + s_end_rel;
+            out.push_str(&rest[..after_tag]);
+            out.push_str(&minify_web_css(&rest[after_tag..s_end]));
+            out.push_str("</style>");
+            rest = &rest[s_end + "</style>".len()..];
+        }
+    }
+
+    // 2. Minify `<script data-knr-web-host="v3-canvas" data-knr-renderer="v4-canvas">...</script>`
+    const SCRIPT_OPEN: &str =
+        "<script data-knr-web-host=\"v3-canvas\" data-knr-renderer=\"v4-canvas\">";
+    if let Some(sc_start) = rest.find(SCRIPT_OPEN) {
+        let after_tag = sc_start + SCRIPT_OPEN.len();
+        if let Some(sc_end_rel) = rest[after_tag..].rfind("</script>") {
+            let sc_end = after_tag + sc_end_rel;
+            out.push_str(&rest[..after_tag]);
+            out.push('\n');
+            out.push_str(&minify_web_js(&rest[after_tag..sc_end]));
+            out.push('\n');
+            out.push_str(&rest[sc_end..]);
+            return out;
+        }
+    }
+
+    out.push_str(rest);
+    out
 }
 
 /// Generates a minimal, Flutter-style Unified Single-Canvas + WebGPU/WebGL2 Web Host (ZERO HTML DOM UI!).
@@ -559,13 +1017,16 @@ struct WebHostConfig<'a> {
 fn generate_web_host_html(cfg: &WebHostConfig<'_>) -> String {
     let escaped_title = knr_runtime::ui::escape_html_text(cfg.title);
     let safe_shaders_json = cfg.shaders_json.replace("</script", "<\\/script");
+    let glsl_vert_json =
+        serde_json::to_string(cfg.glsl_vertex).unwrap_or_else(|_| "\"\"".into());
     let wasm_url_json =
         serde_json::to_string(cfg.wasm_file).unwrap_or_else(|_| "\"app.wasm\"".into());
 
-    WEB_HOST_TEMPLATE
+    minify_web_host_template(WEB_HOST_TEMPLATE)
         .replace("__KNR_TITLE__", &escaped_title)
         .replace("__KNR_WASM_URL__", &wasm_url_json)
         .replace("__KNR_WASM_B64__", cfg.wasm_b64)
+        .replace("__KNR_GLSL_VERT__", &glsl_vert_json)
         .replace(
             "__KNR_IS_WIDGET_V2__",
             if cfg.is_widget_v2 { "true" } else { "false" },
@@ -615,6 +1076,7 @@ const WEB_HOST_TEMPLATE: &str = r##"<!DOCTYPE html>
 (async function() {
   const WASM_URL = __KNR_WASM_URL__;
   const WASM_B64 = "__KNR_WASM_B64__";
+  const KNR_GLSL_VERT = __KNR_GLSL_VERT__;
   const IS_WIDGET_V2 = __KNR_IS_WIDGET_V2__;
   const STYLE_FIELDS = __KNR_STYLE_FIELDS__;
   const TICK_ARITY = __KNR_TICK_ARITY__;
@@ -636,7 +1098,7 @@ const WEB_HOST_TEMPLATE: &str = r##"<!DOCTYPE html>
   // 1. Zero-Import WASM Loader & 45-Field Linear Memory Protocol
   // ========================================================================
   async function loadWasm() {
-    if (location.protocol && location.protocol.startsWith("http")) {
+    if (!WASM_B64 || (location.protocol && location.protocol.startsWith("http"))) {
       try {
         const res = await fetch(WASM_URL);
         if (res.ok) {
@@ -645,10 +1107,25 @@ const WEB_HOST_TEMPLATE: &str = r##"<!DOCTYPE html>
         }
       } catch (_) {}
     }
-    const bin = atob(WASM_B64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return (await WebAssembly.instantiate(bytes.buffer, {})).instance.exports;
+    if (WASM_B64) {
+      const bin = atob(WASM_B64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return (await WebAssembly.instantiate(bytes.buffer, {})).instance.exports;
+    }
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    surface.width = Math.round(window.innerWidth * dpr);
+    surface.height = Math.round(window.innerHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#050811";
+    ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+    ctx.fillStyle = "#f8fafc";
+    ctx.font = "600 18px " + SANS_FONT;
+    ctx.fillText("knr: unable to fetch " + WASM_URL, 32, 48);
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "400 14px " + MONO_FONT;
+    ctx.fillText("Serve over HTTP (e.g. python3 -m http.server) or rebuild with: knr build --target web --standalone", 32, 78);
+    throw new Error("Unable to fetch " + WASM_URL + " (use HTTP server or --standalone)");
   }
 
   function readStr(mem, ptr) {
@@ -1862,7 +2339,8 @@ const WEB_HOST_TEMPLATE: &str = r##"<!DOCTYPE html>
 
   function initOffscreenWebGl2(canvas, shaderName) {
     const spec = KNR_SHADERS[shaderName];
-    if (!spec || !spec.glsl_vertex || !spec.glsl_fragment) return null;
+    const vsrc = spec && (spec.glsl_vertex || KNR_GLSL_VERT);
+    if (!spec || !vsrc || !spec.glsl_fragment) return null;
     const gl = canvas.getContext("webgl2", { alpha: true, antialias: true, preserveDrawingBuffer: true });
     if (!gl) return null;
     const compile = (type, src) => {
@@ -1875,7 +2353,7 @@ const WEB_HOST_TEMPLATE: &str = r##"<!DOCTYPE html>
       }
       return sh;
     };
-    const vs = compile(gl.VERTEX_SHADER, spec.glsl_vertex);
+    const vs = compile(gl.VERTEX_SHADER, vsrc);
     const fs = compile(gl.FRAGMENT_SHADER, spec.glsl_fragment);
     if (!vs || !fs) return null;
     const prog = gl.createProgram();

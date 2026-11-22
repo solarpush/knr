@@ -1,23 +1,26 @@
-# knr Editor Extensions (v0.2.0)
+# knr Editor Extensions (v0.4.0)
 
-First-party editor integrations for **`.tsk`** (*TypeScript for Knr* — Strict TSX/TS + linear ownership + GPU shaders), legacy `.knr`, and `.ssa` / `.ssa.schema` IR, powered exclusively by the built-in `knr lsp` JSON-RPC 2.0 Language Server.
+First-party editor integrations for **`.tsk`** (*TypeScript for Knr* — Strict TSX/TS + linear ownership + GPU shaders), legacy `.knr`, and `.ssa` / `.ssa.schema` IR, powered exclusively by the built-in IDE-Ultra `knr lsp` JSON-RPC 2.0 Language Server.
 
 > **Why `.tsk` instead of `.tsx`/`.ts`?**
 > Using a dedicated `.tsk` extension completely avoids conflicts with `tsserver`, `vtsls`, ESLint, and Prettier (which would otherwise flag `i64`/`f64`, `readonly State`, top-level `@shader`/`@effects`, algebraic `enum`, and `"std/ui"` imports as TypeScript errors). Meanwhile, `.gitattributes` maps `*.tsk` to TSX on GitHub and all editor extensions ship native TSX + knr highlighting.
 
 ## Prerequisites
 
-Ensure the `knr` v0.2.0 CLI is installed and available on your `$PATH`:
+Ensure the `knr` v0.4.0 CLI is installed and available on your `$PATH` (or run `make install-all` from the repository root):
 
 ```bash
 knr --version
+knr doctor
 ```
 
-### Features Powered by `knr lsp`
+### Features Powered by IDE-Ultra `knr lsp`
 
-- **Live Diagnostics** (`textDocument/publishDiagnostics`): real-time `.tsk` parsing, JSX lowering, static linear ownership and `readonly T` second-class borrow checks, `@effects` capability checks (`net`, `ui`, `hw`, `async`), and `@shader` WGSL/GLSL validation via `naga`.
-- **Hover Documentation** (`textDocument/hover`): signatures and docs for `function`, `@shader`, `type`, `enum`, built-in JSX primitives (`<Column>`, `<Row>`, `<Grid>`, `<Card>`, `<Shader>`, `<Icon>`, `<Code>`, ...), and math/sys intrinsics.
-- **Autocomplete** (`textDocument/completion`): context-aware completions triggered on `.`, `:`, `"`, `<`, and `@` including `std/ui`, `std/math`, `std/anim`, `std/sys` imports, JSX props, icon names, and local symbols.
+- **Live Diagnostics** (`textDocument/publishDiagnostics`): real-time `.tsk` parsing, JSX lowering, static linear ownership and `readonly T` second-class borrow checks, exhaustive `enum` matching (`NonExhaustiveMatch`), `@effects` capability checks (`net`, `ui`, `hw`, `async`), and `@shader` WGSL/GLSL validation via `naga`.
+- **Cross-File Hover, Go-to-Definition, Find References & Safe Rename**: works seamlessly across relative imports (`"./state"`), `as` aliases, `* as ns` namespaces, barrel `index.tsk` re-exports, `knr.toml` packages, and unsaved editor buffers (live document overlays).
+- **Autocomplete & Auto-Import** (`textDocument/completion`): context-aware completions for all 10 `std/*` modules (`std/ui`, `std/core`, `std/cmd`, `std/theme`, `std/router`, `std/layout`, `std/testing`, `std/math`, `std/anim`, `std/sys`), functional array methods (`.map`, `.filter`, `.reduce`, ...), JSX props, all **67 crisp vector `<Icon name="..." />`** icons, and cross-file symbol auto-imports.
+- **SignatureHelp, InlayHints, WorkspaceSymbol & FoldingRange**: live parameter hints inside function/builtin calls, inferred variable types and argument labels, workspace-wide symbol search, and comment/import/block folding.
+- **QuickFix CodeActions & Canonical Formatting**: compiler-verified automatic fixes (`knr fix` engine) and one-key formatting (`knr fmt` engine).
 - **Document Outline** (`textDocument/documentSymbol`): hierarchical outline of types, enums, functions, components, and `@shader` kernels.
 
 ---
@@ -26,13 +29,15 @@ knr --version
 
 Zero external npm runtime dependencies — no `npm install` or build step required. Activates exclusively on `.tsk`, `.knr`, `.ssa`, and `.ssa.schema` with a full built-in Strict TSX + knr TextMate grammar (`source.tsk`).
 
-### Quick Install (Symlink or Copy)
+### Quick Install (Makefile or Symlink)
 
 ```bash
+make install-vscode
+# or manually:
 ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/knr-lang
 ```
 
-Reload VS Code (`Developer: Reload Window`) and open any `.tsk` file (e.g. `site/app.tsk` or `examples/counter_app.tsk`).
+Reload VS Code (`Developer: Reload Window`) and open any `.tsk` file (e.g. `examples/neural_studio/src/app.tsk` or `site/app.tsk`).
 
 ### Run in Extension Development Host
 
