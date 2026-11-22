@@ -42,7 +42,8 @@ jobs:
       - name: Run Clippy
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
-          cargo clippy -p knr-runtime --no-default-features -- -D warnings
+          cargo clippy -p knr-runtime -p knr-cli --no-default-features --all-targets -- -D warnings
+          cargo clippy -p knr-runtime -p knr-cli --features gpu --all-targets -- -D warnings
 
       - name: Build Rust Runtime Staticlib
         run: cargo build -p knr-runtime --lib
@@ -119,8 +120,12 @@ jobs:
           test -s "${RT}"
           if [ "${{ matrix.cross }}" != "true" ]; then
             "${BIN}" --version
-            "${BIN}" check examples/counter_app.knr
-            "${BIN}" test examples/counter_app.knr
+            "${BIN}" check examples/counter_app.tsk
+            "${BIN}" test examples/counter_app.tsk
+            "${BIN}" check examples/neural_studio/src/app.tsk
+            "${BIN}" test examples/neural_studio/src/app.tsk
+            "${BIN}" check site/app.tsk
+            "${BIN}" test site/app.tsk
           fi
 
       - name: Package archive & SHA256 checksum

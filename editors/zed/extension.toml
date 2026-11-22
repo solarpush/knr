@@ -1,6 +1,6 @@
 id = "knr"
 name = "knr (.tsk)"
-version = "0.3.0"
+version = "0.4.0"
 schema_version = 1
 authors = ["knr Contributors"]
 description = "First-class .tsk (Strict TypeScript/TSX for knr), .knr, and SSA IR language support powered exclusively by knr lsp (zero tsserver conflict)."

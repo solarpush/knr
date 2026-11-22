@@ -6,7 +6,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/solarpush/knr/main/install.sh | sh
 #
 # Environment Variables:
-#   KNR_VERSION       Specific release tag to install (e.g. "v0.1.0", default: latest)
+#   KNR_VERSION       Specific release tag to install (e.g. "v0.4.0", default: latest)
 #   KNR_INSTALL_DIR   Destination directory (default: "$HOME/.local/bin")
 #   KNR_REPO          GitHub repository (default: "solarpush/knr")
 # =============================================================================

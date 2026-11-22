@@ -39,8 +39,10 @@ jobs:
       - name: Run Clippy (Workspace & All Targets)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Run Clippy (knr-runtime without GPU feature)
-        run: cargo clippy -p knr-runtime --no-default-features -- -D warnings
+      - name: Run Clippy (no-default-features & gpu)
+        run: |
+          cargo clippy -p knr-runtime -p knr-cli --no-default-features --all-targets -- -D warnings
+          cargo clippy -p knr-runtime -p knr-cli --features gpu --all-targets -- -D warnings
 
       - name: Build Rust Runtime Staticlib
         run: cargo build -p knr-runtime --lib
@@ -51,19 +53,22 @@ jobs:
       - name: Run Workspace Tests
         run: cargo test --workspace -- --test-threads=4
 
-      - name: Verify Self-Hosted Site, Examples & Built-in Tests
+      - name: Verify Showcase Site, Flagship Examples, Tests & Headless Audit
         run: |
-          ./target/debug/knr check site/site.ssa
-          ./target/debug/knr check site/server.ssa
-          ./target/debug/knr check site/site.knr
-          ./target/debug/knr test site/site.knr
-          ./target/debug/knr check examples/http_server.knr
-          ./target/debug/knr check examples/counter_app.knr
-          ./target/debug/knr test examples/counter_app.knr
-          ./target/debug/knr check examples/shader_studio.knr
-          ./target/debug/knr test examples/shader_studio.knr
-          ./target/debug/knr check examples/raymarch_3d.knr
-          ./target/debug/knr test examples/raymarch_3d.knr
-          if [ -f examples/sys_demo.knr ]; then
-            ./target/debug/knr check examples/sys_demo.knr
-          fi
+          ./target/debug/knr check site/app.tsk
+          ./target/debug/knr test site/app.tsk
+          ./target/debug/knr render site/app.tsk -o /tmp/ci_site.png --width 1280 --height 1450 --scale 1.5 --assert-audit
+          ./target/debug/knr check examples/neural_studio/src/app.tsk
+          ./target/debug/knr test examples/neural_studio/src/app.tsk
+          ./target/debug/knr render examples/neural_studio/src/app.tsk --flow examples/neural_studio/flow.json -o /tmp/ci_neural_studio.png --assert-audit
+          ./target/debug/knr check examples/task_studio.tsk
+          ./target/debug/knr test examples/task_studio.tsk
+          ./target/debug/knr check examples/http_server.tsk
+          ./target/debug/knr check examples/counter_app.tsk
+          ./target/debug/knr test examples/counter_app.tsk
+          ./target/debug/knr check examples/shader_studio.tsk
+          ./target/debug/knr test examples/shader_studio.tsk
+          ./target/debug/knr check examples/raymarch_3d.tsk
+          ./target/debug/knr test examples/raymarch_3d.tsk
+          ./target/debug/knr check examples/sys_demo.tsk
+          ./target/debug/knr test examples/sys_demo.tsk
