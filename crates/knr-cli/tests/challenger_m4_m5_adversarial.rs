@@ -850,8 +850,14 @@ fn test_adv_site_index_html_structural_and_content_integrity() {
     assert!(content.contains("data-knr-web-host=\"v3-canvas\""));
     assert!(content.contains("<canvas id=\"knr-surface\"></canvas>"));
     assert!(content.contains("id=\"knr-ime-input\""));
-    assert!(content.contains("const IS_WIDGET_V2 = true;"));
-    assert!(content.contains("const STYLE_FIELDS = 45;"));
+    assert!(
+        content.contains("const IS_WIDGET_V2=true;")
+            || content.contains("const IS_WIDGET_V2 = true;")
+    );
+    assert!(
+        content.contains("const STYLE_FIELDS=45;")
+            || content.contains("const STYLE_FIELDS = 45;")
+    );
     assert!(content.contains("__knr_heap"));
     assert!(content.contains("knr_hero_nebula"));
     assert!(content.contains("knr_sdf_crystal"));
